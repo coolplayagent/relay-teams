@@ -23,8 +23,8 @@ initSettings();
 await openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
-const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
-await notificationsTab.onclick();
+const generalTab = tabs.find(tab => tab.dataset.tab === "general");
+await generalTab.onclick();
 
 console.log(JSON.stringify({
     modalClassName: document.getElementById("settings-modal").className,
@@ -32,7 +32,7 @@ console.log(JSON.stringify({
     modalHtml: document.getElementById("settings-modal").innerHTML,
     panelTitle: document.getElementById("settings-panel-title").textContent,
     modelPanelDisplay: document.getElementById("model-panel").style.display,
-    notificationsPanelDisplay: document.getElementById("notifications-panel").style.display,
+    generalPanelDisplay: document.getElementById("general-panel").style.display,
     loadCalls: globalThis.__loadCalls,
 }));
 """.strip(),
@@ -71,14 +71,18 @@ console.log(JSON.stringify({
         not in modal_html
     )
     assert "notifications-actions" not in modal_html
+    assert 'id="settings-shell-safety-policy-toggle"' in modal_html
+    assert "general-setting-card" in modal_html
+    assert "general-setting-card-copy" in modal_html
     assert 'id="web-provider-site-link"' in modal_html
     assert 'class="web-provider-link-card"' in modal_html
     assert payload["modalDisplay"] == "flex"
     assert "settings-modal-visible" in str(payload["modalClassName"])
-    assert payload["panelTitle"] == "Notifications"
+    assert payload["panelTitle"] == "General"
     assert payload["modelPanelDisplay"] == "none"
-    assert payload["notificationsPanelDisplay"] == "block"
+    assert payload["generalPanelDisplay"] == "block"
     assert load_calls["notifications"] == 1
+    assert load_calls["speech"] == 1
     assert load_calls["model"] == 0
     assert load_calls["agents"] == 0
 
@@ -97,7 +101,7 @@ await openSettings();
 const tabs = document.querySelectorAll(".settings-tab");
 const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
 const agentsTab = tabs.find(tab => tab.dataset.tab === "agents");
-const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
+const generalTab = tabs.find(tab => tab.dataset.tab === "general");
 const webTab = tabs.find(tab => tab.dataset.tab === "web");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const workspaceTab = tabs.find(tab => tab.dataset.tab === "workspace");
@@ -111,8 +115,11 @@ await agentsTab.onclick();
 const agentAddDisplay = document.getElementById("add-agent-btn").style.display;
 await rolesTab.onclick();
 const roleAddDisplay = document.getElementById("add-role-btn").style.display;
-await notificationsTab.onclick();
-const notificationsSaveDisplay = document.getElementById("save-notifications-btn").style.display;
+await generalTab.onclick();
+const generalActionsDisplay = document.getElementById("settings-actions-bar").style.display;
+const generalSaveDisplay = document.getElementById("save-general-btn").style.display;
+const notificationsSaveVisible = Boolean(document.getElementById("notif-tool_approval_requested-enabled"));
+const speechSaveVisible = Boolean(document.getElementById("speech-stt-profile"));
 await webTab.onclick();
 const webSaveDisplay = document.getElementById("save-web-btn").style.display;
 await proxyTab.onclick();
@@ -130,7 +137,10 @@ console.log(JSON.stringify({
     modelAddDisplay,
     agentAddDisplay,
     roleAddDisplay,
-    notificationsSaveDisplay,
+    generalActionsDisplay,
+    generalSaveDisplay,
+    notificationsSaveVisible,
+    speechSaveVisible,
     webSaveDisplay,
     proxySaveDisplay,
     workspaceAddDisplay,
@@ -145,7 +155,10 @@ console.log(JSON.stringify({
     assert payload["modelAddDisplay"] == "inline-flex"
     assert payload["agentAddDisplay"] == "inline-flex"
     assert payload["roleAddDisplay"] == "inline-flex"
-    assert payload["notificationsSaveDisplay"] == "inline-flex"
+    assert payload["generalActionsDisplay"] == "flex"
+    assert payload["generalSaveDisplay"] == "inline-flex"
+    assert payload["notificationsSaveVisible"] is True
+    assert payload["speechSaveVisible"] is True
     assert payload["webSaveDisplay"] == "inline-flex"
     assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["workspaceAddDisplay"] == "inline-flex"
@@ -289,6 +302,199 @@ console.log(JSON.stringify({
     assert payload["appearanceResetDisplay"] == "inline-flex"
 
 
+def test_general_settings_only_apply_after_save(tmp_path: Path) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+await openSettings("general");
+
+const shellToggle = document.getElementById("settings-shell-safety-policy-toggle");
+shellToggle.checked = false;
+
+const beforeSave = {
+    shell: globalThis.__savedGeneral.shell,
+    speech: globalThis.__savedGeneral.speech,
+    notifications: globalThis.__savedGeneral.notifications,
+};
+
+await document.getElementById("save-general-btn").dispatch("click");
+
+console.log(JSON.stringify({
+    beforeSave,
+    afterSave: globalThis.__savedGeneral,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    assert payload["beforeSave"] == {
+        "shell": True,
+        "speech": None,
+        "notifications": None,
+    }
+    after_save = cast(dict[str, JsonValue], payload["afterSave"])
+    assert after_save["shell"] is False
+    assert after_save["savedShell"] is False
+    assert isinstance(after_save["speech"], dict)
+    assert isinstance(after_save["notifications"], dict)
+    notifications = cast(dict[str, JsonValue], after_save["notifications"])
+    run_completed = cast(dict[str, JsonValue], notifications["run_completed"])
+    run_failed = cast(dict[str, JsonValue], notifications["run_failed"])
+    assert run_completed["channels"] == ["feishu"]
+    assert run_completed["feishu_format"] == "post"
+    assert run_failed["channels"] == ["feishu"]
+    assert run_failed["feishu_format"] == "post"
+    toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
+    assert toasts[0]["tone"] == "success"
+
+
+def test_general_settings_skip_speech_save_when_speech_config_not_loaded(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+globalThis.__speechCanSave = false;
+initSettings();
+await openSettings("general");
+await document.getElementById("save-general-btn").dispatch("click");
+
+console.log(JSON.stringify({
+    afterSave: globalThis.__savedGeneral,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    after_save = cast(dict[str, JsonValue], payload["afterSave"])
+    assert after_save["speech"] is None
+    assert isinstance(after_save["notifications"], dict)
+    toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
+    assert toasts[0]["tone"] == "success"
+
+
+def test_general_settings_skip_notification_save_when_config_not_loaded(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+globalThis.__notificationCanSave = false;
+initSettings();
+await openSettings("general");
+const shellToggle = document.getElementById("settings-shell-safety-policy-toggle");
+shellToggle.checked = false;
+await document.getElementById("save-general-btn").dispatch("click");
+
+console.log(JSON.stringify({
+    afterSave: globalThis.__savedGeneral,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    after_save = cast(dict[str, JsonValue], payload["afterSave"])
+    assert after_save["savedShell"] is False
+    assert after_save["notifications"] is None
+    toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
+    assert toasts[0]["tone"] == "success"
+
+
+def test_general_settings_keep_shell_applied_when_speech_save_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+globalThis.__speechSaveError = "speech save failed";
+initSettings();
+await openSettings("general");
+const shellToggle = document.getElementById("settings-shell-safety-policy-toggle");
+shellToggle.checked = false;
+await document.getElementById("save-general-btn").dispatch("click");
+
+console.log(JSON.stringify({
+    afterSave: globalThis.__savedGeneral,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    after_save = cast(dict[str, JsonValue], payload["afterSave"])
+    assert after_save["savedShell"] is False
+    assert after_save["shell"] is False
+    assert after_save["speech"] is None
+    assert isinstance(after_save["notifications"], dict)
+    toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
+    assert [toast["tone"] for toast in toasts] == ["success", "danger"]
+    assert toasts[1]["title"] == "Failed to save speech settings"
+
+
+def test_general_settings_keep_shell_applied_when_notification_save_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+globalThis.__notificationSaveError = "notification save failed";
+initSettings();
+await openSettings("general");
+const shellToggle = document.getElementById("settings-shell-safety-policy-toggle");
+shellToggle.checked = false;
+await document.getElementById("save-general-btn").dispatch("click");
+
+console.log(JSON.stringify({
+    afterSave: globalThis.__savedGeneral,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    after_save = cast(dict[str, JsonValue], payload["afterSave"])
+    assert after_save["savedShell"] is False
+    assert after_save["shell"] is False
+    assert isinstance(after_save["speech"], dict)
+    assert after_save["notifications"] is None
+    toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
+    assert [toast["tone"] for toast in toasts] == ["success", "danger"]
+    assert toasts[1]["title"] == "Failed to save notification settings"
+
+
+def test_general_notifications_preserve_hidden_channels_without_forcing_toast() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    notifications = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "notifications.js"
+    ).read_text(encoding="utf-8")
+    settings = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "settings" / "index.js"
+    ).read_text(encoding="utf-8")
+
+    assert "export function canSaveNotificationConfig()" in notifications
+    assert "export function getLoadedNotificationConfig()" in notifications
+    assert "rowEl?.dataset?.hasHiddenChannels === 'true'" in notifications
+    assert "channels.length === 0 && !hasHiddenChannels" in notifications
+    assert "rowEl.dataset.hasHiddenChannels" in notifications
+    assert "if (canSaveNotificationConfig())" in settings
+    assert "getLoadedNotificationConfig()" in settings
+
+
 def test_settings_tab_order_and_labels_are_simplified() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_text = (
@@ -300,8 +506,9 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     tabs_html = source_text[tabs_start:tabs_end]
 
     assert tabs_html.index('data-tab="appearance"') < tabs_html.index(
-        'data-tab="model"'
+        'data-tab="general"'
     )
+    assert tabs_html.index('data-tab="general"') < tabs_html.index('data-tab="model"')
     assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="mcp"')
     assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="plugins"')
     assert tabs_html.index('data-tab="plugins"') < tabs_html.index(
@@ -314,9 +521,6 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="orchestration"'
     )
     assert tabs_html.index('data-tab="orchestration"') < tabs_html.index(
-        'data-tab="notifications"'
-    )
-    assert tabs_html.index('data-tab="notifications"') < tabs_html.index(
         'data-tab="web"'
     )
     assert tabs_html.index('data-tab="web"') < tabs_html.index('data-tab="proxy"')
@@ -641,6 +845,8 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     mock_appearance_path = tmp_path / "mockAppearanceSettings.mjs"
     mock_api_path = tmp_path / "mockApi.mjs"
+    mock_prompt_path = tmp_path / "mockPrompt.mjs"
+    mock_feedback_path = tmp_path / "mockFeedback.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "index.mjs"
@@ -755,6 +961,27 @@ export function bindNotificationSettingsHandlers() {
 export async function loadNotificationSettingsPanel() {
     globalThis.__loadCalls.notifications += 1;
 }
+
+export function canSaveNotificationConfig() {
+    return globalThis.__notificationCanSave !== false;
+}
+
+export function getLoadedNotificationConfig() {
+    return globalThis.__savedGeneral.currentNotifications;
+}
+
+export function collectNotificationConfigFromPanel() {
+    return {
+        tool_approval_requested: { enabled: false, channels: [] },
+        run_completed: { enabled: false, channels: [] },
+        run_failed: { enabled: false, channels: [] },
+        run_stopped: { enabled: false, channels: [] },
+    };
+}
+
+export function renderNotificationSettingsSectionMarkup() {
+    return '<section class="proxy-form-section"><button id="save-notifications-btn" type="button" style="display:inline-flex;">Save</button><input id="notif-tool_approval_requested-enabled"><input id="notif-tool_approval_requested-browser"><input id="notif-tool_approval_requested-toast"></section>';
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -780,8 +1007,24 @@ export async function loadSpeechSettingsPanel() {
     globalThis.__loadCalls.speech += 1;
 }
 
+export function canSaveSpeechConfig() {
+    return globalThis.__speechCanSave !== false;
+}
+
+export function readSpeechForm() {
+    return {
+        stt_profile_name: null,
+        language: null,
+        prompt: null,
+    };
+}
+
 export function renderSpeechSettingsPanelMarkup() {
     return '<div class="settings-panel" id="speech-panel" style="display:none;"></div>';
+}
+
+export function renderSpeechSettingsSectionMarkup() {
+    return '<section class="proxy-form-section"><button id="save-speech-btn" type="button" style="display:inline-flex;">Save</button><select id="speech-stt-profile"></select><select id="speech-language"></select><textarea id="speech-prompt"></textarea></section>';
 }
 """.strip(),
         encoding="utf-8",
@@ -908,8 +1151,11 @@ export function initAppearanceOnStartup() {}
 export function t(key) {
     return {
         'settings.tab.workspace': 'Workspace',
+        'settings.tab.general': 'General',
         'settings.panel.appearance.title': 'Appearance',
         'settings.panel.appearance.description': 'Customize accent color, background, fonts, and sizing.',
+        'settings.panel.general.title': 'General',
+        'settings.panel.general.description': 'Configure shell safeguards, speech to text, and browser notifications for future runs.',
         'settings.panel.model.title': 'Model',
         'settings.panel.model.description': 'Manage providers, endpoints, request limits, and sampling defaults.',
         'settings.panel.skills.title': 'Skills',
@@ -932,6 +1178,16 @@ export function t(key) {
         'settings.panel.triggers.description': 'Manage conversational gateways and provider-specific inbound channel accounts.',
         'settings.panel.notifications.title': 'Notifications',
         'settings.panel.notifications.description': 'Choose which run events notify you and where they are delivered.',
+        'settings.general.shell_policy_title': 'Shell Policy',
+        'settings.general.shell_policy': 'Enable local shell safeguards',
+        'settings.general.shell_policy_state': 'Applies to future runs after you save.',
+        'settings.general.saved': 'General Settings Saved',
+        'settings.general.saved_message': 'General settings were saved and will apply to new runs.',
+        'settings.general.save_failed': 'Failed to save general settings',
+        'settings.general.log_saved': 'General settings saved',
+        'settings.speech.save_failed': 'Failed to save speech settings',
+        'settings.notifications.save_failed': 'Failed to save notification settings',
+        'settings.speech.stt': 'Speech to Text',
         'settings.panel.web.title': 'Web',
         'settings.panel.web.description': 'Choose the web search provider and optionally store an API key for higher limits.',
         'settings.panel.github.title': 'GitHub',
@@ -972,6 +1228,54 @@ export async function fetchOrchestrationConfig() {
     globalThis.__warmupCalls.push('orchestration_config');
     return {};
 }
+
+export async function fetchGeneralConfig() {
+    return {
+        shell_safety_policy_enabled: globalThis.__savedGeneral.savedShell,
+    };
+}
+
+export async function fetchNotificationConfig() {
+    return globalThis.__savedGeneral.currentNotifications;
+}
+
+export async function saveGeneralConfig(payload) {
+    globalThis.__savedGeneral.savedShell = payload.shell_safety_policy_enabled !== false;
+    globalThis.__savedGeneral.shell = payload.shell_safety_policy_enabled !== false;
+    return { status: 'ok' };
+}
+
+export async function saveSpeechConfig(payload) {
+    if (globalThis.__speechSaveError) {
+        throw new Error(globalThis.__speechSaveError);
+    }
+    globalThis.__savedGeneral.speech = payload;
+    return payload;
+}
+
+export async function saveNotificationConfig(payload) {
+    if (globalThis.__notificationSaveError) {
+        throw new Error(globalThis.__notificationSaveError);
+    }
+    globalThis.__savedGeneral.notifications = payload;
+    return payload;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_prompt_path.write_text(
+        """
+export function applyShellSafetyPolicyEnabled(value) {
+    globalThis.__savedGeneral.shell = value;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_feedback_path.write_text(
+        """
+export function showToast(payload) {
+    globalThis.__toasts.push(payload);
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -983,6 +1287,10 @@ export function errorToPayload(error) {
 
 export function logError(eventName, message, payload) {
     globalThis.__loggedErrors.push({ eventName, message, payload });
+}
+
+export function sysLog(message, tone = 'info') {
+    globalThis.__sysLogs.push({ message, tone });
 }
 """.strip(),
         encoding="utf-8",
@@ -1009,7 +1317,9 @@ export function logError(eventName, message, payload) {
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
         .replace("./appearanceSettings.js", "./mockAppearanceSettings.mjs")
+        .replace("../../app/prompt.js", "./mockPrompt.mjs")
         .replace("../../core/api.js", "./mockApi.mjs")
+        .replace("../../utils/feedback.js", "./mockFeedback.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
         .replace("../../utils/logger.js", "./mockLogger.mjs")
     )
@@ -1067,10 +1377,24 @@ function createElement(tagName = "div") {{
         disabled: false,
         textContent: "",
         onclick: null,
+        _listeners: new Map(),
         parentNode: null,
         appendChild(child) {{
             child.parentNode = this;
             this.children.push(child);
+        }},
+        addEventListener(type, listener) {{
+            this._listeners.set(type, listener);
+        }},
+        dispatch(type) {{
+            const listener = this._listeners.get(type);
+            if (listener) {{
+                return listener({{ target: this }});
+            }}
+            if (type === "click" && typeof this.onclick === "function") {{
+                return this.onclick({{ target: this }});
+            }}
+            return undefined;
         }},
         querySelectorAll(selector) {{
             if (selector !== ".settings-action") {{
@@ -1108,11 +1432,12 @@ function createElement(tagName = "div") {{
     return element;
 }}
 
-function createDocument() {{
-    const elements = new Map();
-    const tabs = [];
-    const panels = [];
-    const body = createElement("body");
+    function createDocument() {{
+        const elements = new Map();
+        const tabs = [];
+        const panels = [];
+        const body = createElement("body");
+        const listeners = new Map();
 
     function registerElement(id, element) {{
         if (!id) {{
@@ -1157,12 +1482,22 @@ function createDocument() {{
         parseInnerHtml(child);
     }};
 
-        return {{
-            body,
-            createElement,
-            getElementById(id) {{
-                return elements.get(id) || null;
-            }},
+            return {{
+                body,
+                createElement,
+                addEventListener(type, listener) {{
+                    listeners.set(type, listener);
+                }},
+                dispatchEvent(event) {{
+                    const listener = listeners.get(event?.type);
+                    if (listener) {{
+                        listener(event);
+                    }}
+                    return true;
+                }},
+                getElementById(id) {{
+                    return elements.get(id) || null;
+                }},
         querySelectorAll(selector) {{
             if (selector === ".settings-tab") {{
                 return tabs;
@@ -1214,8 +1549,24 @@ function createDocument() {{
     mcp: 0,
     skills: 0,
 }};
-globalThis.__warmupCalls = [];
-globalThis.__loggedErrors = [];
+    globalThis.__warmupCalls = [];
+    globalThis.__loggedErrors = [];
+    globalThis.__sysLogs = [];
+    globalThis.__toasts = [];
+    globalThis.__savedGeneral = {{
+        savedShell: true,
+        shell: null,
+        speech: null,
+        notifications: null,
+        currentNotifications: {{
+            tool_approval_requested: {{ enabled: true, channels: ["browser", "toast"] }},
+            run_completed: {{ enabled: true, channels: ["toast", "feishu"], feishu_format: "post" }},
+            run_failed: {{ enabled: true, channels: ["feishu"], feishu_format: "post" }},
+            run_stopped: {{ enabled: false, channels: ["toast"] }},
+        }},
+    }};
+    globalThis.__speechCanSave = true;
+    globalThis.__notificationCanSave = true;
 
 globalThis.document = createDocument();
 globalThis.window = {{}};

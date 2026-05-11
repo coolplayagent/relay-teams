@@ -358,11 +358,14 @@ class SessionRunService:
                     )
                 )
             ),
-            update_run_yolo=(
-                lambda run_id, session_id, yolo: self._followup_router.update_run_yolo(
-                    run_id=run_id,
-                    session_id=session_id,
-                    yolo=yolo,
+            update_run_runtime_policy=(
+                lambda run_id, session_id, yolo, shell_safety_policy_enabled: (
+                    self._followup_router.update_run_runtime_policy(
+                        run_id=run_id,
+                        session_id=session_id,
+                        yolo=yolo,
+                        shell_safety_policy_enabled=shell_safety_policy_enabled,
+                    )
                 )
             ),
             remember_active_run=self._remember_active_run,
@@ -820,6 +823,10 @@ class SessionRunService:
                     )
                     pending.skills = merged_skills or None
                     pending.yolo = intent.yolo
+                    if intent.shell_safety_policy_override_provided:
+                        pending.shell_safety_policy_enabled = (
+                            intent.shell_safety_policy_enabled
+                        )
                     run_intent_repo = self._run_intent_repo
                     if run_intent_repo is not None:
                         await run_intent_repo.upsert_async(
@@ -844,10 +851,15 @@ class SessionRunService:
                     active_run_id in self._running_run_ids
                     or self._injection_manager.is_active(active_run_id)
                 ):
-                    await self._update_run_yolo_async(
+                    await self._update_run_runtime_policy_async(
                         run_id=active_run_id,
                         session_id=session_id,
                         yolo=intent.yolo,
+                        shell_safety_policy_enabled=(
+                            intent.shell_safety_policy_enabled
+                            if intent.shell_safety_policy_override_provided
+                            else None
+                        ),
                     )
                     self._append_followup_to_coordinator(
                         active_run_id,
@@ -880,10 +892,15 @@ class SessionRunService:
                         enqueue=False,
                         source=InjectionSource.USER,
                     )
-                    await self._update_run_yolo_async(
+                    await self._update_run_runtime_policy_async(
                         run_id=active_run_id,
                         session_id=session_id,
                         yolo=intent.yolo,
+                        shell_safety_policy_enabled=(
+                            intent.shell_safety_policy_enabled
+                            if intent.shell_safety_policy_override_provided
+                            else None
+                        ),
                     )
                     self._resume_requested_runs.add(active_run_id)
                     with bind_trace_context(
@@ -2615,12 +2632,13 @@ class SessionRunService:
             source=source,
         )
 
-    async def _update_run_yolo_async(
+    async def _update_run_runtime_policy_async(
         self,
         *,
         run_id: str,
         session_id: str,
         yolo: bool,
+        shell_safety_policy_enabled: bool | None,
     ) -> None:
         run_intent_repo = self._run_intent_repo
         if run_intent_repo is None:
@@ -2632,10 +2650,15 @@ class SessionRunService:
             )
         except KeyError:
             return
-        if intent.yolo == yolo:
+        if intent.yolo == yolo and (
+            shell_safety_policy_enabled is None
+            or intent.shell_safety_policy_enabled == shell_safety_policy_enabled
+        ):
             return
         intent.session_id = session_id
         intent.yolo = yolo
+        if shell_safety_policy_enabled is not None:
+            intent.shell_safety_policy_enabled = shell_safety_policy_enabled
         await run_intent_repo.upsert_async(
             run_id=run_id,
             session_id=session_id,

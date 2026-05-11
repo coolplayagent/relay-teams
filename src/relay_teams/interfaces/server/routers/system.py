@@ -59,6 +59,7 @@ from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.env.web_config_models import WebConfig
 from relay_teams.env.web_config_service import WebConfigService
+from relay_teams.general import GeneralConfig, GeneralConfigService, GeneralConfigUpdate
 from relay_teams.net.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeResult,
@@ -72,6 +73,7 @@ from relay_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
+    get_general_config_service,
     get_github_connectivity_probe_service,
     get_github_config_service,
     get_github_webhook_connectivity_probe_service,
@@ -238,6 +240,12 @@ class NotificationConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: NotificationConfig
+
+
+class GeneralConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    config: GeneralConfigUpdate
 
 
 class ModelConfigRequest(BaseModel):
@@ -1010,6 +1018,26 @@ async def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> NotificationConfig:
     return await asyncio.to_thread(service.get_notification_config)
+
+
+@router.get("/configs/general")
+async def get_general_config(
+    service: GeneralConfigService = Depends(get_general_config_service),
+) -> GeneralConfig:
+    return await asyncio.to_thread(service.get_config)
+
+
+@router.put("/configs/general")
+async def save_general_config(
+    req: GeneralConfigUpdate | GeneralConfigRequest,
+    service: GeneralConfigService = Depends(get_general_config_service),
+) -> dict[str, str]:
+    try:
+        config = req.config if isinstance(req, GeneralConfigRequest) else req
+        await asyncio.to_thread(service.save_config, config)
+        return {"status": "ok"}
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/configs/environment-variables")

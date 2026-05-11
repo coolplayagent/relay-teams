@@ -7,11 +7,13 @@ import httpx
 import pytest
 
 from relay_teams.interfaces.server.deps import (
+    get_general_config_service,
     get_run_service,
     get_session_service,
     get_skill_registry,
 )
 from relay_teams.interfaces.server.routers import runs, sessions
+from relay_teams.general.models import GeneralConfig
 from relay_teams.sessions.runs.enums import InjectionDeliveryMode, InjectionSource
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_models import SessionRecord
@@ -27,6 +29,11 @@ class _FakeSkillRegistry:
     ) -> tuple[str, ...]:
         _ = (strict, consumer)
         return values
+
+
+class _FakeGeneralConfigService:
+    def get_config(self) -> GeneralConfig:
+        return GeneralConfig(shell_safety_policy_enabled=True)
 
 
 class _AsyncSessionService:
@@ -166,6 +173,7 @@ def _create_app(
     app.dependency_overrides[get_session_service] = lambda: session_service
     app.dependency_overrides[get_run_service] = lambda: run_service
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
+    app.dependency_overrides[get_general_config_service] = _FakeGeneralConfigService
     return app
 
 

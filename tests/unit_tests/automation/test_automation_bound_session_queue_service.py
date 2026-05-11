@@ -224,6 +224,8 @@ def _build_project() -> AutomationProjectRecord:
 
 def _build_service(
     tmp_path: Path,
+    *,
+    shell_safety_policy_enabled: bool = True,
 ) -> tuple[
     AutomationBoundSessionQueueService,
     _FakeSessionLookup,
@@ -261,6 +263,7 @@ def _build_service(
         runtime_config_lookup=_FakeRuntimeConfigLookup(),
         feishu_client=feishu_client,
         project_repository=project_repo,
+        get_shell_safety_policy_enabled=lambda: shell_safety_policy_enabled,
     )
     return (
         service,
@@ -295,7 +298,7 @@ async def _queue_and_start_bound_run(
         delivery_service,
         feishu_client,
         project_repo,
-    ) = _build_service(tmp_path)
+    ) = _build_service(tmp_path, shell_safety_policy_enabled=False)
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="active-run-1",
@@ -338,7 +341,7 @@ async def test_materialize_execution_starts_in_bound_session_when_idle(
         delivery_service,
         feishu_client,
         _project_repo,
-    ) = _build_service(tmp_path)
+    ) = _build_service(tmp_path, shell_safety_policy_enabled=False)
 
     handle = await service.materialize_execution(
         project=_build_project(), reason="schedule"
@@ -352,6 +355,7 @@ async def test_materialize_execution_starts_in_bound_session_when_idle(
     assert len(waiting_records) == 1
     assert waiting_records[0].run_id == "run-1"
     assert len(run_service.created_intents) == 1
+    assert run_service.created_intents[0].shell_safety_policy_enabled is False
     assert (
         content_parts_to_text(run_service.created_intents[0].input)
         == "自动化项目“Daily Briefing”已由系统触发进入本次执行。\n"

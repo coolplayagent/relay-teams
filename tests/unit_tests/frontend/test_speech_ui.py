@@ -174,23 +174,34 @@ def test_speech_settings_panel_is_registered() -> None:
     speech_settings = read_frontend("js/components/settings/speechSettings.js")
     api = read_frontend("js/core/api.js")
 
-    assert 'data-tab="speech"' in settings
-    assert "'save-speech-btn': 'speech'" in settings
-    assert "renderSpeechSettingsPanelMarkup" in settings
+    assert 'data-tab="general"' in settings
+    assert "renderGeneralSettingsPanelMarkup" in settings
+    assert "renderSpeechSettingsSectionMarkup" in settings
+    assert 'id="save-general-btn"' in settings
     assert "fetchSpeechConfig" in speech_settings
     assert "saveSpeechConfig" in speech_settings
+    assert "renderSpeechSettingsSectionMarkup" in speech_settings
+    assert 'id="save-speech-btn"' not in speech_settings
     assert "formatMessage" in speech_settings
     assert "settings.speech.load_failed" in speech_settings
     assert "settings.speech.load_failed_detail" in speech_settings
     assert "Promise.allSettled" in speech_settings
     assert "speechConfig = speechConfig || {};" in speech_settings
+    assert "let speechConfigLoaded = false;" in speech_settings
+    assert "let modelProfilesLoaded = false;" in speech_settings
     assert "modelProfiles = profilesResult.value || {};" in speech_settings
+    assert "modelProfilesLoaded = true;" in speech_settings
     assert "renderSpeechSettingsPanel();" in speech_settings
+    assert "export function canSaveSpeechConfig()" in speech_settings
+    assert "return speechConfigLoaded && modelProfilesLoaded;" in speech_settings
     assert "createSpeechSttWebSocketUrl" in api
     assert "resolveSpeechCapability" in speech_settings
     assert '<select id="speech-language"' in speech_settings
     assert "SPEECH_LANGUAGE_OPTIONS" in speech_settings
     assert "buildLanguageOptions" in speech_settings
+    assert "let hasSelectedOption = !selected;" in speech_settings
+    assert "options.unshift(" in speech_settings
+    assert "options.push(" in speech_settings
     assert "hasSpeechRealtimeModelOverride" in speech_settings
     assert (
         "return normalizeOptionalValue(profile?.speech_realtime?.model) !== null;"

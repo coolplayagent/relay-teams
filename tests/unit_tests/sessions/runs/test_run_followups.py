@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -32,6 +33,7 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRecord
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.media import content_parts_from_text
 
 
 class _LoopGuardRunEventHub:
@@ -99,6 +101,7 @@ class _RecordingRunFollowupRouter(RunFollowupRouter):
         | None = None,
         ensure_run_started_async: Callable[[str], Awaitable[None]] | None = None,
         has_active_tasks: bool = False,
+        run_intent_repo: RunIntentRepository | None = None,
     ) -> None:
         self.appended_instances: list[tuple[str, str, str]] = []
         self.appended_coordinators: list[tuple[str, str]] = []
@@ -122,7 +125,7 @@ class _RecordingRunFollowupRouter(RunFollowupRouter):
             get_background_task_service=lambda: cast(
                 BackgroundTaskService | None, None
             ),
-            get_run_intent_repo=lambda: cast(RunIntentRepository | None, None),
+            get_run_intent_repo=lambda: run_intent_repo,
             get_approval_ticket_repo=lambda: cast(
                 ApprovalTicketRepository | None, None
             ),
@@ -367,6 +370,73 @@ async def test_spawn_system_followup_run_async_uses_async_entrypoints() -> None:
     assert started_runs == ["run-created-async"]
     assert session_repo.started_sessions == ["session-1"]
     assert router.remembered_runs == [("session-1", "run-source")]
+
+
+@pytest.mark.asyncio
+async def test_spawn_system_followup_run_async_inherits_source_shell_policy(
+    tmp_path: Path,
+) -> None:
+    session_repo = _RecordingSessionRepo()
+    run_intent_repo = RunIntentRepository(tmp_path / "run-intents.db")
+    await run_intent_repo.upsert_async(
+        run_id="run-source",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("source"),
+            yolo=True,
+            shell_safety_policy_enabled=False,
+        ),
+    )
+    router = _RecordingRunFollowupRouter(
+        session_repo=cast(SessionRepository, session_repo),
+        run_intent_repo=run_intent_repo,
+    )
+
+    run_id = await router.spawn_system_followup_run_async(
+        source_run_id="run-source",
+        session_id="session-1",
+        message="spawn follow-up",
+        event_prefix="test.followup",
+        payload={"test": "payload"},
+    )
+
+    assert run_id == "run-created-sync"
+    assert router.created_intents[0].yolo is True
+    assert router.created_intents[0].shell_safety_policy_enabled is False
+
+
+def test_spawn_system_followup_run_inherits_source_shell_policy(
+    tmp_path: Path,
+) -> None:
+    session_repo = _RecordingSessionRepo()
+    run_intent_repo = RunIntentRepository(tmp_path / "run-intents.db")
+    run_intent_repo.upsert(
+        run_id="run-source",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("source"),
+            yolo=True,
+            shell_safety_policy_enabled=False,
+        ),
+    )
+    router = _RecordingRunFollowupRouter(
+        session_repo=cast(SessionRepository, session_repo),
+        run_intent_repo=run_intent_repo,
+    )
+
+    run_id = router.spawn_system_followup_run(
+        source_run_id="run-source",
+        session_id="session-1",
+        message="spawn follow-up",
+        event_prefix="test.followup",
+        payload={"test": "payload"},
+    )
+
+    assert run_id == "run-created-sync"
+    assert router.created_intents[0].yolo is True
+    assert router.created_intents[0].shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio

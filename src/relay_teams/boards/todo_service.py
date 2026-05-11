@@ -150,6 +150,7 @@ class BoardTodoService:
         run_service: SessionRunServiceLike,
         run_runtime_repo: RunRuntimeRepositoryLike,
         get_shared_github_token: Callable[[], str | None] | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._workspace_service = workspace_service
@@ -159,6 +160,9 @@ class BoardTodoService:
         self._run_service = run_service
         self._run_runtime_repo = run_runtime_repo
         self._get_shared_github_token = get_shared_github_token or (lambda: None)
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
 
     async def list_board(
         self,
@@ -1086,12 +1090,16 @@ class BoardTodoService:
         yolo: bool,
     ) -> tuple[str, str]:
         content = content_parts_from_text(prompt)
+        shell_safety_policy_enabled = await asyncio.to_thread(
+            self._get_shell_safety_policy_enabled
+        )
         run_id, resolved_session_id = await self._run_service.create_run_async(
             IntentInput(
                 session_id=session_id,
                 input=content,
                 display_input=content,
                 yolo=yolo,
+                shell_safety_policy_enabled=shell_safety_policy_enabled,
             ),
             source=InjectionSource.USER,
         )

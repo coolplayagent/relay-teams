@@ -49,6 +49,7 @@ from relay_teams.env.web_config_models import (
     WebFallbackProvider,
     WebProvider,
 )
+from relay_teams.general import GeneralConfig, GeneralConfigUpdate
 from relay_teams.net.web_connectivity import (
     WebConnectivityProbeRequest,
     WebConnectivityProbeResult,
@@ -61,6 +62,7 @@ from relay_teams.interfaces.server.deps import (
     get_config_status_service,
     get_environment_variable_service,
     get_external_agent_config_service,
+    get_general_config_service,
     get_github_connectivity_probe_service,
     get_github_config_service,
     get_github_webhook_connectivity_probe_service,
@@ -138,7 +140,10 @@ from relay_teams.workspace import (
 
 class _FakeSystemService:
     def __init__(self) -> None:
+        self.general_config = GeneralConfig(shell_safety_policy_enabled=True)
+        self.general_config_error: OSError | None = None
         self.saved_notification_config: dict[str, object] | None = None
+        self.saved_general_config: dict[str, object] | None = None
         self.saved_orchestration_config: dict[str, object] | None = None
         self.saved_model_config: dict[str, object] | None = None
         self.saved_model_fallback_config: dict[str, object] | None = None
@@ -214,6 +219,16 @@ class _FakeSystemService:
 
     def get_config_status(self) -> dict[str, object]:
         return {"model": {"loaded": True}}
+
+    def get_config(self) -> GeneralConfig:
+        return self.general_config
+
+    def save_config(self, config: GeneralConfigUpdate) -> GeneralConfig:
+        if self.general_config_error is not None:
+            raise self.general_config_error
+        self.saved_general_config = config.model_dump(mode="json")
+        self.general_config = GeneralConfig.model_validate(self.saved_general_config)
+        return self.general_config
 
     def get_ui_language_settings(self) -> UiLanguageSettings:
         return UiLanguageSettings(language=UiLanguage.ZH_CN)
@@ -988,6 +1003,7 @@ def _create_test_client(
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
     app.dependency_overrides[get_config_status_service] = lambda: fake_service
+    app.dependency_overrides[get_general_config_service] = lambda: fake_service
     app.dependency_overrides[get_model_config_service] = lambda: fake_service
     app.dependency_overrides[get_notification_settings_service] = lambda: fake_service
     app.dependency_overrides[get_orchestration_settings_service] = lambda: fake_service
@@ -1154,6 +1170,17 @@ def test_get_notification_config() -> None:
     payload = response.json()
     assert payload["tool_approval_requested"]["enabled"] is True
     assert payload["run_completed"]["channels"] == ["toast"]
+
+
+def test_get_general_config() -> None:
+    service = _FakeSystemService()
+    service.general_config = GeneralConfig(shell_safety_policy_enabled=False)
+    client = _create_test_client(service)
+
+    response = client.get("/api/system/configs/general")
+
+    assert response.status_code == 200
+    assert response.json() == {"shell_safety_policy_enabled": False}
 
 
 def test_get_ui_language_settings() -> None:
@@ -1756,6 +1783,35 @@ def test_get_orchestration_config() -> None:
     assert payload["presets"][0]["policy"]["max_orchestration_cycles"] == 8
     assert payload["presets"][0]["policy"]["max_parallel_delegated_tasks"] == 4
     assert payload["presets"][0]["graph"]["nodes"][0]["node_id"] == "write"
+
+
+def test_save_general_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/general",
+        json={"config": {"shell_safety_policy_enabled": False}},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert service.saved_general_config == {"shell_safety_policy_enabled": False}
+    assert service.general_config.shell_safety_policy_enabled is False
+
+
+def test_save_general_config_returns_500_for_persist_error() -> None:
+    service = _FakeSystemService()
+    service.general_config_error = OSError("disk full")
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/general",
+        json={"shell_safety_policy_enabled": False},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "disk full"}
 
 
 def test_save_github_config() -> None:

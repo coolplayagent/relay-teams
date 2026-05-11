@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
@@ -83,6 +84,7 @@ async def test_discord_account_create_persists_secret_without_starting_disabled(
             allowed_channel_ids=("channel-1",),
             allow_channel_messages=True,
             workspace_id="workspace-1",
+            shell_safety_policy_enabled=False,
         )
     )
     listed = await service.list_accounts()
@@ -94,6 +96,7 @@ async def test_discord_account_create_persists_secret_without_starting_disabled(
     assert created.secret_status.bot_token_configured is True
     assert listed[0].allowed_channel_ids == ("channel-1",)
     assert listed[0].allow_channel_messages is True
+    assert listed[0].shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio
@@ -122,7 +125,9 @@ async def test_handle_discord_dm_starts_run_and_replies_terminal_output(
         run_service=fake_run_service,
         im_tool_service=fake_im_tool,
     )
-    await repository.upsert_account(_discord_account())
+    await repository.upsert_account(
+        _discord_account().model_copy(update={"shell_safety_policy_enabled": False})
+    )
 
     await service.handle_inbound_message(
         account_id="bot-1",
@@ -186,7 +191,9 @@ async def test_handle_discord_inbound_ignores_unaccepted_guild_messages(
         session_ingress_service=fake_ingress,
         im_tool_service=fake_im_tool,
     )
-    await repository.upsert_account(_discord_account())
+    await repository.upsert_account(
+        _discord_account().model_copy(update={"shell_safety_policy_enabled": False})
+    )
 
     for message in (
         DiscordInboundMessage(
@@ -345,6 +352,47 @@ async def test_discord_account_repository_skips_dirty_list_rows_and_falls_back_o
     assert await repository.list_accounts() == ()
     with pytest.raises(KeyError, match="Unknown Discord account_id"):
         await repository.get_account("missing")
+
+
+@pytest.mark.asyncio
+async def test_discord_account_repository_migrates_shell_policy_column(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-discord.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE discord_accounts (
+                account_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                bot_user_id TEXT,
+                application_id TEXT,
+                allowed_channel_ids_json TEXT NOT NULL,
+                allow_channel_messages INTEGER NOT NULL,
+                workspace_id TEXT NOT NULL,
+                session_mode TEXT NOT NULL,
+                normal_root_role_id TEXT,
+                orchestration_preset_id TEXT,
+                yolo INTEGER NOT NULL,
+                thinking_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    repository = DiscordAccountRepository(db_path)
+    await repository.upsert_account(
+        _discord_account().model_copy(
+            update={"account_id": "bot-migrated", "display_name": "Migrated Discord"}
+        )
+    )
+
+    listed = await repository.list_accounts()
+
+    assert listed[0].account_id == "bot-migrated"
+    assert listed[0].shell_safety_policy_enabled is True
 
 
 @pytest.mark.asyncio
@@ -987,7 +1035,9 @@ async def test_discord_service_start_queued_record_failure_paths(
     )
     missing_result = await service._start_queued_record(missing_account_record)
     failed_record = await inbound_queue_repo.get("queue-missing-account")
-    await repository.upsert_account(_discord_account())
+    await repository.upsert_account(
+        _discord_account().model_copy(update={"shell_safety_policy_enabled": False})
+    )
     fake_gateway_sessions.resolve_or_create_session(
         channel_type=GatewayChannelType.DISCORD,
         external_session_id="discord:bot-1:dm:user-1",
@@ -1013,6 +1063,7 @@ async def test_discord_service_start_queued_record_failure_paths(
     assert started_without_ingress.status == DiscordInboundQueueStatus.WAITING_RESULT
     assert started_without_ingress.run_id == "run-1"
     assert fake_run_service.created_intents[0].session_id == "session-1"
+    assert fake_run_service.created_intents[0].shell_safety_policy_enabled is False
     assert fake_run_service.started_run_ids == ["run-1"]
     failing_queue_repo = DiscordInboundQueueRepository(
         tmp_path / "discord-failing-queue.db"

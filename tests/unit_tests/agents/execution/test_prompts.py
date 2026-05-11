@@ -338,6 +338,7 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
 
     assert prompt.startswith("You are a focused agent.")
     assert "## Runtime Rules" in prompt
+    assert "settings for this run source" in prompt
     assert "## Orchestration Rules" in prompt
     assert "## Orchestration Prompt" in prompt
     assert "## Orchestration Policy" in prompt
@@ -1239,6 +1240,7 @@ def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> No
     )
 
     assert "## Runtime Rules" in prompt
+    assert "settings for this run source" in prompt
     assert "## Normal Mode" not in prompt
     assert "You are a focused agent." in prompt
     assert "## Available Roles" not in prompt

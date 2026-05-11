@@ -11,7 +11,9 @@ import { showToast } from '../../utils/feedback.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 
 let speechConfig = null;
+let speechConfigLoaded = false;
 let modelProfiles = {};
+let modelProfilesLoaded = false;
 const SPEECH_LANGUAGE_OPTIONS = Object.freeze([
     ['', 'Auto'],
     ['zh-CN', '中文（简体）'],
@@ -40,13 +42,17 @@ export async function loadSpeechSettingsPanel() {
     const errors = [];
     if (configResult.status === 'fulfilled') {
         speechConfig = configResult.value || {};
+        speechConfigLoaded = true;
     } else {
         speechConfig = speechConfig || {};
+        speechConfigLoaded = false;
         errors.push(configResult.reason);
     }
     if (profilesResult.status === 'fulfilled') {
         modelProfiles = profilesResult.value || {};
+        modelProfilesLoaded = true;
     } else {
+        modelProfilesLoaded = false;
         errors.push(profilesResult.reason);
     }
     if (errors.length > 0) {
@@ -61,33 +67,47 @@ export async function loadSpeechSettingsPanel() {
     renderSpeechSettingsPanel();
 }
 
+export function canSaveSpeechConfig() {
+    return speechConfigLoaded && modelProfilesLoaded;
+}
+
 export function renderSpeechSettingsPanelMarkup() {
     return `
         <div class="settings-panel" id="speech-panel" style="display:none;">
             <div class="settings-section">
                 <div class="settings-content-stack">
-                    <section class="proxy-form-section">
-                        <div class="proxy-form-section-header"><h5 data-i18n="settings.speech.stt">Speech to Text</h5></div>
-                        <div class="appearance-grid">
-                            <div class="appearance-row">
-                                <label for="speech-stt-profile" data-i18n="settings.speech.stt_profile">STT Profile</label>
-                                <select id="speech-stt-profile" class="appearance-text-input">
-                                    <option value="" data-i18n="settings.speech.no_profile">No profile selected</option>
-                                </select>
-                            </div>
-                            <div class="appearance-row">
-                                <label for="speech-language" data-i18n="settings.speech.language">Language</label>
-                                <select id="speech-language" class="appearance-text-input"></select>
-                            </div>
-                            <div class="appearance-row">
-                                <label for="speech-prompt" data-i18n="settings.speech.prompt">Prompt</label>
-                                <textarea id="speech-prompt" class="appearance-text-input" rows="3"></textarea>
-                            </div>
-                        </div>
-                    </section>
+                    ${renderSpeechSettingsSectionMarkup()}
                 </div>
             </div>
         </div>
+    `;
+}
+
+export function renderSpeechSettingsSectionMarkup() {
+    return `
+        <section class="proxy-form-section general-setting-card">
+            <div class="proxy-form-section-header general-setting-card-head general-setting-card-head-compact">
+                <div class="general-setting-card-copy-block">
+                    <h5 data-i18n="settings.speech.stt">Speech to Text</h5>
+                </div>
+            </div>
+            <div class="appearance-grid general-setting-card-body">
+                <div class="appearance-row">
+                    <label for="speech-stt-profile" data-i18n="settings.speech.stt_profile">STT Profile</label>
+                    <select id="speech-stt-profile" class="appearance-text-input">
+                        <option value="" data-i18n="settings.speech.no_profile">No profile selected</option>
+                    </select>
+                </div>
+                <div class="appearance-row">
+                    <label for="speech-language" data-i18n="settings.speech.language">Language</label>
+                    <select id="speech-language" class="appearance-text-input"></select>
+                </div>
+                <div class="appearance-row">
+                    <label for="speech-prompt" data-i18n="settings.speech.prompt">Prompt</label>
+                    <textarea id="speech-prompt" class="appearance-text-input" rows="3"></textarea>
+                </div>
+            </div>
+        </section>
     `;
 }
 
@@ -128,13 +148,23 @@ function renderSpeechSettingsPanel() {
 }
 
 function buildProfileOptions(selected) {
-    return Object.entries(modelProfiles)
+    let hasSelectedOption = !selected;
+    const options = Object.entries(modelProfiles)
         .filter(([, profile]) => isSpeechProfileCandidate(profile))
         .map(([name, profile]) => {
             const model = String(profile?.model || '');
             const active = name === selected ? ' selected' : '';
+            if (name === selected) {
+                hasSelectedOption = true;
+            }
             return `<option value="${escapeHtml(name)}"${active}>${escapeHtml(name)} (${escapeHtml(model)})</option>`;
         });
+    if (!hasSelectedOption) {
+        options.unshift(
+            `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`,
+        );
+    }
+    return options;
 }
 
 function isSpeechProfileCandidate(profile) {
@@ -165,13 +195,18 @@ function isKnownRealtimeSttModel(model) {
 }
 
 function buildLanguageOptions(selected) {
-    const safeSelected = SPEECH_LANGUAGE_OPTIONS.some(([value]) => value === selected) ? selected : '';
-    return SPEECH_LANGUAGE_OPTIONS
+    const hasSelectedOption = SPEECH_LANGUAGE_OPTIONS.some(([value]) => value === selected);
+    const options = SPEECH_LANGUAGE_OPTIONS
         .map(([value, label]) => {
-            const active = value === safeSelected ? ' selected' : '';
+            const active = value === selected ? ' selected' : '';
             return `<option value="${escapeHtml(value)}"${active}>${escapeHtml(label)}</option>`;
-        })
-        .join('');
+        });
+    if (selected && !hasSelectedOption) {
+        options.push(
+            `<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`,
+        );
+    }
+    return options.join('');
 }
 
 function resolveSpeechCapability(profile) {
@@ -190,7 +225,7 @@ function normalizeOptionalBoolean(value) {
     return null;
 }
 
-function readSpeechForm() {
+export function readSpeechForm() {
     return {
         stt_profile_name: normalizeOptionalValue(document.getElementById('speech-stt-profile')?.value),
         language: normalizeOptionalValue(document.getElementById('speech-language')?.value),

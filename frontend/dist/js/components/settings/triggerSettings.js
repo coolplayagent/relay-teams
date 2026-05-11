@@ -662,6 +662,12 @@ function renderEditor() {
                                 </select>
                             </div>
                             <div class="form-group">
+                                <label for="feishu-trigger-shell-safety-policy-input">${escapeHtml(t('settings.triggers.shell_safety_policy_enabled'))}</label>
+                                <select id="feishu-trigger-shell-safety-policy-input">
+                                    ${renderBooleanOptions(resolveShellSafetyPolicyEnabled(draft.target_config))}
+                                </select>
+                            </div>
+                            <div class="form-group">
                                 <label for="feishu-trigger-thinking-enabled-input">${escapeHtml(t('settings.triggers.thinking_enabled'))}</label>
                                 <select id="feishu-trigger-thinking-enabled-input">
                                     ${renderBooleanOptions(thinkingEnabled)}
@@ -694,6 +700,7 @@ function bindDraftInputs() {
         'feishu-trigger-thinking-enabled-input',
         'feishu-thinking-effort-input',
         'feishu-trigger-yolo-input',
+        'feishu-trigger-shell-safety-policy-input',
     ].forEach(id => {
         const input = document.getElementById(id);
         if (!input) {
@@ -1112,6 +1119,10 @@ function readDraftFromInputs() {
             workspace_id: workspaceId,
             session_mode: sessionMode,
             yolo: readBooleanSelect('feishu-trigger-yolo-input', true),
+            shell_safety_policy_enabled: readBooleanSelect(
+                'feishu-trigger-shell-safety-policy-input',
+                true,
+            ),
             thinking: {
                 enabled: thinkingEnabled,
                 effort: thinkingEnabled
@@ -1286,6 +1297,10 @@ function resolveThinkingEffort(targetConfig) {
 
 function resolveYolo(targetConfig) {
     return targetConfig?.yolo !== false;
+}
+
+function resolveShellSafetyPolicyEnabled(targetConfig) {
+    return targetConfig?.shell_safety_policy_enabled !== false;
 }
 
 function resolveRule(sourceConfig) {

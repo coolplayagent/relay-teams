@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
@@ -559,6 +559,54 @@ def test_start_queued_record_busy_retry_does_not_clobber_waiting_result() -> Non
     assert updated is not None
     assert updated.status == WeChatInboundQueueStatus.WAITING_RESULT
     assert updated.run_id == "run-existing"
+
+
+def test_start_queued_record_uses_general_shell_policy() -> None:
+    service, _gateway_session_service, run_service, _im_tool_service, _ = (
+        _build_service(
+            events=(),
+            get_shell_safety_policy_enabled=lambda: False,
+        )
+    )
+    repo = cast(_FakeInboundQueueRepo, service._inbound_queue_repo)
+    watcher_calls: list[dict[str, str | None]] = []
+    setattr(
+        service,
+        "_start_run_watcher",
+        lambda **kwargs: watcher_calls.append(cast(dict[str, str | None], kwargs)),
+    )
+    record = WeChatInboundQueueRecord(
+        inbound_queue_id="inq-shell-policy",
+        account_id="wx-account-1",
+        message_key="mid:shell-policy",
+        gateway_session_id="gws-1",
+        session_id="session-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-shell-policy",
+        text="run curl",
+        status=WeChatInboundQueueStatus.STARTING,
+    )
+    repo.records[record.inbound_queue_id] = record
+
+    assert service._start_queued_record(record) is True
+
+    assert run_service.created_intents == [
+        {
+            "session_id": "session-1",
+            "intent": "run curl",
+            "yolo": True,
+            "shell_safety_policy_enabled": False,
+        }
+    ]
+    assert watcher_calls == [
+        {
+            "account_id": "wx-account-1",
+            "gateway_session_id": "gws-1",
+            "run_id": "run-created",
+            "peer_user_id": "wx-peer-1",
+            "context_token": "ctx-shell-policy",
+        }
+    ]
 
 
 def test_handle_queue_drain_future_redrains_when_blocker_clears() -> None:
@@ -1135,11 +1183,16 @@ class _FakeRunService:
         session_id = cast(str, getattr(intent, "session_id"))
         message = cast(str, getattr(intent, "intent"))
         yolo = cast(bool, getattr(intent, "yolo"))
+        shell_safety_policy_enabled = cast(
+            bool,
+            getattr(intent, "shell_safety_policy_enabled"),
+        )
         self.created_intents.append(
             {
                 "session_id": session_id,
                 "intent": message,
                 "yolo": yolo,
+                "shell_safety_policy_enabled": shell_safety_policy_enabled,
             }
         )
         return "run-created", "session-1"
@@ -1171,6 +1224,7 @@ def _build_service(
     send_text_error: Exception | None = None,
     command_response: str | None = None,
     has_active_run: bool = False,
+    get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
 ) -> tuple[
     WeChatGatewayService,
     _FakeGatewaySessionService,
@@ -1208,6 +1262,9 @@ def _build_service(
         _FakeInboundQueueRepo(),
     )
     service._session_ingress_service = None
+    service._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+        lambda: True
+    )
     service._status_lock = Lock()
     service._status_by_account = {}
     service._monitor_stop_events = {}

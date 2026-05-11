@@ -57,6 +57,7 @@ class DiscordAccountRecord(BaseModel):
     normal_root_role_id: OptionalIdentifierStr = None
     orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool = True
+    shell_safety_policy_enabled: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     secret_status: DiscordSecretStatus = Field(default_factory=DiscordSecretStatus)
     last_error: str | None = None
@@ -82,6 +83,7 @@ class DiscordAccountCreateInput(BaseModel):
     normal_root_role_id: OptionalIdentifierStr = None
     orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool = True
+    shell_safety_policy_enabled: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
     @field_validator("display_name", "bot_token")
@@ -108,6 +110,7 @@ class DiscordAccountUpdateInput(BaseModel):
     normal_root_role_id: OptionalIdentifierStr = None
     orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool | None = None
+    shell_safety_policy_enabled: bool | None = None
     thinking: RunThinkingConfig | None = None
 
     @field_validator("display_name", "bot_token")

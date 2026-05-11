@@ -74,6 +74,7 @@ from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from relay_teams.env.runtime_env import sync_app_env_to_process_env
 from relay_teams.env.web_config_service import WebConfigService
+from relay_teams.general import GeneralConfigService
 from relay_teams.agent_runtimes import (
     ExternalAgentConfigService,
     ExternalAgentSessionRepository,
@@ -341,6 +342,7 @@ class ServerContainer:
             config_dir=app_config_dir,
             get_profiles=lambda: self.runtime.llm_profiles,
         )
+        self.general_config_service = GeneralConfigService(config_dir=app_config_dir)
         self.realtime_stt_proxy_service = RealtimeSttProxyService(
             speech_config_service=self.speech_config_service,
         )
@@ -976,6 +978,9 @@ class ServerContainer:
             im_session_command_service=self.im_session_command_service,
             inbound_queue_repo=self.wechat_inbound_queue_repo,
             session_ingress_service=self.session_ingress_service,
+            get_shell_safety_policy_enabled=lambda: (
+                self.general_config_service.get_config().shell_safety_policy_enabled
+            ),
         )
         self.xiaoluban_gateway_service = XiaolubanGatewayService(
             config_dir=app_config_dir,
@@ -987,6 +992,9 @@ class ServerContainer:
             run_service=self.run_service,
             event_log=self.event_log,
             session_ingress_service=self.session_ingress_service,
+            get_shell_safety_policy_enabled=lambda: (
+                self.general_config_service.get_config().shell_safety_policy_enabled
+            ),
         )
         self.xiaoluban_im_listener_service = XiaolubanImListenerService(
             service=self.xiaoluban_gateway_service
@@ -1054,6 +1062,9 @@ class ServerContainer:
                 feishu_client=self.feishu_client,
                 project_repository=self.automation_repo,
                 session_ingress_service=self.session_ingress_service,
+                get_shell_safety_policy_enabled=lambda: (
+                    self.general_config_service.get_config().shell_safety_policy_enabled
+                ),
             )
         )
         self.automation_bound_session_queue_worker = AutomationBoundSessionQueueWorker(
@@ -1082,6 +1093,9 @@ class ServerContainer:
             session_ingress_service=self.session_ingress_service,
             get_role_registry=lambda: self.role_registry,
             orchestration_settings_service=self.orchestration_settings_service,
+            get_shell_safety_policy_enabled=lambda: (
+                self.general_config_service.get_config().shell_safety_policy_enabled
+            ),
         )
         self.github_trigger_service = GitHubTriggerService(
             config_dir=app_config_dir,
@@ -1096,6 +1110,9 @@ class ServerContainer:
             monitor_service=self.monitor_service,
             session_ingress_service=self.session_ingress_service,
             get_github_config=self.github_config_service.get_github_config,
+            get_shell_safety_policy_enabled=lambda: (
+                self.general_config_service.get_config().shell_safety_policy_enabled
+            ),
         )
         self.board_todo_service = BoardTodoService(
             repository=self.board_todo_repository,
@@ -1107,6 +1124,9 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
             get_shared_github_token=lambda: (
                 self.github_config_service.get_github_config().token
+            ),
+            get_shell_safety_policy_enabled=lambda: (
+                self.general_config_service.get_config().shell_safety_policy_enabled
             ),
         )
         self.github_trigger_service.replace_board_todo_service(self.board_todo_service)

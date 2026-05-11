@@ -146,6 +146,7 @@ class GitHubTriggerService:
         monitor_service: MonitorService | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
         get_github_config: Callable[[], GitHubConfig] | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -161,6 +162,9 @@ class GitHubTriggerService:
         self._system_github_secret_store = get_github_secret_store()
         self._get_github_config = (
             (lambda: GitHubConfig()) if get_github_config is None else get_github_config
+        )
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
         )
         self._board_todo_service: BoardTodoMergeServiceLike | None = None
 
@@ -1240,6 +1244,7 @@ class GitHubTriggerService:
             input=content_parts_from_text(prompt),
             execution_mode=run_template.execution_mode,
             yolo=run_template.yolo,
+            shell_safety_policy_enabled=self._get_shell_safety_policy_enabled(),
             thinking=run_template.thinking,
             session_mode=run_template.session_mode,
         )

@@ -54,6 +54,7 @@ from relay_teams.gateway.session_ingress_service import (
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import ProjectKind, SessionMode
@@ -64,15 +65,15 @@ from relay_teams.workspace import WorkspaceRepository, WorkspaceService
 
 class _FakeRunService:
     def __init__(self) -> None:
-        self.create_calls: list[object] = []
+        self.create_calls: list[IntentInput] = []
         self.started_run_ids: list[str] = []
 
-    def create_run(self, intent: object) -> tuple[str, str]:
-        session_id = getattr(intent, "session_id")
+    def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        session_id = intent.session_id
         self.create_calls.append(intent)
         return (f"run-{len(self.create_calls)}", cast(str, session_id))
 
-    async def create_run_async(self, intent: object) -> tuple[str, str]:
+    async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
         return self.create_run(intent)
 
     def ensure_run_started(self, run_id: str) -> None:
@@ -240,6 +241,7 @@ def _build_service(
     role_registry: _FakeRoleRegistry | None = None,
     get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
     orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
+    shell_safety_policy_enabled: bool = True,
 ) -> tuple[
     automation_service_module.AutomationService, _FakeRunService, SessionService
 ]:
@@ -282,6 +284,7 @@ def _build_service(
             OrchestrationSettingsService | None,
             orchestration_settings_service,
         ),
+        get_shell_safety_policy_enabled=lambda: shell_safety_policy_enabled,
     )
     return service, run_service, session_service
 
@@ -306,7 +309,10 @@ def test_create_project_sets_next_run_at_for_cron(tmp_path: Path) -> None:
 
 
 def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> None:
-    service, run_service, _ = _build_service(tmp_path)
+    service, run_service, _ = _build_service(
+        tmp_path,
+        shell_safety_policy_enabled=False,
+    )
     created = service.create_project(
         AutomationProjectCreateInput(
             name="nightly-report",
@@ -335,6 +341,7 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
     assert "automation_trigger_event_id" in metadata
     assert len(run_service.create_calls) == 1
     assert run_service.started_run_ids == ["run-1"]
+    assert run_service.create_calls[0].shell_safety_policy_enabled is False
     assert (
         getattr(run_service.create_calls[0], "intent")
         == "自动化项目“nightly-report”已由系统触发进入本次执行。\n"
@@ -348,7 +355,10 @@ def test_async_run_now_creates_automation_session_and_starts_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, run_service, session_service = _build_service(tmp_path)
+    service, run_service, session_service = _build_service(
+        tmp_path,
+        shell_safety_policy_enabled=False,
+    )
 
     def fail_sync_create_session(**_kwargs: object) -> object:
         raise AssertionError("async automation run path used sync session creation")
@@ -375,6 +385,7 @@ def test_async_run_now_creates_automation_session_and_starts_run(
         assert result["automation_project_id"] == created.automation_project_id
         assert result["run_id"] == "run-1"
         assert result["queued"] is False
+        assert run_service.create_calls[0].shell_safety_policy_enabled is False
         assert len(sessions) == 1
         session_payload = cast(dict[str, object], sessions[0])
         metadata = cast(dict[str, str], session_payload["metadata"])

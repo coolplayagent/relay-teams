@@ -43,7 +43,13 @@ def test_shell_policy_rejects_empty_command() -> None:
 
 
 def test_shell_policy_rejects_banned_bash_download_command() -> None:
-    with pytest.raises(ValueError, match="curl"):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "command is blocked by local shell policy: curl\\. "
+            "If you want to allow this kind of shell command"
+        ),
+    ):
         validate_shell_command("curl https://example.com")
 
 

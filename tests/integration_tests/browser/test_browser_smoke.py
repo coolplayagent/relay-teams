@@ -437,12 +437,12 @@ def test_browser_shell_settings_and_session_management(
     expect(page.locator("#settings-modal")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
     for tab_name in (
         "appearance",
+        "general",
         "model",
         "mcp",
         "agents",
         "roles",
         "orchestration",
-        "notifications",
         "web",
         "proxy",
         "environment",
@@ -957,8 +957,8 @@ def test_browser_settings_save_role_and_agent_configs(
             and response.ok
         )
     ):
-        page.locator('.settings-tab[data-tab="notifications"]').click()
-    expect(page.locator("#notifications-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        page.locator('.settings-tab[data-tab="general"]').click()
+    expect(page.locator("#general-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
     _set_checkbox(page, f"#{notification_enabled_id}", True)
     _set_checkbox(page, f"#{notification_browser_id}", True)
     _set_checkbox(page, "#notif-run_stopped-toast", False)
@@ -969,7 +969,7 @@ def test_browser_settings_save_role_and_agent_configs(
             == f"{integration_env.api_base_url}/api/system/configs/notifications"
         )
     ) as save_notification_request_info:
-        page.locator("#save-notifications-btn").click()
+        page.locator("#save-general-btn").click()
     notification_payload = json.loads(
         save_notification_request_info.value.post_data or "{}"
     )

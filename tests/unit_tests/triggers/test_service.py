@@ -17,13 +17,16 @@ from relay_teams.monitors import MonitorService
 from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.github_config_models import GitHubConfig
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.triggers import (
     GitHubActionSpec,
     GitHubActionType,
     GitHubApiClient,
     GitHubRepoSubscriptionCreateInput,
+    GitHubRepoSubscriptionRecord,
     GitHubRepoSubscriptionUpdateInput,
     GitHubTriggerAccountCreateInput,
     GitHubTriggerAccountUpdateInput,
@@ -44,6 +47,7 @@ from relay_teams.triggers import (
     TriggerRepository,
     TriggerRuleCreateInput,
     TriggerRuleMatchConfig,
+    TriggerRuleRecord,
     TriggerTargetType,
 )
 from relay_teams.triggers.action_worker import GitHubTriggerActionWorker
@@ -298,6 +302,31 @@ class _FakeMonitorService:
         return ()
 
 
+class _FakeSessionService:
+    def __init__(self) -> None:
+        self.created: list[dict[str, object]] = []
+
+    def create_session(self, **kwargs: object) -> SessionRecord:
+        self.created.append(dict(kwargs))
+        return SessionRecord(
+            session_id=f"session-{len(self.created)}",
+            workspace_id=str(kwargs["workspace_id"]),
+        )
+
+
+class _FakeRunService:
+    def __init__(self) -> None:
+        self.created_intents: list[IntentInput] = []
+        self.started_run_ids: list[str] = []
+
+    def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        self.created_intents.append(intent)
+        return f"run-{len(self.created_intents)}", intent.session_id
+
+    def ensure_run_started(self, run_id: str) -> None:
+        self.started_run_ids.append(run_id)
+
+
 class _FakeBoardTodoMergeService:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -319,6 +348,9 @@ def _build_service(
     *,
     monitor_service: _FakeMonitorService | None = None,
     get_github_config: Callable[[], GitHubConfig] | None = None,
+    session_service: _FakeSessionService | None = None,
+    run_service: _FakeRunService | None = None,
+    shell_safety_policy_enabled: bool = True,
 ) -> tuple[
     GitHubTriggerService,
     TriggerRepository,
@@ -336,12 +368,13 @@ def _build_service(
         secret_store=secret_store,
         github_client=cast(GitHubApiClient, github_client),
         automation_service=cast(AutomationService, object()),
-        session_service=cast(SessionService, object()),
-        run_service=cast(SessionRunService, object()),
+        session_service=cast(SessionService, session_service or object()),
+        run_service=cast(SessionRunService, run_service or object()),
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         event_log=_FakeEventLog(),
         monitor_service=cast(MonitorService | None, monitor_service),
         get_github_config=get_github_config,
+        get_shell_safety_policy_enabled=lambda: shell_safety_policy_enabled,
     )
     return service, repository, secret_store, github_client
 
@@ -351,6 +384,53 @@ def _run_template() -> GitHubTriggerRunTemplate:
         workspace_id="default",
         prompt_template="Investigate the delivery.",
     )
+
+
+def test_start_run_template_inherits_general_shell_policy(tmp_path: Path) -> None:
+    session_service = _FakeSessionService()
+    run_service = _FakeRunService()
+    service, _repository, _secret_store, _github_client = _build_service(
+        tmp_path,
+        session_service=session_service,
+        run_service=run_service,
+        shell_safety_policy_enabled=False,
+    )
+    repo = GitHubRepoSubscriptionRecord(
+        repo_subscription_id="repo-sub-1",
+        account_id="account-1",
+        owner="coolplayagent",
+        repo_name="relay-teams",
+        full_name="coolplayagent/relay-teams",
+    )
+    delivery = TriggerDeliveryRecord(
+        trigger_delivery_id="delivery-1",
+        event_name="pull_request",
+        event_action="opened",
+        signature_status=TriggerDeliverySignatureStatus.VALID,
+        ingest_status=TriggerDeliveryIngestStatus.TRIGGERED,
+        payload={},
+    )
+    rule = TriggerRuleRecord(
+        trigger_rule_id="rule-1",
+        account_id="account-1",
+        repo_subscription_id="repo-sub-1",
+        name="run-template",
+        match_config=TriggerRuleMatchConfig(event_name="pull_request"),
+        dispatch_config=TriggerDispatchConfig(
+            target_type=TriggerTargetType.RUN_TEMPLATE,
+            run_template=_run_template(),
+        ),
+    )
+
+    session_id, run_id = service._start_run_template(
+        delivery=delivery,
+        repo=repo,
+        rule=rule,
+    )
+
+    assert (session_id, run_id) == ("session-1", "run-1")
+    assert run_service.started_run_ids == ["run-1"]
+    assert run_service.created_intents[0].shell_safety_policy_enabled is False
 
 
 def _create_account(service: GitHubTriggerService) -> str:

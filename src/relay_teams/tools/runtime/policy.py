@@ -31,6 +31,7 @@ class ToolRuntimePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     yolo: bool = False
+    shell_safety_policy_enabled: bool = True
     approval_required_tools: frozenset[str] = DEFAULT_APPROVAL_REQUIRED_TOOLS
     denied_tools: frozenset[str] = frozenset()
     guardrails: RuntimeGuardrailPolicy = Field(default_factory=RuntimeGuardrailPolicy)
@@ -100,10 +101,28 @@ class ToolRuntimePolicy(BaseModel):
 
 class ToolApprovalPolicy(ToolRuntimePolicy):
     def with_yolo(self, yolo: bool) -> ToolApprovalPolicy:
-        if yolo == self.yolo:
+        return self.with_runtime_overrides(yolo=yolo)
+
+    def with_runtime_overrides(
+        self,
+        *,
+        yolo: bool | None = None,
+        shell_safety_policy_enabled: bool | None = None,
+    ) -> ToolApprovalPolicy:
+        next_yolo = self.yolo if yolo is None else yolo
+        next_shell_safety_policy_enabled = (
+            self.shell_safety_policy_enabled
+            if shell_safety_policy_enabled is None
+            else shell_safety_policy_enabled
+        )
+        if (
+            next_yolo == self.yolo
+            and next_shell_safety_policy_enabled == self.shell_safety_policy_enabled
+        ):
             return self
         return ToolApprovalPolicy(
-            yolo=yolo,
+            yolo=next_yolo,
+            shell_safety_policy_enabled=next_shell_safety_policy_enabled,
             approval_required_tools=self.approval_required_tools,
             denied_tools=self.denied_tools,
             guardrails=self.guardrails,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -169,6 +170,44 @@ async def test_handle_im_inbound_starts_run_and_replies_terminal_output(
 
 
 @pytest.mark.asyncio
+async def test_handle_im_inbound_uses_general_shell_policy(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+        event_log=_FakeEventLog(),
+        get_shell_safety_policy_enabled=lambda: False,
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="run curl",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+
+    assert len(fake_ingress.requests) == 1
+    assert fake_ingress.requests[0].intent.shell_safety_policy_enabled is False
+
+
+@pytest.mark.asyncio
 async def test_handle_im_inbound_reuses_gateway_session_for_same_xiaoluban_session(
     tmp_path: Path,
 ) -> None:
@@ -321,6 +360,7 @@ def _build_service(
     gateway_session_service: _FakeGatewaySessionService | None = None,
     session_ingress_service: _FakeIngressService | None = None,
     event_log: _FakeEventLog | None = None,
+    get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
 ) -> XiaolubanGatewayService:
     return XiaolubanGatewayService(
         config_dir=tmp_path,
@@ -338,6 +378,7 @@ def _build_service(
             GatewaySessionIngressService | None,
             session_ingress_service,
         ),
+        get_shell_safety_policy_enabled=get_shell_safety_policy_enabled,
     )
 
 

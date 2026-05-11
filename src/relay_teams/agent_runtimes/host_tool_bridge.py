@@ -568,9 +568,14 @@ class ExternalAcpHostToolBridge:
             request.role_id,
         )
         try:
-            yolo = (await self._run_intent_repo.get_async(request.run_id)).yolo
+            intent = await self._run_intent_repo.get_async(request.run_id)
         except KeyError:
-            yolo = False
+            tool_approval_policy = self._tool_approval_policy.with_yolo(False)
+        else:
+            tool_approval_policy = self._tool_approval_policy.with_runtime_overrides(
+                yolo=intent.yolo,
+                shell_safety_policy_enabled=intent.shell_safety_policy_enabled,
+            )
         workspace = await self._workspace_manager.resolve_async(
             session_id=request.session_id,
             role_id=request.role_id,
@@ -612,7 +617,7 @@ class ExternalAcpHostToolBridge:
             run_control_manager=self._run_control_manager,
             tool_approval_manager=self._tool_approval_manager,
             user_question_manager=self._user_question_manager,
-            tool_approval_policy=self._tool_approval_policy.with_yolo(yolo),
+            tool_approval_policy=tool_approval_policy,
             shell_approval_repo=self._shell_approval_repo,
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),

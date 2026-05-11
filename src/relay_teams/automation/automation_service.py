@@ -86,6 +86,7 @@ class AutomationService:
         role_registry: RoleRegistry | None = None,
         get_role_registry: (Callable[[], RoleRegistry | None]) | None = None,
         orchestration_settings_service: OrchestrationSettingsService | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._event_repository = event_repository
@@ -103,6 +104,9 @@ class AutomationService:
             else lambda: role_registry
         )
         self._orchestration_settings_service = orchestration_settings_service
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
 
     def _get_active_role_registry(self) -> RoleRegistry | None:
         return self._get_role_registry()
@@ -798,6 +802,7 @@ class AutomationService:
                 ),
                 execution_mode=runtime_run_config.execution_mode,
                 yolo=runtime_run_config.yolo,
+                shell_safety_policy_enabled=self._get_shell_safety_policy_enabled(),
                 thinking=runtime_run_config.thinking,
                 session_mode=runtime_run_config.session_mode,
             )
@@ -924,6 +929,9 @@ class AutomationService:
                 ),
                 execution_mode=runtime_run_config.execution_mode,
                 yolo=runtime_run_config.yolo,
+                shell_safety_policy_enabled=await asyncio.to_thread(
+                    self._get_shell_safety_policy_enabled
+                ),
                 thinking=runtime_run_config.thinking,
                 session_mode=runtime_run_config.session_mode,
             )

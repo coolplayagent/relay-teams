@@ -231,7 +231,10 @@ async def test_shell_passes_none_tool_call_id_without_validation_error(
             instance_id="inst-1",
             role_id="writer",
             shell_approval_repo=None,
-            tool_approval_policy=SimpleNamespace(yolo=False),
+            tool_approval_policy=SimpleNamespace(
+                yolo=False,
+                shell_safety_policy_enabled=True,
+            ),
             hook_runtime_env={},
         ),
     )
@@ -737,7 +740,10 @@ async def test_shell_builds_approval_request_after_resolving_workdir(
             instance_id="inst-1",
             role_id="writer",
             shell_approval_repo=None,
-            tool_approval_policy=SimpleNamespace(yolo=False),
+            tool_approval_policy=SimpleNamespace(
+                yolo=False,
+                shell_safety_policy_enabled=True,
+            ),
             hook_runtime_env={},
         ),
     )
@@ -885,7 +891,10 @@ async def test_shell_returns_blocked_tool_result_for_local_policy_command(
             instance_id="inst-1",
             role_id="writer",
             shell_approval_repo=None,
-            tool_approval_policy=SimpleNamespace(yolo=True),
+            tool_approval_policy=SimpleNamespace(
+                yolo=True,
+                shell_safety_policy_enabled=True,
+            ),
             hook_runtime_env={},
         ),
     )
@@ -922,7 +931,11 @@ async def test_shell_returns_blocked_tool_result_for_local_policy_command(
         "ok": False,
         "error": {
             "type": "tool_blocked",
-            "message": "command is blocked by local shell policy: curl",
+            "message": (
+                "command is blocked by local shell policy: curl. If you want "
+                "to allow this kind of shell command in future runs, disable "
+                "the shell safety policy in the settings for this run source."
+            ),
         },
     }
     assert service.calls == []
@@ -951,7 +964,10 @@ async def test_shell_yolo_blocks_parent_directory_change_in_command(
             instance_id="inst-1",
             role_id="writer",
             shell_approval_repo=None,
-            tool_approval_policy=SimpleNamespace(yolo=True),
+            tool_approval_policy=SimpleNamespace(
+                yolo=True,
+                shell_safety_policy_enabled=True,
+            ),
             hook_runtime_env={},
         ),
     )
@@ -1022,7 +1038,10 @@ async def test_shell_returns_blocked_tool_result_for_workdir_escape(
             instance_id="inst-1",
             role_id="writer",
             shell_approval_repo=None,
-            tool_approval_policy=SimpleNamespace(yolo=True),
+            tool_approval_policy=SimpleNamespace(
+                yolo=True,
+                shell_safety_policy_enabled=True,
+            ),
             hook_runtime_env={},
         ),
     )

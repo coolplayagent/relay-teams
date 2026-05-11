@@ -810,6 +810,7 @@ CREATE TABLE IF NOT EXISTS discord_accounts (
     normal_root_role_id     TEXT,
     orchestration_preset_id TEXT,
     yolo                    INTEGER NOT NULL,
+    shell_safety_policy_enabled INTEGER NOT NULL DEFAULT 1,
     thinking_json           TEXT NOT NULL,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
@@ -824,6 +825,7 @@ Notes:
 - `allowed_channel_ids_json` stores guild channel ids that may send non-mention messages when `allow_channel_messages = 1`.
 - Direct messages and guild mentions are accepted independently of `allowed_channel_ids_json`.
 - `workspace_id`, `session_mode`, `normal_root_role_id`, and `orchestration_preset_id` define the runtime preset applied to new or resolved gateway sessions for that account.
+- `shell_safety_policy_enabled` controls whether queued Discord runs keep the local shell safety deny layer enabled.
 - runtime status fields such as `running`, `last_error`, and timestamps for last inbound/outbound activity are computed in memory and returned by the API, not persisted in this table.
 
 `status` values:
@@ -998,6 +1000,7 @@ CREATE TABLE IF NOT EXISTS run_intents (
     execution_mode TEXT NOT NULL,
     session_mode   TEXT NOT NULL DEFAULT 'normal',
     yolo           TEXT NOT NULL DEFAULT 'false',
+    shell_safety_policy_enabled TEXT NOT NULL DEFAULT 'true',
     thinking_enabled TEXT NOT NULL DEFAULT 'false',
     thinking_effort TEXT,
     target_role_id TEXT,
@@ -1020,6 +1023,7 @@ Notes:
 - `run_kind` distinguishes `conversation`, `generate_image`, `generate_audio`, and `generate_video`.
 - `generation_config_json` stores the typed native media-generation config for provider-native image/audio/video runs.
 - `yolo` controls whether tool approvals are skipped entirely for that run.
+- `shell_safety_policy_enabled` controls whether shell execution keeps the local shell safety deny layer enabled for that run.
 - `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
 - `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, selected fixed orchestration graph when present, and effective orchestration policy, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later. The policy snapshot includes DelegationPlanner auto-planning fields such as `auto_plan_long_tasks`, `planner_role_id`, and `max_temporary_roles_per_run`.

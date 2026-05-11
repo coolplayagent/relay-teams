@@ -26,6 +26,7 @@ from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.web_config_service import WebConfigService
+from relay_teams.general import GeneralConfigService
 from relay_teams.agent_runtimes import ExternalAgentConfigService
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
@@ -162,6 +163,10 @@ def get_model_config_service(request: Request) -> ModelConfigService:
 
 def get_speech_config_service(request: Request) -> SpeechConfigService:
     return get_container(request).speech_config_service
+
+
+def get_general_config_service(request: Request) -> GeneralConfigService:
+    return get_container(request).general_config_service
 
 
 def get_realtime_stt_proxy_service(request: Request) -> RealtimeSttProxyService:

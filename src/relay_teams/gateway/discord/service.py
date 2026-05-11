@@ -246,6 +246,7 @@ class DiscordGatewayService:
                 existing_preset_id=None,
             ),
             yolo=request.yolo,
+            shell_safety_policy_enabled=request.shell_safety_policy_enabled,
             thinking=request.thinking,
             created_at=existing.created_at if existing is not None else now,
             updated_at=now,
@@ -316,6 +317,11 @@ class DiscordGatewayService:
                     existing_preset_id=existing.orchestration_preset_id,
                 ),
                 "yolo": request.yolo if request.yolo is not None else existing.yolo,
+                "shell_safety_policy_enabled": (
+                    request.shell_safety_policy_enabled
+                    if request.shell_safety_policy_enabled is not None
+                    else existing.shell_safety_policy_enabled
+                ),
                 "thinking": request.thinking or existing.thinking,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
@@ -513,6 +519,7 @@ class DiscordGatewayService:
             session_id=record.session_id,
             input=content_parts_from_text(record.text),
             yolo=account.yolo,
+            shell_safety_policy_enabled=account.shell_safety_policy_enabled,
             thinking=account.thinking,
             conversation_context=RuntimePromptConversationContext(
                 source_provider=DISCORD_PLATFORM,
