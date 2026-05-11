@@ -569,6 +569,19 @@ def test_delete_server_rejects_empty_and_unknown_names(tmp_path: Path) -> None:
         raise AssertionError("Expected unknown MCP server to be rejected")
 
 
+def test_delete_server_rejects_missing_app_mcp_payload(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.delete_server(name="filesystem")
+    except ValueError as exc:
+        assert "Unknown MCP server: filesystem" in str(exc)
+    else:
+        raise AssertionError("Expected missing app MCP payload to be rejected")
+
+
 def test_update_server_preserves_enabled_state(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
