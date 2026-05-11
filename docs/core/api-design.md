@@ -3176,6 +3176,19 @@ Each server summary includes MCP discovery cache fields:
 - `last_checked_at`
 - `error`
 
+### `DELETE /mcp/servers/{server_name}`
+
+Deletes one app-managed MCP server from the persisted app config and reloads the
+runtime registry.
+
+Behavior:
+- Only app-managed MCP servers are deletable. Plugin-managed or other
+  non-app-backed MCP servers are rejected.
+- On success, the response returns the deleted server summary so callers can
+  remove it from cached lists immediately.
+- Unknown servers return `404`.
+- Runtime config-manager unavailability returns `503`.
+
 ### `GET /mcp/servers/{server_name}/tools`
 
 Returns cached discovery state and cached tools for one MCP server. This endpoint
