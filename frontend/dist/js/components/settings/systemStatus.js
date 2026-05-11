@@ -660,6 +660,7 @@ function renderMcpServerCard(serverView) {
     const meta = [serverView.transport, serverView.source].filter(Boolean).join(' / ');
     const collapsed = collapsedMcpServers.has(serverView.name);
     const canCollapse = canCollapseTools(serverView);
+    const canDelete = serverView.source === 'app';
     const testState = mcpConnectionTests.get(serverView.name);
     const collapseButton = canCollapse ? `
         <button
@@ -713,13 +714,15 @@ function renderMcpServerCard(serverView) {
                     </div>
                     <div class="mcp-status-card-footer">
                         <div class="status-list-state">${escapeHtml(getMcpServerStateLabel(serverView))}</div>
-                        <button
-                            class="mcp-status-toggle mcp-status-toggle-danger"
-                            type="button"
-                            onclick='globalThis.__agentTeamsDeleteMcpServer(${serializeForInlineScript(serverView.name)})'
-                        >
-                            ${t('settings.action.delete')}
-                        </button>
+                        ${canDelete ? `
+                            <button
+                                class="mcp-status-toggle mcp-status-toggle-danger"
+                                type="button"
+                                onclick='globalThis.__agentTeamsDeleteMcpServer(${serializeForInlineScript(serverView.name)})'
+                            >
+                                ${t('settings.action.delete')}
+                            </button>
+                        ` : ''}
                     </div>
                 </div>
             </div>

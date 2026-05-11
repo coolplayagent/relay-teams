@@ -193,7 +193,7 @@ console.log(JSON.stringify({
     assert "Connection closed" in html
     assert 'class="mcp-status-card-controls"' in html
     assert 'class="mcp-status-card-footer"' in html
-    assert 'class="mcp-status-toggle mcp-status-toggle-danger"' in html
+    assert 'class="mcp-status-toggle mcp-status-toggle-danger"' not in html
     assert "Expand all tools" in collapsed_html
     assert "Expand tools" in collapsed_html
     assert "2 tools hidden." in collapsed_html
@@ -268,6 +268,29 @@ console.log(JSON.stringify({
     assert len(confirm_calls) == 1
     assert payload["deleteCalls"] == []
     assert payload["toasts"] == []
+
+
+def test_mcp_status_panel_hides_delete_for_non_app_servers(tmp_path: Path) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+bindSystemStatusHandlers();
+await loadMcpStatusPanel();
+
+console.log(JSON.stringify({
+    html: document.getElementById('mcp-status').innerHTML,
+}));
+""".strip(),
+    )
+
+    html = cast(str, payload["html"])
+    assert "time-mcp" in html
+    assert "empty-mcp" in html
+    assert "Delete" not in html
+    assert "mcp-status-toggle-danger" not in html
 
 
 def test_mcp_status_panel_shows_loading_shell_before_tools_finish(
