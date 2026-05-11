@@ -109,6 +109,9 @@ export function bindSystemStatusHandlers() {
     bindActionButton('add-mcp-server-btn', showMcpEditor);
     bindActionButton('save-mcp-server-btn', handleSaveMcpServer);
     bindActionButton('cancel-mcp-server-btn', hideMcpEditor);
+    bindActionButton('copy-mcp-server-json-btn', () => {
+        void handleCopyMcpServerJson();
+    });
 
     const reloadMcpBtn = document.getElementById('reload-mcp-btn');
     if (reloadMcpBtn) {
@@ -542,7 +545,9 @@ function renderMcpStatusPanel() {
         return;
     }
     mcpStatus.innerHTML = renderMcpServerList(lastLoadedMcpServerViews);
-    bindMcpEditorHandlers();
+    if (mcpEditorVisible) {
+        bindMcpEditorHandlers();
+    }
     syncMcpActionButtons();
 }
 
@@ -685,12 +690,16 @@ function renderMcpEditor() {
     const transport = normalizeEditableTransport(config);
     const isRemote = transport !== 'stdio';
     const extra = isRemote ? formatKeyValueLines(config.headers) : formatKeyValueLines(config.env);
+    const jsonPreview = serializeMcpServerPayload(name, config);
     return `
         <section class="mcp-editor-panel">
             <div class="mcp-editor-grid">
                 <div class="form-group form-group-span-2">
-                    <label for="mcp-server-json-input">${escapeHtml(t('settings.mcp.json_config'))}</label>
-                    <textarea id="mcp-server-json-input" class="config-textarea mcp-editor-textarea mcp-editor-json-textarea" placeholder="${escapeHtml(t('settings.mcp.json_placeholder'))}" spellcheck="false"></textarea>
+                    <div class="mcp-editor-label-row">
+                        <label for="mcp-server-json-input">${escapeHtml(t('settings.mcp.json_config'))}</label>
+                        <button id="copy-mcp-server-json-btn" class="mcp-status-toolbar-btn mcp-editor-copy-btn" type="button">${escapeHtml(t('settings.mcp.copy_json'))}</button>
+                    </div>
+                    <textarea id="mcp-server-json-input" class="config-textarea mcp-editor-textarea mcp-editor-json-textarea" placeholder="${escapeHtml(t('settings.mcp.json_placeholder'))}" spellcheck="false">${escapeHtml(jsonPreview)}</textarea>
                 </div>
                 <div class="form-group">
                     <label for="mcp-server-name-input">${escapeHtml(t('settings.mcp.name'))}</label>
@@ -732,6 +741,10 @@ function renderMcpEditor() {
 }
 
 function bindMcpEditorHandlers() {
+    bindActionButton('copy-mcp-server-json-btn', () => {
+        void handleCopyMcpServerJson();
+    });
+    syncMcpEditorFormValues();
     const transportInput = safeGetElementById('mcp-server-transport-input');
     if (transportInput) {
         transportInput.onchange = syncMcpEditorTransportFields;
@@ -744,6 +757,30 @@ function bindMcpEditorHandlers() {
             setTimeout(applyMcpJsonConfigFromInput, 0);
         };
     }
+    bindMcpJsonPreviewField('mcp-server-name-input');
+    bindMcpJsonPreviewField('mcp-server-command-input');
+    bindMcpJsonPreviewField('mcp-server-args-input');
+    bindMcpJsonPreviewField('mcp-server-extra-input');
+    bindMcpJsonPreviewField('mcp-server-url-input');
+    if (transportInput) {
+        transportInput.oninput = syncMcpEditorJsonPreviewFromForm;
+    }
+}
+
+function syncMcpEditorFormValues() {
+    const config = editingMcpServerConfig || {};
+    const name = mcpEditorMode === 'edit' ? editingMcpServerName : '';
+    const transport = normalizeEditableTransport(config);
+    const extra = transport === 'stdio'
+        ? formatKeyValueLines(config.env)
+        : formatKeyValueLines(config.headers);
+    setInputValue('mcp-server-json-input', serializeMcpServerPayload(name, config), { overwriteDisabled: true });
+    setInputValue('mcp-server-name-input', name, { overwriteDisabled: true });
+    setInputValue('mcp-server-transport-input', transport, { overwriteDisabled: true });
+    setInputValue('mcp-server-command-input', config.command || '', { overwriteDisabled: true });
+    setInputValue('mcp-server-args-input', formatLineList(config.args), { overwriteDisabled: true });
+    setInputValue('mcp-server-url-input', config.url || '', { overwriteDisabled: true });
+    setInputValue('mcp-server-extra-input', extra, { overwriteDisabled: true });
 }
 
 function syncMcpEditorTransportFields() {
@@ -758,6 +795,15 @@ function syncMcpEditorTransportFields() {
     document.querySelectorAll('.mcp-remote-field').forEach(element => {
         element.style.display = isStdio ? 'none' : '';
     });
+    syncMcpEditorJsonPreviewFromForm();
+}
+
+function bindMcpJsonPreviewField(id) {
+    const input = safeGetElementById(id);
+    if (input) {
+        input.oninput = syncMcpEditorJsonPreviewFromForm;
+        input.onchange = syncMcpEditorJsonPreviewFromForm;
+    }
 }
 
 function syncMcpActionButtons() {
@@ -813,6 +859,14 @@ function buildMcpServerPayloadFromForm() {
     };
 }
 
+function tryBuildMcpServerPayloadFromForm() {
+    try {
+        return buildMcpServerPayloadFromForm();
+    } catch (_) {
+        return null;
+    }
+}
+
 function applyMcpJsonConfigFromInput() {
     const parsed = parseMcpJsonConfig(getInputValue('mcp-server-json-input'));
     if (!parsed) {
@@ -829,6 +883,43 @@ function applyMcpJsonConfigFromInput() {
         ? formatKeyValueLines(config.env)
         : formatKeyValueLines(config.headers);
     setInputValue('mcp-server-extra-input', extra);
+}
+
+function syncMcpEditorJsonPreviewFromForm() {
+    const jsonInput = safeGetElementById('mcp-server-json-input');
+    if (!jsonInput) {
+        return;
+    }
+    const payload = tryBuildMcpServerPayloadFromForm();
+    if (!payload) {
+        return;
+    }
+    jsonInput.value = serializeMcpServerPayload(payload.name, payload.config);
+}
+
+async function handleCopyMcpServerJson() {
+    try {
+        const payload = tryBuildMcpServerPayloadFromForm();
+        const copyText = payload
+            ? serializeMcpServerPayload(payload.name, payload.config)
+            : String(getInputValue('mcp-server-json-input') || '').trim();
+        if (!copyText) {
+            throw new Error(t('settings.mcp.copy_json_empty'));
+        }
+        await navigator.clipboard.writeText(copyText);
+        showToast({
+            title: t('settings.mcp.copy_json_success'),
+            message: t('settings.mcp.copy_json_success_message'),
+            tone: 'success',
+            durationMs: 1800,
+        });
+    } catch (e) {
+        showToast({
+            title: t('settings.mcp.copy_json_failed'),
+            message: e?.message || t('settings.mcp.copy_json_failed_message'),
+            tone: 'danger',
+        });
+    }
 }
 
 function parseMcpJsonConfig(raw) {
@@ -867,6 +958,22 @@ function parseMcpJsonConfig(raw) {
     }
 
     return null;
+}
+
+function serializeMcpServerPayload(name, config) {
+    const safeName = String(name || '').trim();
+    if (!safeName || !config || typeof config !== 'object' || Array.isArray(config)) {
+        return '';
+    }
+    return JSON.stringify(
+        {
+            mcpServers: {
+                [safeName]: config,
+            },
+        },
+        null,
+        2,
+    );
 }
 
 function normalizeEditableMcpConfig(config) {
