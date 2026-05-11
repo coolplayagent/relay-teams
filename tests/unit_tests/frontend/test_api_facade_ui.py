@@ -80,6 +80,43 @@ def test_core_api_facade_exports_session_terminal_view_helper() -> None:
     assert completed.stdout.strip() == "function"
 
 
+def test_core_api_facade_exports_delete_mcp_server() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.document = {"
+                "querySelector() { return null; },"
+                "querySelectorAll() { return []; },"
+                "getElementById() { return null; },"
+                "body: null"
+                "}; "
+                f"const mod = await import({api_module_path.as_uri()!r}); "
+                "console.log(typeof mod.deleteMcpServer);"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert completed.stdout.strip() == "function"
+
+
 def test_session_terminal_view_invalidates_session_cache(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -530,6 +567,7 @@ export function invalidateManagedRequests(prefix) {
                 "await mod.deleteClawHubSkill('writer'); "
                 "await mod.reloadMcpConfig(); "
                 "await mod.addMcpServer({ name: 'filesystem' }); "
+                "await mod.deleteMcpServer('filesystem'); "
                 "await mod.updateMcpServer('filesystem', { config: {} }); "
                 "await mod.setMcpServerEnabled('filesystem', true); "
                 "await mod.reloadSkillsConfig(); "
@@ -571,6 +609,7 @@ export function invalidateManagedRequests(prefix) {
         "/api/system/configs/mcp:reload",
         "/api/mcp/servers",
         "/api/mcp/servers/filesystem",
+        "/api/mcp/servers/filesystem",
         "/api/mcp/servers/filesystem/enabled",
         "/api/system/configs/skills:reload",
         "/api/system/configs/plugins/marketplace",
@@ -587,6 +626,7 @@ export function invalidateManagedRequests(prefix) {
         "system:model-profiles",
         "roles:",
         "system:model-profiles",
+        "roles:",
         "roles:",
         "roles:",
         "roles:",
