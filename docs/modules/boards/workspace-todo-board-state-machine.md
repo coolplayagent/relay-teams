@@ -43,13 +43,13 @@ executor run runtime status 映射如下：
 | `stopping` | 正在停止，尚未到终态 | `in_progress` |
 | `paused` | 等待人工输入、审批或恢复 | `in_progress` |
 | `completed` | 本次执行完成，进入验收 | `review` |
-| `failed` | 本次执行失败，需要重新启动 | `todo` |
-| `stopped` | 用户或系统停止，需要重新启动 | `todo` |
+| `failed` | 本次执行失败，但已绑定 runtime 可供用户查看/恢复决策 | `in_progress` |
+| `stopped` | 用户或系统停止，runtime row 仍存在 | `in_progress` |
 | missing run | stale 引用，不能继续显示执行中 | `todo` |
 
 注意：
 
-- `paused` 不应回到 `todo`，因为它仍是可恢复或等待中的 active run。
+- `failed`、`stopped`、`paused` 不应回到 `todo`，因为第一阶段 UI 需要保留已绑定 session/run，并在 In Process 卡片显眼显示失败、已停止或可恢复标签。
 - `stopping` 不应提前回到 `todo`，避免用户并发启动第二个 run。
 - `completed` 只进入 `review`，不直接进入 `done`，除非同时存在完成证据。
 
@@ -107,7 +107,7 @@ Session 删除规则：
 | `in_progress` | workspace/run start failed | before run bound | saved prior status (`todo` for Start, `review` for Request Changes) | clear queue/slot refs, reason, record diagnostic |
 | `in_progress` | run completed | bound `run_id` matches and linked PR merged evidence already stored | `done` | consume stored completion evidence, keep attempt summary |
 | `in_progress` | run completed | bound `run_id` matches | `review` | keep session/run, reason |
-| `in_progress` | run failed/stopped | bound executor `run_id` matches | `todo` | move failed session/run refs into attempt history, clear current `session_id/run_id`; next Start creates a new dedicated session |
+| `in_progress` | run failed/stopped/paused/stopping/queued/running | bound executor `run_id` matches and runtime row exists | `in_progress` | keep `session_id/run_id`; UI derives runtime badge such as 可恢复、已停止、失败、运行中 |
 | `in_progress` | run missing | stale `run_id` | `todo` | clear `session_id/run_id`, reason |
 | `todo` | linked PR merged | linked PR evidence | `todo` | record evidence only; do not mark done |
 | `in_progress` | linked PR merged | linked PR evidence | `in_progress` | record evidence only; do not interrupt executor lifecycle |
@@ -142,7 +142,8 @@ stateDiagram-v2
     in_progress --> in_progress: slot acquired, workspace/run starting as attempt phase
     in_progress --> done: bound run completed with stored PR evidence
     in_progress --> review: bound run completed without completion evidence
-    in_progress --> todo: bound run failed/stopped/missing
+    in_progress --> in_progress: bound run failed/stopped/paused/stopping/queued/running
+    in_progress --> todo: bound run missing
     in_progress --> todo: Start workspace/run start failed
     in_progress --> review: Request Changes workspace/run start failed
     in_progress --> archived: user archive
@@ -235,7 +236,7 @@ Request Changes 发放前必须取消或 supersede 该 TODO 上仍 active 的 AI
 Legacy 迁移规则：
 
 - 如果已有 `review` item 来自旧实现，缺少 `execution_workspace_id` 但仍有 `session_id`，request changes 只能从旧 session workspace 或旧 completed attempt workspace 推导 execution workspace；不能使用当前页面 `view_workspace_id`。无法证明原执行 workspace 时返回 conflict。
-- 新目标数据仍应保存明确的 `execution_workspace_id`；legacy fallback 只用于避免旧 review item 无法返工。
+- 新目标数据仍应保存明确的 `execution_workspace_id`；旧数据兼容路径只用于避免旧 review item 无法返工。
 
 如果 item 没有 bound session：
 

@@ -12,11 +12,10 @@ TODO Board source 设计解决三个问题：
 
 ## Source 类型
 
-v1 支持两种 source：
+v1 支持一种用户可配置 source：
 
 | Source kind | Provider | 说明 |
 | --- | --- | --- |
-| `manual` | `local` | 用户在 Agent Teams 内创建 TODO，不需要外部 sync |
 | `github_issues` | `github` | 从一个 GitHub repository 的 issues 导入 TODO，PR 只作为 evidence |
 
 预留扩展：
@@ -30,7 +29,7 @@ v1 支持两种 source：
 
 ## Source 配置入口
 
-TODO 页面右上角新增设置按钮，打开 source settings 面板。
+TODO 列 header 右上角提供 icon-only 设置按钮，打开 source settings 面板。顶部 toolbar 不再放文字 Sources 按钮，避免把来源设置和全局 board 操作混在一起。
 
 设置面板属于解析后的 `board_workspace_id`：
 
@@ -55,7 +54,7 @@ Source 列表显示：
 - 最近同步时间。
 - 最近同步结果和 diagnostics。
 - source 级 handoff template 是否覆盖。
-- 手动 Sync 按钮。
+- 刷新按钮。
 
 GitHub source 编辑表单包含：
 
@@ -69,21 +68,21 @@ GitHub source 编辑表单包含：
 
 ## GitHub 自动探测
 
-自动探测不再是唯一行为，而是配置体验中的默认建议。
+自动探测不再是唯一行为，也不是每次同步的真值来源。第一阶段实现为一次性 bootstrap：如果 root board workspace 的 git remote 能解析为 `owner/repo`，后端自动创建一个 enabled `github_issues` source；如果不能解析，则只返回 diagnostics，用户之后通过来源设置手动添加。
 
 流程：
 
-1. 用户打开 source settings。
-2. 后端读取 `board_workspace_id` 对应 root/source workspace 的 git remotes。
-3. 如果找到 GitHub remote，返回 suggested repository，例如 `owner/repo`。
-4. 新建 GitHub source 表单预填该 repository。
-5. 用户可以接受、修改或禁用自动探测。
+1. 用户打开 source settings 或触发 board sync。
+2. 后端检查 `board_todo_workspace_state.todo_sources_bootstrapped`。
+3. 如果尚未 bootstrap，后端读取 `board_workspace_id` 对应 root/source workspace 的 git remotes。
+4. 如果找到 GitHub remote，创建一个 persisted `github_issues` source，例如 `owner/repo`。
+5. 无论成功或失败，都标记 bootstrap 已尝试；后续以用户维护的 persisted source list 为准。
 
 自动探测失败时：
 
 - 不阻止用户手动输入 `owner/repo`。
 - settings 面板显示诊断，例如 `Workspace has no GitHub remote`。
-- board 仍可加载 manual TODO 和其他 enabled source。
+- board 仍可加载其他 enabled source；如果没有 source，board 为空。
 
 如果用户在 fork workspace 页面打开设置或点击检测，自动探测仍以 root/source workspace 为准。fork workspace 的 git remote 不能作为 source identity；最多只能作为 UI 诊断中的辅助信息，不能驱动 fork-local source 创建。
 
@@ -97,7 +96,7 @@ GitHub source 编辑表单包含：
 | --- | --- |
 | `source_id` | 稳定 source id |
 | `workspace_id` | 绑定 board workspace；目标语义可命名为 `board_workspace_id` |
-| `kind` | `manual`、`github_issues` 等 |
+| `kind` | `github_issues` 等用户可配置来源 |
 | `provider` | `local`、`github`、`linear` 等 |
 | `display_name` | 用户可读名称 |
 | `enabled` | 是否启用 |
@@ -109,11 +108,10 @@ GitHub source 编辑表单包含：
 - `source_id`
 - `source_key`
 
-并可在迁移期保留 `source_provider`、`source_type` 等 legacy/display 字段。目标实现不能再把这些 legacy 字段作为跨 source identity。
+并可在迁移期保留 `source_provider`、`source_type` 等兼容展示字段。目标实现不能再把这些字段作为跨 source identity。
 
 其中 `source_key` 是 source 内部稳定 key，例如：
 
-- manual：`manual:{todo_id}`
 - GitHub issue record：`issue:{issue_number}`
 - Linear issue：`issue:{linear_issue_id}`
 
@@ -123,7 +121,7 @@ GitHub source 编辑表单包含：
 
 - `source.kind = github_issues`：workspace source 配置类型，表示一个 GitHub repository 的 issue source。
 - `SourceRecord.source_type = github_issue`：adapter 输出的 normalized record 类型。
-- `github_pull_request`：只允许作为 legacy cleanup/evidence 语境出现；PR 在新设计中不是 TODO source/card。
+- `github_pull_request`：只允许作为兼容清理或 evidence 语境出现；PR 在新设计中不是 TODO source/card。
 
 ## Source State 和 Cursor
 
@@ -144,11 +142,24 @@ GitHub source 编辑表单包含：
 
 GitHub cursor v1：
 
-- full sync：先为当前 source/repo 下所有带 linked GitHub PR refs 的 board item 刷新 linked PR / merged evidence，包括 GitHub issue-backed 和 manual TODO；再拉取 open issues 作为 active open issue set，最后对 missing/non-open records 做 reconcile。
+- full sync：先为当前 source/repo 下所有带 linked GitHub PR refs 的 GitHub issue-backed board item 刷新 linked PR / merged evidence；再拉取 open issues 作为 active open issue set，最后对 missing/non-open records 做 reconcile。
 - incremental sync：按 `updated_since` 拉取 changed issues 和 changed PRs。
 - cursor 成功后推进到 sync start time 减 1 秒，保留当前实现的容错思想。
 
 多 source 时，每个 source 独立推进 cursor。一个 source 失败不能阻止其他 source 同步。
+
+## Grouped / Mixed Board Views
+
+第一阶段 API 返回非持久化 `source_groups` 供前端展示：
+
+- 每个 configured external source 生成一个 group。
+- 如果旧 external item 引用的 source 已不存在，后端可从 item source 字段派生 missing-source group，前端使用普通来源缺失文案，不展示内部兼容术语。
+- 旧 `source_provider=local` 或 `source_type=manual` 的 item 不再属于 supported board contract；board list/delta/sync 响应忽略这些 rows。
+
+前端支持两种展示模式：
+
+- `Grouped`：所有状态列都按 `source_groups` 折叠分组；空 group 默认不占用列空间。
+- `Mixed`：所有状态列平铺卡片，不按来源嵌套；卡片仍显示来源标签。
 
 ### Fork Workspace Source Inheritance
 
@@ -162,7 +173,6 @@ Fork workspace 是 execution workspace 或 view workspace，不是独立 TODO so
 - Source settings 在 fork workspace 中展示 root board sources；编辑 source、启用/禁用 source、修改 GitHub `owner/repo`、修改 source template 都写入 root board workspace。
 - 从 fork 页面触发 sync 时，sync root board sources 和 root cursors。
 - GitHub repo/source config 只属于 root board workspace；自动探测只作为 root source 配置建议。
-- Manual source 也归属 root board workspace；在 fork 页面创建 manual TODO 时，TODO 写入 root board，event 记录 `initiated_from_workspace_id = fork_workspace_id`。
 
 如果 root workspace 已删除、缺失或解析出现 cycle，source settings 和 sync 返回 diagnostics，例如 `board_scope_missing_root`，不得悄悄创建 fork-local source。
 
@@ -231,7 +241,7 @@ Board service 消费 adapter 输出：
 
 PR 不单独成为 TODO card。PR 的作用：
 
-- 通过 issue timeline 或用户手动 link 关联到 issue/manual TODO。
+- 通过 issue timeline 或用户手动 link 关联到 imported issue TODO。
 - merged PR 可以把 linked `review` item 推进到 `done`。
 - 对 linked `todo` 或 `in_progress` item，merged PR 只记录 completion evidence，不抢占 board/run lifecycle。
 
@@ -247,22 +257,22 @@ GitHub issue reopened 时：
 
 GitHub source repository 解析优先级：
 
-1. source config 中显式 `repository_full_name`。
-2. 新建配置时的 auto-detect suggestion。
-3. 无配置时不再默默 sync；只显示 diagnostics。
+1. 已持久化 source config 中显式 `repository_full_name`。
+2. 首次初始化配置时，从 root workspace git remote 自动识别出的 `owner/repo`。
+3. 无配置时不执行 GitHub sync；只显示 diagnostics，并允许用户手动创建 source。
 
-现有“自动从 remote 推导并立即 sync”的行为应作为迁移 fallback，而不是长期目标。
+实现阶段的自动识别只负责创建可编辑的 persisted source。source 创建后，
+`repository_full_name` 以用户可修改的 persisted config 为准；后续 sync 不再把
+git remote 当作真值。
 
-## Manual Source 行为
+## Unsupported Local/Manual Rows
 
-Manual TODO 不是外部 source sync 的结果，但仍应建模为 source：
+Manual TODO 不再是 supported source 或 supported create flow：
 
-- 每个 workspace 默认有一个 system-managed `manual` source。
-- 用户创建 manual TODO 时，source 为该 manual source。
-- manual source 没有 cursor。
-- manual TODO 不会被外部 sync 自动 archive 或 restore。
-
-这样 manual 和 external item 在 UI、revision、handoff 中使用同一套 board item 模型。
+- 不再创建 system-managed `manual` source。
+- 不再公开手动创建 TODO 的 API 或 UI。
+- 旧 `source_provider=local` 或 `source_type=manual` 的 rows 视为过期/错误数据，不加载到 board response，不进入 `source_groups`，也不参与 sync/reconcile 展示。
+- 旧 manual source rows 不出现在 source settings list 中。
 
 ## Linear/Internal Adapter 整合
 
@@ -271,7 +281,7 @@ Manual TODO 不是外部 source sync 的结果，但仍应建模为 source：
 - `list_tasks` 转为 `sync` 输出 `SourceRecord`。
 - `move_task` 不作为 board status 更新主路径。
 - `add_comment`/`add_artifact` 可保留为 optional evidence delivery capability，但不属于 v1 必需能力。
-- `TaskBoardStateMap` 不再映射到 TODO Board column；旧兼容 API 删除前只能视为 legacy，不作为新设计依赖。
+- `TaskBoardStateMap` 不再映射到 TODO Board column；旧兼容 API 删除前只能视为兼容层，不作为新设计依赖。
 
 旧 dispatcher 的 polling/worker outcome loop 不作为新 TODO Board 的调度核心。新设计由 source sync service 和 lifecycle bridge 分别负责外部同步与 run/session 状态消费；旧 dispatcher 相关 API 后续删除。
 
@@ -311,7 +321,7 @@ Source 删除语义：
 - `DELETE /api/boards/todo-sources/{source_id}` 只允许删除没有 item、template、cursor、diagnostic 引用的 source。
 - 如果 source 已经导入过 TODO 或仍有 active/done/archived item，首版 UI 应提供 disable/archive source 语义，而不是物理删除；`PATCH enabled=false` 保留 `source_id`、cursor、diagnostics 和 item/source context。
 - 用户需要停止同步时使用 disable；已有 TODO 保持线性 board item，不因 source disabled 自动删除。
-- 后续若支持强制删除，必须先把 item 转成 `source_provider=manual` 或写入 tombstone source record，避免 preview/sync/diagnostic 出现 dangling `source_id`。
+- 后续若支持强制删除，必须先写入 tombstone source record 或其他 explicit missing-source context，避免 preview/sync/diagnostic 出现 dangling `source_id`。
 
 现有：
 
@@ -327,20 +337,19 @@ POST /api/boards/todos:sync-changes
 | 场景 | 期望 |
 | --- | --- |
 | 显式 GitHub repo | sync 使用配置 repo，不读取 git remote 作为最终值 |
-| 自动探测成功 | 新建 source 表单预填 `owner/repo` |
+| 自动识别成功 | 若 board 还没有 GitHub source，则创建 enabled `github_issues` source；用户之后可修改 |
 | 自动探测失败 | 用户仍可手动配置 GitHub repo |
 | 多 GitHub source | 每个 source cursor 独立推进 |
 | source disabled | 不参与自动和 workspace-level sync |
 | delete unused source | 删除 source config 和空 cursor/diagnostic 引用 |
 | delete source with imported items | 拒绝物理删除，引导使用 `enabled=false` |
-| GitHub token 缺失 | 返回 source diagnostics，不影响 manual TODO |
+| GitHub token 缺失 | 返回 source diagnostics，不影响其他已配置 source |
 | issue open | upsert TODO item |
 | issue closed without merged PR and item in `todo`/`in_progress`/`review` | 自动 archive |
 | issue closed without merged PR and item in `done` | 保持 `done`，只记录 closed evidence |
 | issue closed with merged PR and item in `review` | 进入 `done` |
 | issue closed with merged PR and item in `todo`/`in_progress` | 只记录 PR merged evidence，不抢占 run lifecycle |
 | issue reopened | 只恢复 source 自动 archive 的 item |
-| manual archived | 不被 source sync 自动恢复 |
 | fork workspace 打开 source settings | 展示 root board sources，并标明 shared with root workspace |
 | fork workspace 编辑 GitHub repo | 修改 root board source config，不创建 fork-local source |
 | fork workspace 触发 sync | 使用 root board sources/cursors，不读取 fork remote 作为 source identity |

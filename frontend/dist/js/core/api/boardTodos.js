@@ -63,19 +63,59 @@ export async function syncBoardTodoChanges({ workspaceId, includeArchived = fals
     );
 }
 
-export async function createBoardTodo({ workspaceId, title, body = '' }) {
+export async function fetchBoardTodoSources({ workspaceId } = {}) {
+    const query = new URLSearchParams();
+    query.set('workspace_id', String(workspaceId || '').trim());
     return requestJson(
-        '/api/boards/todos',
+        `/api/boards/todo-sources?${query.toString()}`,
+        {},
+        'Failed to fetch board TODO sources',
+    );
+}
+
+export async function createBoardTodoSource(payload = {}) {
+    return requestJson(
+        '/api/boards/todo-sources',
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                workspace_id: String(workspaceId || '').trim(),
-                title: String(title || '').trim(),
-                body: String(body || ''),
-            }),
+            body: JSON.stringify(payload),
         },
-        'Failed to create board TODO',
+        'Failed to create board TODO source',
+    );
+}
+
+export async function updateBoardTodoSource(sourceId, payload = {}) {
+    return requestJson(
+        `/api/boards/todo-sources/${encodeURIComponent(sourceId)}`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to update board TODO source',
+    );
+}
+
+export async function deleteBoardTodoSource(sourceId) {
+    return requestJson(
+        `/api/boards/todo-sources/${encodeURIComponent(sourceId)}`,
+        {
+            method: 'DELETE',
+        },
+        'Failed to delete board TODO source',
+    );
+}
+
+export async function previewStartBoardTodo(todoId, payload = {}) {
+    return requestJson(
+        `/api/boards/todos/${encodeURIComponent(todoId)}:preview-start`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to preview board TODO prompt',
     );
 }
 
@@ -100,6 +140,18 @@ export async function requestBoardTodoChanges(todoId, payload = {}) {
             body: JSON.stringify(payload),
         },
         'Failed to request board TODO changes',
+    );
+}
+
+export async function markBoardTodoDone(todoId, payload = {}) {
+    return requestJson(
+        `/api/boards/todos/${encodeURIComponent(todoId)}:mark-done`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to mark board TODO done',
     );
 }
 

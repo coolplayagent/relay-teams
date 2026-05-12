@@ -191,15 +191,20 @@ export {
 
 export {
     archiveBoardTodo,
-    createBoardTodo,
+    createBoardTodoSource,
+    deleteBoardTodoSource,
     fetchBoardTodoChanges,
+    fetchBoardTodoSources,
     fetchBoardTodos,
     linkBoardTodoPullRequest,
+    markBoardTodoDone,
+    previewStartBoardTodo,
     requestBoardTodoChanges,
     restoreBoardTodo,
     startBoardTodo,
     syncBoardTodoChanges,
     syncBoardTodos,
+    updateBoardTodoSource,
 } from './boardTodos.js';
 
 export {

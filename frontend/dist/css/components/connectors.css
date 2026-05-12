@@ -565,6 +565,17 @@
     font: inherit;
 }
 
+.connectors-w3-form .secure-input-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.connectors-w3-form .secure-input-row input {
+    width: auto;
+    flex: 1 1 auto;
+}
+
 .connectors-w3-actions {
     display: flex;
     flex-wrap: wrap;

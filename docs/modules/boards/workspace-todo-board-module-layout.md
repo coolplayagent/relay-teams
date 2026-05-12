@@ -264,7 +264,7 @@ TODO Board application service。
 职责：
 
 - 编排 repository、source service、handoff service、lifecycle service。
-- 提供 router 使用的高层方法：list board、sync board、create manual TODO、start、request changes、archive、restore、link PR。
+- 提供 router 使用的高层方法：list board、sync board、start、request changes、archive、restore、link PR。
 - 在触碰任何 board persistence 前调用 `board_scope_service`，把 `workspace_id` 参数解析为 `view_workspace_id` 和 `board_workspace_id`。
 - 保持事务/失败恢复边界。
 
@@ -513,16 +513,6 @@ GitHub Issues source adapter。
 
 - 直接写 `BoardTodoItem`。
 - 直接设置 board status。
-
-### `boards/sources/manual.py`
-
-Manual source adapter。
-
-职责：
-
-- 提供 manual source metadata。
-- manual source 没有外部 sync。
-- 统一 source display 和 handoff context。
 
 ### `boards/sources/linear.py`
 

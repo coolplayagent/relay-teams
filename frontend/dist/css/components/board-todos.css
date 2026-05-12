@@ -78,26 +78,34 @@
     justify-content: flex-end;
 }
 
+.board-todos-settings-btn {
+    flex: 0 0 auto;
+}
+
 .board-todos-workspace,
 .board-todos-tool-btn,
-.board-todos-primary-btn {
+.board-todos-primary-btn,
+.board-todos-toolbar-icon-btn,
+.board-todos-toggle {
+    background: #ffffff;
     border: 1px solid rgba(15, 23, 42, 0.12);
     border-radius: 6px;
+    box-sizing: border-box;
     font-size: 13px;
     height: 34px;
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 .board-todos-workspace {
-    background: #ffffff;
     color: #111827;
     max-width: 260px;
     padding: 0 28px 0 10px;
 }
 
 .board-todos-tool-btn,
-.board-todos-primary-btn {
+.board-todos-primary-btn,
+.board-todos-toolbar-icon-btn {
     align-items: center;
-    background: #ffffff;
     color: #111827;
     display: inline-flex;
     gap: 7px;
@@ -105,6 +113,35 @@
     font-weight: 650;
     min-width: 94px;
     padding: 0 10px;
+}
+
+.board-todos-workspace:hover,
+.board-todos-tool-btn:hover,
+.board-todos-toolbar-icon-btn:hover,
+.board-todos-toggle:hover {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.18);
+}
+
+.board-todos-workspace:focus-visible,
+.board-todos-tool-btn:focus-visible,
+.board-todos-primary-btn:focus-visible,
+.board-todos-toolbar-icon-btn:focus-visible,
+.board-todos-toggle:focus-within {
+    border-color: rgba(15, 23, 42, 0.34);
+    outline: 2px solid rgba(15, 23, 42, 0.12);
+    outline-offset: 2px;
+}
+
+.board-todos-toolbar-icon-btn {
+    min-width: 34px;
+    padding: 0;
+    width: 34px;
+}
+
+.board-todos-toolbar-icon-btn svg {
+    height: 16px;
+    width: 16px;
 }
 
 .board-todos-sync-btn.is-busy {
@@ -135,7 +172,48 @@
     display: inline-flex;
     font-size: 13px;
     gap: 6px;
+    padding: 0 10px;
+}
+
+.board-todos-toggle input {
+    accent-color: #0f172a;
+    flex: 0 0 auto;
+    height: 14px;
+    margin: 0;
+    width: 14px;
+}
+
+.board-todos-view-toggle {
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    border-radius: 6px;
+    display: inline-flex;
     height: 34px;
+    padding: 2px;
+}
+
+.board-todos-view-toggle button {
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: #475569;
+    font-size: 12px;
+    font-weight: 650;
+    height: 28px;
+    padding: 0 10px;
+    transition: background-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.board-todos-view-toggle button.is-active {
+    background: #f1f5f9;
+    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+    color: #111827;
+}
+
+.board-todos-view-toggle button:focus-visible {
+    outline: 2px solid rgba(15, 23, 42, 0.12);
+    outline-offset: 1px;
 }
 
 .board-todos-diagnostics {
@@ -211,7 +289,15 @@
     font-size: 12px;
     gap: 8px;
     height: 24px;
+    justify-content: space-between;
     margin-bottom: 8px;
+}
+
+.board-todos-column-title {
+    align-items: center;
+    display: inline-flex;
+    gap: 8px;
+    min-width: 0;
 }
 
 .board-todos-column-head strong {
@@ -219,9 +305,22 @@
     font-weight: 700;
 }
 
-.board-todos-column-head span:last-child {
+.board-todos-column-title span:last-child {
     color: #64748b;
     margin-left: 4px;
+}
+
+.board-todos-column-icon-btn {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.78);
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    border-radius: 5px;
+    color: #334155;
+    display: inline-flex;
+    height: 24px;
+    justify-content: center;
+    padding: 0;
+    width: 24px;
 }
 
 .board-todos-column-controls {
@@ -246,6 +345,7 @@
 }
 
 .board-todos-column-search svg,
+.board-todos-column-icon-btn svg,
 .board-todos-icon-link svg,
 .board-todos-card-quick-actions button svg {
     height: 15px;
@@ -305,7 +405,114 @@
     min-width: 0;
     overscroll-behavior: contain;
     overflow-y: auto;
-    padding: 0 2px 2px 0;
+    padding: 0 2px 14px 0;
+    scroll-padding-bottom: 14px;
+}
+
+.board-todos-source-group {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.board-todos-source-group + .board-todos-source-group {
+    border-top: 1px solid rgba(15, 23, 42, 0.08);
+    padding-top: 6px;
+}
+
+.board-todos-source-group-head {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.board-todos-source-group-head > button:first-child {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: #334155;
+    display: inline-flex;
+    flex: 1 1 auto;
+    font-size: 12px;
+    font-weight: 700;
+    gap: 6px;
+    justify-content: flex-start;
+    min-width: 0;
+    padding: 1px 0;
+    text-align: left;
+}
+
+.board-todos-source-group-head > button:first-child span:nth-child(2) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.board-todos-source-group-head > button:first-child span:last-child {
+    color: #64748b;
+    flex: 0 0 auto;
+    font-weight: 600;
+}
+
+.board-todos-source-group-chevron {
+    color: #64748b;
+    flex: 0 0 auto;
+    line-height: 1;
+    width: 14px;
+}
+
+.board-todos-source-group-chevron svg {
+    display: block;
+    height: 14px;
+    transform: rotate(0deg);
+    transition: transform 160ms ease;
+    width: 14px;
+}
+
+.board-todos-source-group.is-collapsed .board-todos-source-group-chevron svg {
+    transform: rotate(-90deg);
+}
+
+.board-todos-source-group-add {
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    border-radius: 5px;
+    color: #334155;
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 650;
+    height: 24px;
+    padding: 0 7px;
+}
+
+.board-todos-source-group-list {
+    display: grid;
+    grid-template-rows: 1fr;
+    min-width: 0;
+    opacity: 1;
+    overflow: hidden;
+    transform: translateY(0);
+    transition:
+        grid-template-rows 180ms ease,
+        opacity 140ms ease,
+        transform 160ms ease;
+}
+
+.board-todos-source-group-list-inner {
+    display: grid;
+    gap: 8px;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.board-todos-source-group.is-collapsed .board-todos-source-group-list {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
 }
 
 .board-todos-card {
@@ -320,10 +527,6 @@
     min-width: 0;
     padding: 12px;
     width: 100%;
-}
-
-.board-todos-card.is-entering {
-    animation: boardTodoCardIn 180ms ease-out;
 }
 
 .board-todos-card-top {
@@ -363,6 +566,39 @@
     font-size: 11px;
     gap: 3px;
     min-width: 0;
+}
+
+.board-todos-run-badge {
+    align-self: start;
+    background: #f1f5f9;
+    border: 1px solid rgba(15, 23, 42, 0.1);
+    border-radius: 6px;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+    justify-self: start;
+    line-height: 1;
+    padding: 4px 7px;
+}
+
+.board-todos-run-badge.is-recoverable {
+    background: #fef3c7;
+    border-color: #f59e0b;
+    color: #92400e;
+}
+
+.board-todos-run-badge.is-failed {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+.board-todos-run-badge.is-running,
+.board-todos-run-badge.is-queued,
+.board-todos-run-badge.is-stopping {
+    background: #e0f2fe;
+    border-color: #7dd3fc;
+    color: #075985;
 }
 
 .board-todos-card-meta span,
@@ -651,6 +887,487 @@
     opacity: 0.45;
 }
 
+.board-todo-source-settings-backdrop,
+.board-todo-start-backdrop {
+    align-items: center;
+    background: rgba(15, 23, 42, 0.36);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 24px;
+    position: fixed;
+    z-index: 90;
+}
+
+.board-todo-source-settings-modal,
+.board-todo-start-modal {
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    max-height: calc(100dvh - 48px);
+    overflow: hidden;
+    width: min(760px, calc(100vw - 48px));
+}
+
+.board-todo-start-modal {
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(1180px, calc(100vw - 48px));
+}
+
+.board-todo-source-settings-header,
+.board-todo-start-header {
+    align-items: start;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 16px 18px;
+}
+
+.board-todo-source-settings-header h3,
+.board-todo-start-header h3 {
+    color: #111827;
+    font-size: 16px;
+    line-height: 1.3;
+    margin: 0;
+}
+
+.board-todo-source-settings-header p,
+.board-todo-start-header p {
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.4;
+    margin: 4px 0 0;
+}
+
+.board-todo-source-settings-body,
+.board-todo-start-body {
+    min-height: 0;
+    overflow: auto;
+    padding: 16px 18px 18px;
+}
+
+.board-todo-settings-section {
+    border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+    display: grid;
+    gap: 10px;
+    margin: 0 0 14px;
+    padding: 0 0 14px;
+}
+
+.board-todo-settings-view-row {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.board-todo-settings-section-title,
+.board-todo-settings-section-head h4 {
+    color: #111827;
+    font-size: 13px;
+    line-height: 1.3;
+    margin: 0;
+}
+
+.board-todo-settings-view-toggle {
+    flex: 0 0 auto;
+}
+
+.board-todo-source-settings-status {
+    color: #64748b;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 12px;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.board-todo-source-settings-status.is-error {
+    color: #b91c1c;
+}
+
+.board-todo-source-settings-status span {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 6px;
+    color: #92400e;
+    padding: 5px 8px;
+}
+
+.board-todo-source-settings-footer {
+    align-items: center;
+    border-top: 1px solid rgba(15, 23, 42, 0.1);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    padding: 12px 18px;
+}
+
+.board-todo-source-records {
+    border-top: 1px solid rgba(15, 23, 42, 0.1);
+}
+
+.board-todo-source-record {
+    animation: none;
+}
+
+.board-todo-source-record .profile-card-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.board-todo-source-inline-action {
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: #475569;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1;
+    padding: 6px 7px;
+    transition: background-color 140ms ease, color 140ms ease;
+}
+
+.board-todo-source-inline-action:hover {
+    background: rgba(15, 23, 42, 0.06);
+    color: #111827;
+}
+
+.board-todo-source-inline-action:focus-visible {
+    outline: 2px solid rgba(15, 23, 42, 0.14);
+    outline-offset: 1px;
+}
+
+.board-todo-source-inline-action.is-danger {
+    color: #b42318;
+}
+
+.board-todo-source-inline-action.is-danger:hover {
+    background: rgba(180, 35, 24, 0.08);
+    color: #991b1b;
+}
+
+.board-todo-source-empty {
+    min-height: 160px;
+}
+
+.board-todo-start-composer.input-container {
+    background: #ffffff;
+    border: 1px solid #e2e7eb;
+    border-radius: 10px;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, 0.07);
+    box-sizing: border-box;
+    container-name: board-todo-start-composer;
+    container-type: inline-size;
+    margin: 0;
+    overflow: visible;
+    padding: 16px 20px 14px;
+    position: relative;
+    width: 100%;
+}
+
+.board-todo-start-composer .input-wrapper {
+    background: #ffffff;
+    border: 1px solid #d9e0e5;
+    border-radius: 10px;
+    min-height: clamp(210px, 38vh, 390px);
+    overflow: hidden;
+    position: relative;
+}
+
+.board-todo-start-composer [data-board-todo-start-prompt] {
+    background: transparent;
+    border: 0;
+    box-sizing: border-box;
+    color: #1f2933;
+    display: block;
+    font: inherit;
+    font-size: clamp(15px, 0.9vw, 18px);
+    line-height: 1.55;
+    min-height: clamp(210px, 38vh, 390px);
+    outline: 0;
+    padding: 22px 22px 76px;
+    resize: vertical;
+    width: 100%;
+}
+
+.board-todo-start-composer [data-board-todo-start-prompt]::placeholder {
+    color: #7e8794;
+}
+
+.board-todo-start-composer .composer-actions {
+    align-items: center;
+    bottom: 22px;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    max-width: calc(100% - 36px);
+    pointer-events: none;
+    position: absolute;
+    right: 18px;
+}
+
+.board-todo-start-composer .composer-actions > button {
+    pointer-events: auto;
+}
+
+.board-todo-start-composer .board-todo-start-send-btn {
+    align-items: center;
+    border-radius: 10px;
+    display: inline-flex;
+    justify-content: center;
+}
+
+.board-todo-start-composer .board-todo-start-send-btn {
+    background: #2f6f5b;
+    border: 1px solid #2b6654;
+    color: #ffffff;
+    gap: 9px;
+    height: 46px;
+    min-width: 126px;
+    padding: 0 18px;
+}
+
+.board-todo-start-composer .board-todo-start-send-btn:hover {
+    background: #285f4f;
+    border-color: #285f4f;
+}
+
+.board-todo-start-composer .board-todo-start-send-btn svg {
+    height: 19px;
+    width: 19px;
+}
+
+.board-todo-start-composer .send-btn-label {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+.board-todo-start-composer .input-footer-hint {
+    display: none;
+}
+
+.board-todo-start-composer .input-controls {
+    align-items: center;
+    box-sizing: border-box;
+    color: #111827;
+    display: flex;
+    gap: 16px;
+    height: 36px;
+    margin-top: 12px;
+    overflow: hidden;
+    padding: 0;
+    white-space: nowrap;
+    width: 100%;
+}
+
+.board-todo-start-composer .composer-topology {
+    align-items: center;
+    display: inline-flex;
+    flex: 1 1 auto;
+    flex-wrap: nowrap;
+    gap: 12px;
+    min-height: 36px;
+    min-width: 0;
+    overflow: hidden;
+    width: auto;
+}
+
+.board-todo-start-composer .composer-topology-label {
+    align-items: center;
+    color: #687385;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: 0;
+    font-weight: 500;
+    letter-spacing: 0;
+}
+
+.board-todo-start-composer .composer-topology-label::before {
+    content: "模式:";
+    font-size: 14px;
+}
+
+.board-todo-start-composer .composer-segmented {
+    background: #ffffff;
+    border: 1px solid #dfe4e8;
+    border-radius: 10px;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: 36px;
+    overflow: hidden;
+    padding: 0;
+}
+
+.board-todo-start-composer .composer-segmented-btn {
+    align-items: center;
+    background: #ffffff;
+    border: 0;
+    border-right: 1px solid #e7ebef;
+    color: #687385;
+    display: inline-flex;
+    font-size: 14px;
+    font-weight: 600;
+    justify-content: center;
+    line-height: 1;
+    min-height: 34px;
+    min-width: 86px;
+    padding: 0 18px;
+}
+
+.board-todo-start-composer .composer-segmented-btn:hover:not(:disabled) {
+    background: #f6f8f7;
+    color: #2f6f5b;
+}
+
+.board-todo-start-composer .composer-segmented-btn.active {
+    background: #e9f4ee;
+    color: #2f6f5b;
+}
+
+.board-todo-start-composer .composer-preset-field {
+    align-items: center;
+    display: inline-flex;
+    flex: 1 1 auto;
+    gap: 10px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.board-todo-start-composer .composer-preset-field[hidden],
+.board-todo-start-composer .composer-mode-inline[hidden] {
+    display: none;
+}
+
+.board-todo-start-composer .composer-preset-label,
+.board-todo-start-composer .composer-mode-inline-label {
+    color: #687385;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0;
+}
+
+.board-todo-start-composer .composer-mode-inline-label {
+    font-size: 13px;
+}
+
+.board-todo-start-composer .composer-preset-select,
+.board-todo-start-composer .composer-mode-inline-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background:
+        url("data:image/svg+xml,%3Csvg viewBox='0 0 16 16' xmlns='http://www.w3.org/2000/svg' fill='none'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5' stroke='%234f5b68' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 12px center / 14px 14px no-repeat,
+        #ffffff;
+    border: 1px solid #dfe4e8;
+    border-radius: 8px;
+    box-shadow: none;
+    color: #111827;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 560;
+    height: 36px;
+    line-height: 1;
+    min-height: 36px;
+    outline: none;
+}
+
+.board-todo-start-composer .composer-preset-select {
+    max-width: 230px;
+    min-width: 0;
+    padding: 0 34px 0 14px;
+    width: clamp(132px, 12vw, 220px);
+}
+
+.board-todo-start-composer .composer-mode-inline-select {
+    min-width: 82px;
+    padding: 0 28px 0 10px;
+}
+
+.board-todo-start-composer .composer-preset-select:focus,
+.board-todo-start-composer .composer-mode-inline-select:focus,
+.board-todo-start-composer [data-board-todo-start-prompt]:focus {
+    border-color: #557866;
+}
+
+.board-todo-start-composer .input-wrapper:focus-within {
+    border-color: #557866;
+    box-shadow: 0 0 0 1px rgba(85, 120, 102, 0.32);
+}
+
+.board-todo-start-composer .composer-mode-toggle {
+    align-items: center;
+    color: #111827;
+    display: inline-flex;
+    flex: 0 0 auto;
+    gap: 9px;
+    min-height: 36px;
+}
+
+.board-todo-start-composer .composer-mode-toggle input[type="checkbox"] {
+    height: 1px;
+    opacity: 0;
+    position: absolute;
+    width: 1px;
+}
+
+.board-todo-start-composer .composer-mode-check {
+    background: #e9edf1;
+    border: 1px solid #dde3e8;
+    border-radius: 999px;
+    display: inline-block;
+    height: 24px;
+    position: relative;
+    width: 42px;
+}
+
+.board-todo-start-composer .composer-mode-check::after {
+    background: #ffffff;
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+    content: "";
+    height: 20px;
+    left: 1px;
+    position: absolute;
+    top: 1px;
+    transition: transform 140ms ease;
+    width: 20px;
+}
+
+.board-todo-start-composer .composer-mode-toggle input[type="checkbox"]:checked + .composer-mode-check {
+    background: #2f7d66;
+    border-color: #2f6f5b;
+}
+
+.board-todo-start-composer .composer-mode-toggle input[type="checkbox"]:checked + .composer-mode-check::after {
+    transform: translateX(18px);
+}
+
+.board-todo-start-composer .composer-mode-copy,
+.board-todo-start-composer .composer-mode-toggle.has-inline-select .composer-mode-copy,
+.board-todo-start-composer .composer-mode-inline {
+    align-items: center;
+    display: inline-flex;
+    gap: 8px;
+}
+
+.board-todo-start-composer .composer-mode-title {
+    color: #111827;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+}
+
 body:not(.light-theme) .board-todos {
     background: var(--bg-base);
 }
@@ -682,16 +1399,34 @@ body:not(.light-theme) .board-todos-detail-body h4 {
 
 body:not(.light-theme) .board-todos-workspace,
 body:not(.light-theme) .board-todos-tool-btn,
+body:not(.light-theme) .board-todos-toolbar-icon-btn,
+body:not(.light-theme) .board-todos-toggle,
+body:not(.light-theme) .board-todos-view-toggle,
+body:not(.light-theme) .board-todos-view-toggle button.is-active,
+body:not(.light-theme) .board-todos-column-icon-btn,
 body:not(.light-theme) .board-todos-card-quick-actions button,
 body:not(.light-theme) .board-todos-icon-link,
 body:not(.light-theme) .board-todos-card-actions button,
+body:not(.light-theme) .board-todos-source-group-add,
 body:not(.light-theme) .board-todos-column-search,
 body:not(.light-theme) .board-todos-column-sort,
 body:not(.light-theme) .board-todos-detail-header button,
-body:not(.light-theme) .board-todos-detail-pagination button {
+body:not(.light-theme) .board-todos-detail-pagination button,
+body:not(.light-theme) .board-todo-start-composer .composer-segmented,
+body:not(.light-theme) .board-todo-start-composer .composer-segmented-btn.active,
+body:not(.light-theme) .board-todo-start-composer .composer-preset-select,
+body:not(.light-theme) .board-todo-start-composer .composer-mode-inline-select {
     background: var(--button-secondary-bg);
     border-color: var(--button-secondary-border);
     color: var(--button-secondary-text);
+}
+
+body:not(.light-theme) .board-todos-workspace:hover,
+body:not(.light-theme) .board-todos-tool-btn:hover,
+body:not(.light-theme) .board-todos-toolbar-icon-btn:hover,
+body:not(.light-theme) .board-todos-toggle:hover {
+    background: var(--settings-row-hover-bg);
+    border-color: var(--button-secondary-border);
 }
 
 body:not(.light-theme) .board-todos-column-search input {
@@ -706,7 +1441,12 @@ body:not(.light-theme) .board-todos-primary-btn {
 
 body:not(.light-theme) .board-todos-column,
 body:not(.light-theme) .board-todos-archive-view,
-body:not(.light-theme) .board-todos-detail-modal {
+body:not(.light-theme) .board-todos-detail-modal,
+body:not(.light-theme) .board-todo-source-settings-modal,
+body:not(.light-theme) .board-todo-start-modal,
+body:not(.light-theme) .board-todo-start-composer.input-container,
+body:not(.light-theme) .board-todo-start-composer .input-wrapper,
+body:not(.light-theme) .board-todo-start-composer [data-board-todo-start-prompt] {
     background: var(--bg-surface);
     border-color: var(--border-color);
 }
@@ -747,6 +1487,80 @@ body:not(.light-theme) .board-todos-archive-pill {
     color: var(--text-primary);
 }
 
+body:not(.light-theme) .board-todo-source-settings-header,
+body:not(.light-theme) .board-todo-start-header,
+body:not(.light-theme) .board-todo-source-settings-footer,
+body:not(.light-theme) .board-todo-start-composer.input-container,
+body:not(.light-theme) .board-todo-start-composer .input-wrapper,
+body:not(.light-theme) .board-todos-source-group + .board-todos-source-group,
+body:not(.light-theme) .board-todo-source-records {
+    border-color: var(--border-color);
+}
+
+body:not(.light-theme) .board-todo-source-settings-header h3,
+body:not(.light-theme) .board-todo-start-header h3,
+body:not(.light-theme) .board-todo-start-composer [data-board-todo-start-prompt],
+body:not(.light-theme) .board-todo-start-composer .composer-segmented-btn.active,
+body:not(.light-theme) .board-todo-start-composer .composer-mode-toggle,
+body:not(.light-theme) .board-todo-start-composer .composer-mode-title,
+body:not(.light-theme) .board-todos-view-toggle button.is-active,
+body:not(.light-theme) .board-todos-source-group-head > button:first-child,
+body:not(.light-theme) .board-todo-settings-section-title {
+    color: var(--text-primary);
+}
+
+body:not(.light-theme) .board-todos-view-toggle button.is-active {
+    background: var(--bg-surface-muted);
+    box-shadow: inset 0 0 0 1px var(--border-color);
+}
+
+body:not(.light-theme) .board-todo-source-inline-action {
+    color: var(--text-secondary);
+}
+
+body:not(.light-theme) .board-todo-source-inline-action:hover {
+    background: var(--settings-row-hover-bg);
+    color: var(--text-primary);
+}
+
+body:not(.light-theme) .board-todo-source-inline-action.is-danger {
+    color: #f2a6b3;
+}
+
+body:not(.light-theme) .board-todo-source-inline-action.is-danger:hover {
+    background: rgba(207, 102, 121, 0.14);
+    color: #f7bcc6;
+}
+
+body:not(.light-theme) .board-todo-source-settings-header p,
+body:not(.light-theme) .board-todo-start-header p,
+body:not(.light-theme) .board-todo-source-settings-status,
+body:not(.light-theme) .board-todo-start-composer .composer-topology-label,
+body:not(.light-theme) .board-todo-start-composer .composer-preset-label,
+body:not(.light-theme) .board-todo-start-composer .composer-mode-inline-label,
+body:not(.light-theme) .board-todos-source-group-head > button:first-child span:last-child,
+body:not(.light-theme) .board-todos-source-group-chevron {
+    color: var(--text-secondary);
+}
+
+body:not(.light-theme) .board-todos-run-badge {
+    background: var(--settings-chip-bg);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+body:not(.light-theme) .board-todos-run-badge.is-recoverable {
+    background: rgba(184, 154, 102, 0.16);
+    border-color: rgba(184, 154, 102, 0.34);
+    color: #d7ba7d;
+}
+
+body:not(.light-theme) .board-todos-run-badge.is-failed {
+    background: rgba(207, 102, 121, 0.14);
+    border-color: rgba(207, 102, 121, 0.34);
+    color: #f2a6b3;
+}
+
 body:not(.light-theme) .board-todos-detail-header {
     border-bottom-color: var(--border-color);
 }
@@ -770,18 +1584,6 @@ body:not(.light-theme) .board-todos-skeleton-card p,
 body:not(.light-theme) .board-todos-skeleton-card em {
     background: linear-gradient(90deg, #2b2f32 0%, #373c41 50%, #2b2f32 100%);
     background-size: 220% 100%;
-}
-
-@keyframes boardTodoCardIn {
-    from {
-        opacity: 0;
-        transform: translateY(5px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 @keyframes boardTodoSkeletonPulse {
@@ -858,9 +1660,14 @@ body:not(.light-theme) .board-todos-skeleton-card em {
 
     .board-todos-tool-btn,
     .board-todos-primary-btn,
-    .board-todos-workspace {
+    .board-todos-workspace,
+    .board-todos-view-toggle {
         max-width: none;
         width: 100%;
+    }
+
+    .board-todos-view-toggle button {
+        flex: 1 1 auto;
     }
 
     .board-todos-columns {
@@ -925,9 +1732,36 @@ body:not(.light-theme) .board-todos-skeleton-card em {
         padding: 10px;
     }
 
-    .board-todos-detail-modal {
+    .board-todo-source-settings-backdrop,
+    .board-todo-start-backdrop {
+        align-items: stretch;
+        padding: 10px;
+    }
+
+    .board-todos-detail-modal,
+    .board-todo-source-settings-modal,
+    .board-todo-start-modal {
         height: calc(100dvh - 20px);
         max-height: calc(100dvh - 20px);
+        width: 100%;
+    }
+
+    .board-todo-start-composer .input-controls {
+        flex-wrap: wrap;
+        height: auto;
+        row-gap: 10px;
+    }
+
+    .board-todo-start-composer .composer-topology {
+        align-items: stretch;
+        flex-basis: 100%;
+        flex-direction: column;
+    }
+
+    .board-todo-start-composer .composer-segmented,
+    .board-todo-start-composer .composer-preset-select,
+    .board-todo-start-composer .composer-mode-inline-select {
+        max-width: none;
         width: 100%;
     }
 

@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from relay_teams.boards import (
-    BoardTodoCreateInput,
     BoardTodoRepository,
     BoardTodoService,
     BoardTodoStatus,
@@ -22,18 +21,26 @@ from relay_teams.boards.todo_models import (
     BoardTodoArchiveRequest,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
+    BoardTodoMarkDoneRequest,
+    BoardTodoPreviewStartRequest,
+    BoardTodoSource,
+    BoardTodoSourceCreateRequest,
+    BoardTodoSourceKind,
     BoardTodoSourceProvider,
     BoardTodoSourceType,
+    BoardTodoSourceUpdateRequest,
+    BoardTodoSyncStatus,
     BoardTodoStartRequest,
 )
 from relay_teams.media import content_parts_to_text
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeStatus,
 )
-from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.triggers.github_client import GitHubApiError
 from relay_teams.triggers.models import (
     GitHubTriggerAccountRecord,
@@ -58,6 +65,40 @@ from relay_teams.boards.todo_service import (
     _parse_github_pull_request_url,
     _parse_github_remote,
 )
+
+
+class _BoardTodoServiceHarness(BoardTodoService):
+    @property
+    def repository_for_tests(self) -> BoardTodoRepository:
+        return self._repository
+
+
+def test_board_todo_source_validation_rejects_mismatched_provider() -> None:
+    with pytest.raises(ValidationError, match="manual board todo sources"):
+        BoardTodoSource(
+            source_id="bsrc_manual",
+            workspace_id="repo",
+            kind=BoardTodoSourceKind.MANUAL,
+            provider=BoardTodoSourceProvider.GITHUB,
+            display_name="Manual",
+        )
+    with pytest.raises(ValidationError, match="github_issues sources"):
+        BoardTodoSource(
+            source_id="bsrc_github",
+            workspace_id="repo",
+            kind=BoardTodoSourceKind.GITHUB_ISSUES,
+            provider=BoardTodoSourceProvider.LOCAL,
+            display_name="GitHub",
+            repository_full_name="owner/repo",
+        )
+    with pytest.raises(ValidationError, match="require repository_full_name"):
+        BoardTodoSource(
+            source_id="bsrc_missing_repo",
+            workspace_id="repo",
+            kind=BoardTodoSourceKind.GITHUB_ISSUES,
+            provider=BoardTodoSourceProvider.GITHUB,
+            display_name="GitHub",
+        )
 
 
 class _GetWorkspaceStub(Protocol):
@@ -146,6 +187,18 @@ class _CreateSessionStub(Protocol):
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
+    ) -> Awaitable[SessionRecord]:
+        raise NotImplementedError
+
+
+class _GetSessionStub(Protocol):
+    def __call__(
+        self,
+        self_obj: object,
+        session_id: str,
     ) -> Awaitable[SessionRecord]:
         raise NotImplementedError
 
@@ -203,15 +256,762 @@ async def test_sync_creates_independent_boards_per_workspace(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_manual_todo_has_no_source_updated_at(tmp_path: Path) -> None:
+async def test_manual_local_items_are_filtered_from_board_load(tmp_path: Path) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    repository = BoardTodoRepository(tmp_path / "board-todos.sqlite")
+    await repository.create_async(
+        BoardTodoItem(
+            todo_id="todo_manual",
+            workspace_id="repo",
+            status=BoardTodoStatus.TODO,
+            title="Invalid local item",
+            source_provider=BoardTodoSourceProvider.LOCAL,
+            source_type=BoardTodoSourceType.MANUAL,
+            source_key="manual:todo_manual",
+            created_at=_now(),
+            updated_at=_now(),
+        )
+    )
+    service = _service(tmp_path, workspaces=(workspace,), repository=repository)
+
+    board = await service.list_board(workspace_id="repo")
+
+    assert board.items == ()
+    assert board.source_groups == ()
+
+
+@pytest.mark.asyncio
+async def test_sources_auto_initialize_from_workspace_remote(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
     service = _service(tmp_path, workspaces=(workspace,))
 
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    settings = await service.list_sources(workspace_id="repo")
+    github_sources = [
+        view.source
+        for view in settings.sources
+        if view.source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    ]
+
+    assert settings.board_workspace_id == "repo"
+    assert all(
+        view.source.kind != BoardTodoSourceKind.MANUAL for view in settings.sources
+    )
+    assert [source.repository_full_name for source in github_sources] == ["owner/repo"]
+    assert [source.enabled for source in github_sources] == [True]
+
+
+@pytest.mark.asyncio
+async def test_source_groups_do_not_include_manual_without_external_source(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+
+    board = await service.list_board(workspace_id="repo")
+
+    assert board.source_groups == ()
+    assert board.items == ()
+
+
+@pytest.mark.asyncio
+async def test_sync_uses_user_configured_source_repository(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/remote")
+    github = _GitHubClient({"owner/configured": (("Configured issue", 44),)})
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    settings = await service.list_sources(workspace_id="repo")
+    github_source = next(
+        view.source
+        for view in settings.sources
+        if view.source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    )
+    await service.update_source(
+        source_id=github_source.source_id,
+        payload=BoardTodoSourceUpdateRequest(
+            workspace_id="repo",
+            repository_full_name="owner/configured",
+            display_name="Configured",
+        ),
     )
 
-    assert item.source_updated_at is None
+    board = await service.sync_board(workspace_id="repo")
+
+    assert board.repository_full_name == "owner/configured"
+    assert [item.title for item in board.items] == ["Configured issue"]
+
+
+@pytest.mark.asyncio
+async def test_github_source_repository_identity_is_case_insensitive(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Mixed Case",
+            repository_full_name="Owner/Repo",
+        )
+    )
+
+    assert source.repository_full_name == "owner/repo"
+    with pytest.raises(ValueError, match="already exists"):
+        await service.create_source(
+            BoardTodoSourceCreateRequest(
+                workspace_id="repo",
+                display_name="Lowercase",
+                repository_full_name="owner/repo",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_github_source_create_keeps_repository_unique(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+
+    results = await asyncio.gather(
+        service.create_source(
+            BoardTodoSourceCreateRequest(
+                workspace_id="repo",
+                display_name="First",
+                repository_full_name="Owner/Repo",
+            )
+        ),
+        service.create_source(
+            BoardTodoSourceCreateRequest(
+                workspace_id="repo",
+                display_name="Second",
+                repository_full_name="owner/repo",
+            )
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, BoardTodoSource) for result in results) == 1
+    assert sum(isinstance(result, ValueError) for result in results) == 1
+    settings = await service.list_sources(workspace_id="repo")
+    assert [view.source.repository_full_name for view in settings.sources] == [
+        "owner/repo"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_github_source_updates_keep_repository_unique(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    first = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="First",
+            repository_full_name="owner/first",
+        )
+    )
+    second = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Second",
+            repository_full_name="owner/second",
+        )
+    )
+
+    results = await asyncio.gather(
+        service.update_source(
+            source_id=first.source_id,
+            payload=BoardTodoSourceUpdateRequest(
+                workspace_id="repo",
+                repository_full_name="Owner/Shared",
+            ),
+        ),
+        service.update_source(
+            source_id=second.source_id,
+            payload=BoardTodoSourceUpdateRequest(
+                workspace_id="repo",
+                repository_full_name="owner/shared",
+            ),
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, BoardTodoSource) for result in results) == 1
+    assert sum(isinstance(result, ValueError) for result in results) == 1
+    settings = await service.list_sources(workspace_id="repo")
+    assert (
+        sum(
+            view.source.repository_full_name == "owner/shared"
+            for view in settings.sources
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_github_source_bootstrap_is_atomic(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "Owner/Repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+
+    await asyncio.gather(
+        service.list_sources(workspace_id="repo"),
+        service.list_sources(workspace_id="repo"),
+    )
+
+    settings = await service.list_sources(workspace_id="repo")
+    github_sources = [
+        view.source
+        for view in settings.sources
+        if view.source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    ]
+    assert [source.repository_full_name for source in github_sources] == ["owner/repo"]
+
+
+@pytest.mark.asyncio
+async def test_github_source_repository_change_resets_sync_state(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+    previous_sync_time = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    await service.repository_for_tests.update_source_sync_state_async(
+        source_id=source.source_id,
+        workspace_id="repo",
+        sync_cursor=previous_sync_time,
+        status=BoardTodoSyncStatus.SUCCEEDED,
+        diagnostics=("old repository cursor",),
+        started_at=previous_sync_time,
+        finished_at=previous_sync_time,
+    )
+
+    await service.update_source(
+        source_id=source.source_id,
+        payload=BoardTodoSourceUpdateRequest(
+            workspace_id="repo",
+            repository_full_name="owner/other",
+        ),
+    )
+
+    state = await service.repository_for_tests.get_source_state_async(
+        source_id=source.source_id
+    )
+    assert state is not None
+    assert state.sync_cursor is None
+    assert state.last_sync_status == BoardTodoSyncStatus.IDLE
+    assert state.last_diagnostics == ()
+    assert state.last_sync_started_at is None
+    assert state.last_sync_finished_at is None
+
+
+@pytest.mark.asyncio
+async def test_github_source_crud_rejects_delete_after_import(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    github = _GitHubClient({"owner/repo": (("Imported issue", 45),)})
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+    await service.update_source(
+        source_id=source.source_id,
+        payload=BoardTodoSourceUpdateRequest(
+            workspace_id="repo",
+            display_name="Updated Repo",
+            enabled=True,
+        ),
+    )
+
+    board = await service.sync_board(workspace_id="repo")
+
+    assert [item.source_id for item in board.items] == [source.source_id]
+    with pytest.raises(ValueError, match="disable it instead"):
+        await service.delete_source(source_id=source.source_id)
+
+
+@pytest.mark.asyncio
+async def test_github_source_crud_rejects_blank_display_name(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+
+    with pytest.raises(ValueError, match="display_name cannot be blank"):
+        await service.update_source(
+            source_id=source.source_id,
+            payload=BoardTodoSourceUpdateRequest(
+                workspace_id="repo",
+                display_name="   ",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_github_source_repository_change_rejected_after_import(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    github = _GitHubClient({"owner/repo": (("Imported issue", 45),)})
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+    await service.sync_board(workspace_id="repo")
+
+    with pytest.raises(ValueError, match="cannot be changed after importing"):
+        await service.update_source(
+            source_id=source.source_id,
+            payload=BoardTodoSourceUpdateRequest(
+                workspace_id="repo",
+                repository_full_name="owner/other",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_delete_source_counts_legacy_imported_items(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+    await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Legacy imported issue",
+        repository_full_name="Owner/Repo",
+    )
+
+    with pytest.raises(ValueError, match="disable it instead"):
+        await service.delete_source(source_id=source.source_id)
+
+
+@pytest.mark.asyncio
+async def test_unused_github_source_can_be_deleted(tmp_path: Path) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    source = await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+
+    deleted = await service.delete_source(source_id=source.source_id)
+    settings = await service.list_sources(workspace_id="repo")
+
+    assert deleted.deleted is True
+    assert source.source_id not in {view.source.source_id for view in settings.sources}
+
+
+@pytest.mark.asyncio
+async def test_deleted_auto_initialized_source_is_not_recreated(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    settings = await service.list_sources(workspace_id="repo")
+    source = settings.sources[0].source
+
+    await service.delete_source(source_id=source.source_id)
+    next_settings = await service.list_sources(workspace_id="repo")
+
+    assert next_settings.sources == ()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_github_source_repository_is_rejected(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace_without_remote(tmp_path / "repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Owner Repo",
+            repository_full_name="owner/repo",
+        )
+    )
+
+    with pytest.raises(ValueError, match="already exists"):
+        await service.create_source(
+            BoardTodoSourceCreateRequest(
+                workspace_id="repo",
+                display_name="Duplicate",
+                repository_full_name="owner/repo",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_multiple_github_sources_keep_independent_cursors(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/one")
+    github = _GitHubClient(
+        {
+            "owner/one": (("One", 1),),
+            "owner/two": (("Two", 2),),
+        }
+    )
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    await service.list_sources(workspace_id="repo")
+    await service.create_source(
+        BoardTodoSourceCreateRequest(
+            workspace_id="repo",
+            display_name="Two",
+            repository_full_name="owner/two",
+        )
+    )
+
+    board = await service.sync_board(workspace_id="repo")
+    settings = await service.list_sources(workspace_id="repo")
+    github_views = [
+        view
+        for view in settings.sources
+        if view.source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    ]
+
+    assert sorted(item.title for item in board.items) == ["One", "Two"]
+    assert len(github_views) == 2
+    assert all(view.state is not None for view in github_views)
+    assert {view.source.source_id for view in github_views} == {
+        view.state.source_id for view in github_views if view.state is not None
+    }
+    assert all(
+        view.state.sync_cursor is not None for view in github_views if view.state
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_source_is_not_synced(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    github = _GitHubClient({"owner/repo": (("Issue", 45),)})
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    settings = await service.list_sources(workspace_id="repo")
+    github_source = next(
+        view.source
+        for view in settings.sources
+        if view.source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    )
+    await service.update_source(
+        source_id=github_source.source_id,
+        payload=BoardTodoSourceUpdateRequest(workspace_id="repo", enabled=False),
+    )
+
+    board = await service.sync_board(workspace_id="repo")
+
+    assert board.items == ()
+    assert github.tokens == []
+    assert board.diagnostics == (
+        "No enabled GitHub TODO source is configured for this board.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_start_returns_prompt_and_start_requires_final_prompt(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="Body",
+    )
+
+    preview = await service.preview_start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewStartRequest(view_workspace_id="repo"),
+    )
+
+    assert "Title: Imported issue" in preview.prompt
+    assert preview.session_mode is None
+    assert preview.yolo is True
+    assert preview.thinking == RunThinkingConfig()
+    assert run_service.count == 0
+    with pytest.raises(ValueError, match="final_prompt is required"):
+        await service.start_todo(
+            todo_id=item.todo_id,
+            payload=BoardTodoStartRequest(),
+        )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Edited prompt"),
+    )
+    assert started.status == BoardTodoStatus.IN_PROGRESS
+    assert run_service.prompts == ["Edited prompt"]
+
+
+@pytest.mark.asyncio
+async def test_start_request_passes_normal_runtime_options(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    session_service = _SessionService()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="Body",
+    )
+
+    await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Edited prompt",
+            session_mode=SessionMode.NORMAL,
+            normal_root_role_id="role_dev",
+            yolo=False,
+            thinking=RunThinkingConfig(enabled=True, effort="high"),
+        ),
+    )
+
+    assert session_service.session_modes == [SessionMode.NORMAL]
+    assert session_service.normal_root_role_ids == ["role_dev"]
+    assert session_service.orchestration_preset_ids == [None]
+    assert run_service.intents[0].target_role_id == "role_dev"
+    assert run_service.intents[0].thinking == RunThinkingConfig(
+        enabled=True,
+        effort="high",
+    )
+    assert run_service.intents[0].yolo is False
+    assert run_service.intents[0].session_mode == SessionMode.NORMAL
+
+
+@pytest.mark.asyncio
+async def test_start_request_without_mode_uses_session_default(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    session_service = _SessionService()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="Body",
+    )
+
+    await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Edited prompt"),
+    )
+
+    assert session_service.session_modes == [None]
+    assert run_service.intents[0].session_mode == SessionMode.NORMAL
+
+
+@pytest.mark.asyncio
+async def test_start_request_passes_orchestration_runtime_options(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    session_service = _SessionService()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="Body",
+    )
+
+    await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Edited prompt",
+            session_mode=SessionMode.ORCHESTRATION,
+            normal_root_role_id="role_ignored",
+            orchestration_preset_id="preset_plan",
+        ),
+    )
+
+    assert session_service.session_modes == [SessionMode.ORCHESTRATION]
+    assert session_service.normal_root_role_ids == [None]
+    assert session_service.orchestration_preset_ids == ["preset_plan"]
+    assert run_service.intents[0].target_role_id is None
+    assert run_service.intents[0].session_mode == SessionMode.ORCHESTRATION
+
+
+@pytest.mark.asyncio
+async def test_request_changes_preserves_orchestration_session_mode(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    session_service = _SessionService()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Edited prompt",
+            session_mode=SessionMode.ORCHESTRATION,
+            orchestration_preset_id="preset_plan",
+        ),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+
+    await service.request_changes(
+        todo_id=item.todo_id,
+        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+    )
+
+    assert [intent.session_mode for intent in run_service.intents] == [
+        SessionMode.ORCHESTRATION,
+        SessionMode.ORCHESTRATION,
+    ]
+    assert run_service.intents[1].target_role_id is None
+
+
+@pytest.mark.asyncio
+async def test_start_from_fork_workspace_uses_view_workspace(
+    tmp_path: Path,
+) -> None:
+    root_workspace = _workspace(tmp_path / "root", "owner/root")
+    fork_root = tmp_path / "fork"
+    fork_root.mkdir()
+    fork_workspace = WorkspaceRecord(
+        workspace_id="fork",
+        default_mount_name="default",
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=fork_root,
+                source_root_path=str(root_workspace.root_path or tmp_path / "root"),
+                forked_from_workspace_id=root_workspace.workspace_id,
+            ),
+        ),
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    service = _service(
+        tmp_path,
+        workspaces=(root_workspace, fork_workspace),
+        session_service=session_service,
+        run_service=_RunService(run_runtime),
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id=root_workspace.workspace_id,
+        title="Fork scoped issue",
+    )
+
+    await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            view_workspace_id="fork",
+            final_prompt="Use the fork workspace",
+        ),
+    )
+
+    assert session_service.workspace_ids == ["fork"]
+
+
+@pytest.mark.asyncio
+async def test_fork_workspace_uses_root_board_sources(tmp_path: Path) -> None:
+    root_workspace = _workspace(tmp_path / "root", "owner/root")
+    fork_root = tmp_path / "fork"
+    fork_root.mkdir()
+    fork_workspace = WorkspaceRecord(
+        workspace_id="fork",
+        default_mount_name="default",
+        mounts=(
+            build_local_workspace_mount(
+                mount_name="default",
+                root_path=fork_root,
+                source_root_path=str(root_workspace.root_path or tmp_path / "root"),
+                forked_from_workspace_id=root_workspace.workspace_id,
+            ),
+        ),
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    service = _service(tmp_path, workspaces=(root_workspace, fork_workspace))
+
+    settings = await service.list_sources(workspace_id="fork")
+
+    assert settings.is_fork_view is True
+    assert settings.board_workspace_id == root_workspace.workspace_id
 
 
 @pytest.mark.asyncio
@@ -232,6 +1032,62 @@ async def test_sync_uses_non_origin_github_remote(tmp_path: Path) -> None:
     assert board.repository_full_name == "owner/repo"
     assert board.diagnostics == ()
     assert [item.title for item in board.items] == ["Issue"]
+
+
+@pytest.mark.asyncio
+async def test_sync_reconciles_legacy_mixed_case_issue_source_key(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "Owner/Repo")
+    run_runtime = _RunRuntimeRepository()
+    github = _GitHubClient()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        github=github,
+        run_runtime=run_runtime,
+    )
+    legacy = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Legacy issue",
+        repository_full_name="Owner/Repo",
+    )
+    github.set_issues({"owner/repo": (("Updated issue", legacy.issue_number or 0),)})
+
+    board = await service.sync_board(workspace_id="repo")
+
+    assert [item.todo_id for item in board.items] == [legacy.todo_id]
+    assert board.items[0].title == "Updated issue"
+    assert board.items[0].repository_full_name == "owner/repo"
+    assert board.items[0].source_key == (
+        f"github:owner/repo:issue:{legacy.issue_number}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_full_sync_archives_legacy_mixed_case_closed_issue(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "Owner/Repo")
+    github = _GitHubClient()
+    service = _service(tmp_path, workspaces=(workspace,), github=github)
+    legacy = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Legacy issue",
+        repository_full_name="Owner/Repo",
+    )
+    github.set_issues(
+        {"owner/repo": (("Closed issue", legacy.issue_number or 0, "closed"),)}
+    )
+
+    board = await service.sync_board(workspace_id="repo")
+    stored = await service.repository_for_tests.require_async(legacy.todo_id)
+
+    assert stored.status == BoardTodoStatus.ARCHIVED
+    assert stored.last_status_reason == "GitHub issue no longer open"
+    assert all(item.todo_id != legacy.todo_id for item in board.items)
 
 
 @pytest.mark.asyncio
@@ -752,7 +1608,7 @@ async def test_sync_links_review_issue_to_related_pull_request(
     synced = await service.sync_board(workspace_id="repo")
     started = await service.start_todo(
         todo_id=synced.items[0].todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     await service.mark_run_completed_async(run_id=started.run_id or "")
     board = await service.sync_board(workspace_id="repo")
@@ -777,7 +1633,7 @@ async def test_sync_marks_issue_done_when_linked_pull_request_is_merged(
     synced = await service.sync_board(workspace_id="repo")
     started = await service.start_todo(
         todo_id=synced.items[0].todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     await service.mark_run_completed_async(run_id=started.run_id or "")
     board = await service.sync_board(workspace_id="repo")
@@ -806,7 +1662,7 @@ async def test_sync_prefers_closing_pull_request_over_first_timeline_reference(
     synced = await service.sync_board(workspace_id="repo")
     started = await service.start_todo(
         todo_id=synced.items[0].todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     await service.mark_run_completed_async(run_id=started.run_id or "")
     board = await service.sync_board(workspace_id="repo")
@@ -872,7 +1728,7 @@ async def test_incremental_sync_fetches_linked_pr_missing_from_cursor_map(
     synced = await service.sync_board(workspace_id="repo")
     started = await service.start_todo(
         todo_id=synced.items[0].todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     await service.mark_run_completed_async(run_id=started.run_id or "")
     await service.sync_board_changes(
@@ -945,7 +1801,7 @@ async def test_historical_untracked_pull_request_todo_is_archived(
 
 
 @pytest.mark.asyncio
-async def test_manual_todo_archive_and_sync_does_not_reactivate(
+async def test_archived_external_todo_and_sync_does_not_reactivate(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
@@ -955,8 +1811,8 @@ async def test_manual_todo_archive_and_sync_does_not_reactivate(
         github=_GitHubClient({"owner/repo": (("Synced issue", 7),)}),
     )
 
-    created = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    created = await _create_test_todo(
+        service, workspace_id="repo", title="Imported issue", body=""
     )
     archived = await service.archive_todo(
         todo_id=created.todo_id,
@@ -965,7 +1821,7 @@ async def test_manual_todo_archive_and_sync_does_not_reactivate(
     board = await service.sync_board(workspace_id="repo", include_archived=True)
 
     assert archived.status == BoardTodoStatus.ARCHIVED
-    assert {item.title: item.status for item in board.items}["Manual"] == (
+    assert {item.title: item.status for item in board.items}["Imported issue"] == (
         BoardTodoStatus.ARCHIVED
     )
     assert {item.title: item.status for item in board.items}["Synced issue"] == (
@@ -977,12 +1833,12 @@ async def test_manual_todo_archive_and_sync_does_not_reactivate(
 async def test_delta_returns_changes_after_revision(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
     service = _service(tmp_path, workspaces=(workspace,))
-    first = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="First", body="")
+    first = await _create_test_todo(
+        service, workspace_id="repo", title="First", body=""
     )
     board = await service.list_board(workspace_id="repo")
-    second = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Second", body="")
+    second = await _create_test_todo(
+        service, workspace_id="repo", title="Second", body=""
     )
 
     delta = await service.list_board_changes(
@@ -1002,8 +1858,8 @@ async def test_archive_delta_removes_from_active_and_restore_returns_to_todo(
 ) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
     service = _service(tmp_path, workspaces=(workspace,))
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Restore", body="")
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Restore", body=""
     )
     board = await service.list_board(workspace_id="repo")
     archived = await service.archive_todo(
@@ -1109,13 +1965,13 @@ async def test_start_request_changes_and_run_completion_flow(tmp_path: Path) -> 
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Implement", body="Body"
     )
 
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
@@ -1147,13 +2003,16 @@ async def test_board_started_runs_inherit_general_shell_policy(
         run_runtime=run_runtime,
         shell_safety_policy_enabled=False,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
     )
 
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
@@ -1170,6 +2029,43 @@ async def test_board_started_runs_inherit_general_shell_policy(
 
 
 @pytest.mark.asyncio
+async def test_mark_done_moves_review_item_to_done(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Ready",
+        status=BoardTodoStatus.REVIEW,
+    )
+
+    done = await service.mark_done(
+        todo_id=item.todo_id,
+        payload=BoardTodoMarkDoneRequest(reason="Looks good"),
+    )
+
+    assert done.status == BoardTodoStatus.DONE
+    assert done.last_status_reason == "Looks good"
+    assert done.item_revision > item.item_revision
+
+
+@pytest.mark.asyncio
+async def test_mark_done_rejects_non_review_item(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    item = await _create_test_todo(service, workspace_id="repo", title="Not ready")
+
+    with pytest.raises(ValueError, match="only review board items can be marked done"):
+        await service.mark_done(
+            todo_id=item.todo_id,
+            payload=BoardTodoMarkDoneRequest(),
+        )
+
+    board = await service.list_board(workspace_id="repo")
+    assert board.items[0].status == BoardTodoStatus.TODO
+
+
+@pytest.mark.asyncio
 async def test_start_rejects_non_todo_items_without_creating_another_run(
     tmp_path: Path,
 ) -> None:
@@ -1182,18 +2078,18 @@ async def test_start_rejects_non_todo_items_without_creating_another_run(
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Implement", body="Body"
     )
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
 
     with pytest.raises(ValueError, match="only todo board items can be started"):
         await service.start_todo(
             todo_id=item.todo_id,
-            payload=BoardTodoStartRequest(),
+            payload=BoardTodoStartRequest(final_prompt="Process"),
         )
 
     board = await service.list_board(workspace_id="repo")
@@ -1218,14 +2114,14 @@ async def test_start_reserves_todo_before_creating_session_or_run(
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Implement", body="Body"
     )
 
     first_start = asyncio.create_task(
         service.start_todo(
             todo_id=item.todo_id,
-            payload=BoardTodoStartRequest(),
+            payload=BoardTodoStartRequest(final_prompt="Process"),
         )
     )
     await session_service.entered.wait()
@@ -1233,7 +2129,7 @@ async def test_start_reserves_todo_before_creating_session_or_run(
     with pytest.raises(ValueError, match="only todo board items can be started"):
         await service.start_todo(
             todo_id=item.todo_id,
-            payload=BoardTodoStartRequest(),
+            payload=BoardTodoStartRequest(final_prompt="Process"),
         )
 
     board = await service.list_board(workspace_id="repo")
@@ -1263,14 +2159,14 @@ async def test_start_restores_todo_when_run_creation_fails(tmp_path: Path) -> No
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Implement", body="Body"
     )
 
     with pytest.raises(RuntimeError, match="run creation failed"):
         await service.start_todo(
             todo_id=item.todo_id,
-            payload=BoardTodoStartRequest(),
+            payload=BoardTodoStartRequest(final_prompt="Process"),
         )
 
     board = await service.list_board(workspace_id="repo")
@@ -1293,9 +2189,11 @@ async def test_repository_start_reservation_rejects_stale_todo(
         status=BoardTodoStatus.TODO,
         title="Implement",
         body="Body",
-        source_provider=BoardTodoSourceProvider.LOCAL,
-        source_type=BoardTodoSourceType.MANUAL,
-        source_key="manual:todo-1",
+        source_provider=BoardTodoSourceProvider.GITHUB,
+        source_type=BoardTodoSourceType.GITHUB_ISSUE,
+        source_key="github:owner/repo:issue:1",
+        repository_full_name="owner/repo",
+        issue_number=1,
         created_at=now,
         updated_at=now,
     )
@@ -1325,12 +2223,15 @@ async def test_request_changes_rejects_non_review_items_without_creating_another
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
     )
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
@@ -1365,12 +2266,15 @@ async def test_request_changes_reserves_review_before_creating_follow_up_run(
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
     )
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
@@ -1419,12 +2323,15 @@ async def test_request_changes_restores_review_when_run_creation_fails(
         run_service=run_service,
         run_runtime=run_runtime,
     )
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
     )
     started = await service.start_todo(
         todo_id=item.todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
@@ -1455,9 +2362,11 @@ async def test_repository_request_changes_reservation_rejects_stale_review(
         status=BoardTodoStatus.REVIEW,
         title="Implement",
         body="Body",
-        source_provider=BoardTodoSourceProvider.LOCAL,
-        source_type=BoardTodoSourceType.MANUAL,
-        source_key="manual:todo-1",
+        source_provider=BoardTodoSourceProvider.GITHUB,
+        source_type=BoardTodoSourceType.GITHUB_ISSUE,
+        source_key="github:owner/repo:issue:1",
+        repository_full_name="owner/repo",
+        issue_number=1,
         session_id="session-1",
         run_id="run-1",
         created_at=now,
@@ -1487,7 +2396,7 @@ async def test_deleted_session_returns_active_todo_to_todo(tmp_path: Path) -> No
     synced = await service.sync_board(workspace_id="repo")
     started = await service.start_todo(
         todo_id=synced.items[0].todo_id,
-        payload=BoardTodoStartRequest(),
+        payload=BoardTodoStartRequest(final_prompt="Process"),
     )
 
     await service.mark_session_deleted_async(session_id=started.session_id or "")
@@ -1512,9 +2421,11 @@ async def test_deleted_session_keeps_done_todo_done_but_clears_session(
             workspace_id="repo",
             status=BoardTodoStatus.DONE,
             title="Done",
-            source_provider=BoardTodoSourceProvider.LOCAL,
-            source_type=BoardTodoSourceType.MANUAL,
-            source_key="manual:todo-done",
+            source_provider=BoardTodoSourceProvider.GITHUB,
+            source_type=BoardTodoSourceType.GITHUB_ISSUE,
+            source_key="github:owner/repo:issue:201",
+            repository_full_name="owner/repo",
+            issue_number=201,
             session_id="session-done",
             run_id="run-done",
             created_at=_now(),
@@ -1543,9 +2454,11 @@ async def test_reconcile_returns_in_progress_with_missing_run_to_todo(
             workspace_id="repo",
             status=BoardTodoStatus.IN_PROGRESS,
             title="Missing run",
-            source_provider=BoardTodoSourceProvider.LOCAL,
-            source_type=BoardTodoSourceType.MANUAL,
-            source_key="manual:todo-missing-run",
+            source_provider=BoardTodoSourceProvider.GITHUB,
+            source_type=BoardTodoSourceType.GITHUB_ISSUE,
+            source_key="github:owner/repo:issue:202",
+            repository_full_name="owner/repo",
+            issue_number=202,
             session_id="session-missing",
             run_id="run-missing",
             created_at=_now(),
@@ -1566,7 +2479,7 @@ async def test_reconcile_returns_in_progress_with_missing_run_to_todo(
     "runtime_status",
     (RunRuntimeStatus.FAILED, RunRuntimeStatus.STOPPED),
 )
-async def test_reconcile_returns_terminal_failed_run_to_todo(
+async def test_reconcile_keeps_bound_terminal_runs_in_progress(
     tmp_path: Path,
     runtime_status: RunRuntimeStatus,
 ) -> None:
@@ -1592,9 +2505,11 @@ async def test_reconcile_returns_terminal_failed_run_to_todo(
             workspace_id="repo",
             status=BoardTodoStatus.IN_PROGRESS,
             title="Terminal run",
-            source_provider=BoardTodoSourceProvider.LOCAL,
-            source_type=BoardTodoSourceType.MANUAL,
-            source_key="manual:todo-terminal-run",
+            source_provider=BoardTodoSourceProvider.GITHUB,
+            source_type=BoardTodoSourceType.GITHUB_ISSUE,
+            source_key="github:owner/repo:issue:203",
+            repository_full_name="owner/repo",
+            issue_number=203,
             session_id="session-terminal",
             run_id="run-terminal",
             created_at=_now(),
@@ -1605,20 +2520,21 @@ async def test_reconcile_returns_terminal_failed_run_to_todo(
     await service.reconcile_workspace_async(workspace_id="repo")
 
     board = await service.list_board(workspace_id="repo")
-    assert board.items[0].status == BoardTodoStatus.TODO
-    assert board.items[0].session_id is None
-    assert board.items[0].run_id is None
-    assert board.items[0].last_status_reason == (
-        "Bound session run ended without completion"
-    )
+    assert board.items[0].status == BoardTodoStatus.IN_PROGRESS
+    assert board.items[0].session_id == "session-terminal"
+    assert board.items[0].run_id == "run-terminal"
+    assert board.items[0].run_status == runtime_status.value
 
 
 @pytest.mark.asyncio
 async def test_linked_pr_merge_marks_done(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
     service = _service(tmp_path, workspaces=(workspace,))
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="",
     )
     linked = await service.link_pull_request(
         todo_id=item.todo_id,
@@ -1636,6 +2552,33 @@ async def test_linked_pr_merge_marks_done(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_linked_pr_merge_matches_repository_case_insensitively(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "Owner/Repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="",
+        repository_full_name="owner/repo",
+    )
+    await service.link_pull_request(
+        todo_id=item.todo_id,
+        payload=BoardTodoLinkPullRequestRequest(pull_request_number=12),
+    )
+
+    await service.mark_github_pull_request_merged_async(
+        repository_full_name="Owner/Repo",
+        pull_request_number=12,
+    )
+    board = await service.list_board(workspace_id="repo")
+
+    assert board.items[0].status == BoardTodoStatus.DONE
+
+
+@pytest.mark.asyncio
 async def test_link_pr_marks_done_when_pull_request_already_merged(
     tmp_path: Path,
 ) -> None:
@@ -1644,8 +2587,11 @@ async def test_link_pr_marks_done_when_pull_request_already_merged(
         pull_requests={"owner/repo": (("Merged PR", 12, "2026-05-10T09:00:00Z"),)}
     )
     service = _service(tmp_path, workspaces=(workspace,), github=github)
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="",
     )
 
     linked = await service.link_pull_request(
@@ -1661,28 +2607,17 @@ async def test_link_pr_marks_done_when_pull_request_already_merged(
 
 
 @pytest.mark.asyncio
-async def test_link_pr_requires_resolvable_repository(tmp_path: Path) -> None:
-    workspace = _workspace_without_remote(tmp_path / "repo")
-    service = _service(tmp_path, workspaces=(workspace,))
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
-    )
-
-    with pytest.raises(ValueError, match="without a GitHub repository"):
-        await service.link_pull_request(
-            todo_id=item.todo_id,
-            payload=BoardTodoLinkPullRequestRequest(pull_request_number=12),
-        )
-
-
-@pytest.mark.asyncio
-async def test_link_pr_derives_repository_from_url_without_workspace_remote(
+async def test_link_pr_url_matches_legacy_repository_case_insensitively(
     tmp_path: Path,
 ) -> None:
-    workspace = _workspace_without_remote(tmp_path / "repo")
+    workspace = _workspace(tmp_path / "repo", "Owner/Repo")
     service = _service(tmp_path, workspaces=(workspace,))
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="",
+        repository_full_name="Owner/Repo",
     )
 
     linked = await service.link_pull_request(
@@ -1701,8 +2636,11 @@ async def test_link_pr_derives_repository_from_url_without_workspace_remote(
 async def test_link_pr_rejects_malformed_pull_request_url(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
     service = _service(tmp_path, workspaces=(workspace,))
-    item = await service.create_todo(
-        BoardTodoCreateInput(workspace_id="repo", title="Manual", body="")
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Imported issue",
+        body="",
     )
 
     with pytest.raises(ValueError, match="GitHub pull request URL"):
@@ -1797,6 +2735,12 @@ async def test_board_todo_service_protocol_stubs_raise_not_implemented() -> None
             session_service,
             workspace_id="workspace",
         )
+    with pytest.raises(NotImplementedError):
+        method = cast(
+            _GetSessionStub,
+            getattr(SessionServiceLike, "get_session_async"),
+        )
+        await method(session_service, "session")
     intent = IntentInput(
         session_id="session",
         input=(),
@@ -2148,6 +3092,11 @@ def _timeline_event(
 class _SessionService:
     def __init__(self) -> None:
         self.count = 0
+        self.workspace_ids: list[str] = []
+        self.session_modes: list[SessionMode | None] = []
+        self.normal_root_role_ids: list[str | None] = []
+        self.orchestration_preset_ids: list[str | None] = []
+        self.sessions: dict[str, SessionRecord] = {}
 
     async def create_session_async(
         self,
@@ -2155,15 +3104,30 @@ class _SessionService:
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         self.count += 1
-        return SessionRecord(
+        self.workspace_ids.append(workspace_id)
+        self.session_modes.append(session_mode)
+        self.normal_root_role_ids.append(normal_root_role_id)
+        self.orchestration_preset_ids.append(orchestration_preset_id)
+        session = SessionRecord(
             session_id=session_id or f"session-{self.count}",
             workspace_id=workspace_id,
             metadata=metadata or {},
+            session_mode=session_mode or SessionMode.NORMAL,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
             created_at=_now(),
             updated_at=_now(),
         )
+        self.sessions[session.session_id] = session
+        return session
+
+    async def get_session_async(self, session_id: str) -> SessionRecord:
+        return self.sessions[session_id]
 
 
 class _BlockingSessionService:
@@ -2171,6 +3135,7 @@ class _BlockingSessionService:
         self.count = 0
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
+        self.sessions: dict[str, SessionRecord] = {}
 
     async def create_session_async(
         self,
@@ -2178,17 +3143,28 @@ class _BlockingSessionService:
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
         self.count += 1
         self.entered.set()
         await self.release.wait()
-        return SessionRecord(
+        session = SessionRecord(
             session_id=session_id or f"session-{self.count}",
             workspace_id=workspace_id,
             metadata=metadata or {},
+            session_mode=session_mode or SessionMode.NORMAL,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
             created_at=_now(),
             updated_at=_now(),
         )
+        self.sessions[session.session_id] = session
+        return session
+
+    async def get_session_async(self, session_id: str) -> SessionRecord:
+        return self.sessions[session_id]
 
 
 class _RunService:
@@ -2251,6 +3227,7 @@ class _ControlledRunService:
         self._fail_on_count = fail_on_count
         self.count = 0
         self.prompts: list[str] = []
+        self.intents: list[IntentInput] = []
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -2268,6 +3245,7 @@ class _ControlledRunService:
             await self.release.wait()
         run_id = f"run-{self.count}"
         self.prompts.append(content_parts_to_text(intent.input))
+        self.intents.append(intent)
         self._runtime.records[run_id] = RunRuntimeRecord(
             run_id=run_id,
             session_id=intent.session_id,
@@ -2308,9 +3286,9 @@ def _service(
     run_service: SessionRunServiceLike | None = None,
     run_runtime: _RunRuntimeRepository | None = None,
     shell_safety_policy_enabled: bool = True,
-) -> BoardTodoService:
+) -> _BoardTodoServiceHarness:
     runtime = run_runtime or _RunRuntimeRepository()
-    return BoardTodoService(
+    return _BoardTodoServiceHarness(
         repository=repository or BoardTodoRepository(tmp_path / "board-todos.sqlite"),
         workspace_service=_WorkspaceService(workspaces),
         github_trigger_service=_GitHubTriggerService(
@@ -2323,6 +3301,45 @@ def _service(
         run_runtime_repo=runtime,
         get_shared_github_token=lambda: shared_github_token,
         get_shell_safety_policy_enabled=lambda: shell_safety_policy_enabled,
+    )
+
+
+_TEST_TODO_ISSUE_NUMBER = 9000
+
+
+def _next_test_issue_number() -> int:
+    global _TEST_TODO_ISSUE_NUMBER
+    _TEST_TODO_ISSUE_NUMBER += 1
+    return _TEST_TODO_ISSUE_NUMBER
+
+
+async def _create_test_todo(
+    service: _BoardTodoServiceHarness,
+    *,
+    workspace_id: str,
+    title: str,
+    body: str = "",
+    repository_full_name: str = "owner/repo",
+    status: BoardTodoStatus = BoardTodoStatus.TODO,
+) -> BoardTodoItem:
+    issue_number = _next_test_issue_number()
+    now = _now()
+    return await service.repository_for_tests.create_async(
+        BoardTodoItem(
+            todo_id=f"todo_test_{issue_number}",
+            workspace_id=workspace_id,
+            status=status,
+            title=title,
+            body=body,
+            source_provider=BoardTodoSourceProvider.GITHUB,
+            source_type=BoardTodoSourceType.GITHUB_ISSUE,
+            source_key=f"github:{repository_full_name}:issue:{issue_number}",
+            repository_full_name=repository_full_name,
+            issue_number=issue_number,
+            html_url=f"https://github.com/{repository_full_name}/issues/{issue_number}",
+            created_at=now,
+            updated_at=now,
+        )
     )
 
 
