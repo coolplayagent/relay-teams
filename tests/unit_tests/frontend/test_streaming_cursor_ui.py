@@ -47,6 +47,25 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         / "messageRenderer"
         / "history.js"
     ).read_text(encoding="utf-8")
+    tool_blocks_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "helpers"
+        / "toolBlocks.js"
+    ).read_text(encoding="utf-8")
+    message_actions_script = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "messageRenderer"
+        / "messageActions.js"
+    ).read_text(encoding="utf-8")
 
     assert "const STREAMING_CURSOR_CLASS = 'streaming-cursor';" in helper_block_script
     assert "const thinkingOpenState = new Map();" in helper_block_script
@@ -73,6 +92,11 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
     )
     assert "options.appendDelta === true" in helper_block_script
     assert "function resolveStreamingCursorHost(root)" in helper_block_script
+    assert "function syncStreamingMessageState(textEl, active)" in helper_block_script
+    assert "message.classList?.add?.('is-streaming');" in helper_block_script
+    assert "actions.hidden = true;" in helper_block_script
+    assert "message.classList?.remove?.('is-streaming');" in helper_block_script
+    assert "actions.hidden = false;" in helper_block_script
     assert "const terminalSelector = [" in helper_block_script
     assert "'pre code'," in helper_block_script
     assert "'blockquote > :last-child'," in helper_block_script
@@ -127,6 +151,11 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         "appendMessageText(ensureContentEl(), '', { streaming: true });"
         in history_script
     )
+    assert "syncToolMessageStreamingState(toolBlock);" in tool_blocks_script
+    assert "function messageHasRunningTool(message)" in tool_blocks_script
+    assert "actions.hidden = true;" in tool_blocks_script
+    assert "actions.hidden = false;" in tool_blocks_script
+    assert "'.tool-block[data-status=\"running\"]'" in message_actions_script
 
 
 def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
@@ -140,6 +169,12 @@ def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:
     assert "opacity: 0.26;" in base_css
     assert "opacity: 1;" in base_css
     assert ".streaming-cursor {" in components_css
+    assert ".message.is-streaming .message-copy-actions" in components_css
+    assert (
+        '.message:has(.tool-block[data-status="running"]) .message-copy-actions'
+        in components_css
+    )
+    assert ".message-copy-actions[hidden]" in components_css
     assert ".msg-text.plain-stream-text {" in components_css
     assert "white-space: pre-wrap;" in components_css
     assert "overflow-wrap: anywhere;" in components_css

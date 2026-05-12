@@ -11,6 +11,7 @@ export async function fetchInitialRoundsPage(sessionId, options = {}) {
         limit: roundsState.pageSize,
         priority: options.priority,
         summary: options.summary === true,
+        forceRefresh: options.forceRefresh === true,
         signal: options.signal,
     });
 }
@@ -19,6 +20,7 @@ export async function fetchTimelineRoundsPage(sessionId, options = {}) {
     return fetchSessionRounds(sessionId, {
         priority: options.priority,
         timeline: true,
+        forceRefresh: options.forceRefresh === true,
         signal: options.signal,
     });
 }

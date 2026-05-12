@@ -21,30 +21,6 @@ export function setupNavbarBindings() {
         };
     }
 
-    const railInspector = document.getElementById('rail-inspector');
-    const toggleInspectorBtn = document.getElementById('toggle-inspector');
-    if (toggleInspectorBtn && railInspector) {
-        const header = railInspector.querySelector('.inspector-header');
-        const iconPath = toggleInspectorBtn.querySelector('path');
-        
-        const toggle = () => {
-            const isExpanded = railInspector.classList.toggle('expanded');
-            if (iconPath) {
-                if (isExpanded) {
-                    iconPath.setAttribute('d', 'M19 9l-7 7-7-7');
-                } else {
-                    iconPath.setAttribute('d', 'M7 13l5 5 5-5M7 6l5 5 5-5');
-                }
-            }
-        };
-        
-        if (header) header.onclick = toggle;
-        toggleInspectorBtn.onclick = (e) => {
-            e.stopPropagation();
-            toggle();
-        };
-    }
-
     if (els.themeToggleBtn) {
         els.themeToggleBtn.onclick = () => {
             document.body.classList.toggle('light-theme');
@@ -57,6 +33,12 @@ export function setupNavbarBindings() {
         if (savedTheme === 'light') {
             document.body.classList.add('light-theme');
         }
+    }
+
+    if (els.toggleInspectorBtn && els.railInspector) {
+        els.toggleInspectorBtn.onclick = () => {
+            els.railInspector.classList.toggle('expanded');
+        };
     }
 }
 
@@ -82,7 +64,6 @@ function _initSidebarResize() {
 
     if (!els.sidebarResizer) return;
     let dragging = false;
-    let dragRightRailWidth = 280;
     let currentWidth = initialWidth;
     let pendingClientX = null;
     let frameHandle = 0;
@@ -92,7 +73,7 @@ function _initSidebarResize() {
         if (!dragging || pendingClientX === null || !els.sidebar || els.sidebar.classList.contains('collapsed')) {
             return;
         }
-        const maxWidth = window.innerWidth - dragRightRailWidth - 100;
+        const maxWidth = Math.max(180, window.innerWidth - getVisibleRightRailWidth() - 100);
         const next = Math.max(180, Math.min(maxWidth, pendingClientX));
         currentWidth = next;
         applySidebarWidth(next);
@@ -125,7 +106,6 @@ function _initSidebarResize() {
     els.sidebarResizer.addEventListener('mousedown', (e) => {
         if (els.sidebar.classList.contains('collapsed')) return;
         dragging = true;
-        dragRightRailWidth = getRailWidth(document.getElementById('right-rail'), 280);
         els.sidebarResizer.classList.add('dragging');
         setRailResizeDragging(true);
         window.addEventListener('mousemove', onMove);
@@ -135,43 +115,37 @@ function _initSidebarResize() {
 }
 
 function _initRightRailResize() {
-    const rightRail = document.getElementById('right-rail');
-    const rightRailResizer = document.getElementById('right-rail-resizer');
-    if (!rightRail || !rightRailResizer) return;
+    if (!els.rightRail || !els.rightRailResizer) return;
 
     const savedWidth = localStorage.getItem('agent_teams_right_rail_width');
     let initialWidth = 280;
     if (savedWidth && /^\d+$/.test(savedWidth)) {
         const px = Number(savedWidth);
-        if (px >= 180) {
+        if (px >= 220) {
+            applyRightRailWidth(px);
             initialWidth = px;
         }
     }
-    rightRail.style.width = `${initialWidth}px`;
-    rightRail.style.setProperty('--right-rail-width', `${initialWidth}px`);
     document.documentElement.style.setProperty('--right-rail-width', `${initialWidth}px`);
 
     let dragging = false;
-    let dragSidebarWidth = 280;
     let currentWidth = initialWidth;
     let pendingClientX = null;
     let frameHandle = 0;
 
     const flushWidth = () => {
         frameHandle = 0;
-        if (!dragging || pendingClientX === null) {
+        if (!dragging || pendingClientX === null || !els.rightRail || els.rightRail.classList.contains('collapsed')) {
             return;
         }
-        const windowWidth = window.innerWidth;
-        const minWidth = 180;
-        const maxWidth = windowWidth - dragSidebarWidth - 100;
-        const next = Math.max(minWidth, Math.min(maxWidth, windowWidth - pendingClientX));
+        const maxWidth = Math.max(220, window.innerWidth - getVisibleSidebarWidth() - 220);
+        const next = Math.max(220, Math.min(maxWidth, window.innerWidth - pendingClientX));
         currentWidth = next;
-        applyRightRailWidth(rightRail, next);
+        applyRightRailWidth(next);
     };
 
     const onMove = (e) => {
-        if (!dragging) return;
+        if (!dragging || !els.rightRail || els.rightRail.classList.contains('collapsed')) return;
         pendingClientX = e.clientX;
         if (!frameHandle) {
             frameHandle = window.requestAnimationFrame(flushWidth);
@@ -188,16 +162,16 @@ function _initRightRailResize() {
         dragging = false;
         pendingClientX = null;
         persistRightRailWidth(currentWidth);
-        rightRailResizer.classList.remove('dragging');
+        els.rightRailResizer.classList.remove('dragging');
         setRailResizeDragging(false);
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
     };
 
-    rightRailResizer.addEventListener('mousedown', (e) => {
+    els.rightRailResizer.addEventListener('mousedown', (e) => {
+        if (els.rightRail.classList.contains('collapsed')) return;
         dragging = true;
-        dragSidebarWidth = getRailWidth(document.querySelector('.sidebar'), 280);
-        rightRailResizer.classList.add('dragging');
+        els.rightRailResizer.classList.add('dragging');
         setRailResizeDragging(true);
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
@@ -217,10 +191,11 @@ function persistSidebarWidth(width) {
     localStorage.setItem('agent_teams_sidebar_width', String(width));
 }
 
-function applyRightRailWidth(rightRail, width) {
+function applyRightRailWidth(width) {
+    if (!els.rightRail) return;
     const px = `${width}px`;
-    rightRail.style.width = px;
-    rightRail.style.setProperty('--right-rail-width', px);
+    els.rightRail.style.width = px;
+    els.rightRail.style.setProperty('--right-rail-width', px);
     document.documentElement.style.setProperty('--right-rail-width', px);
 }
 
@@ -228,17 +203,20 @@ function persistRightRailWidth(width) {
     localStorage.setItem('agent_teams_right_rail_width', String(width));
 }
 
-function getRailWidth(element, fallback) {
-    if (!element) return fallback;
-    const inlineWidth = Number.parseInt(String(element.style.width || ''), 10);
-    if (Number.isFinite(inlineWidth) && inlineWidth >= 0) {
-        return inlineWidth;
+function getVisibleRightRailWidth() {
+    if (!els.rightRail || els.rightRail.classList.contains('collapsed')) {
+        return 0;
     }
-    const cssWidth = Number.parseInt(getComputedStyle(element).width, 10);
-    if (Number.isFinite(cssWidth) && cssWidth >= 0) {
-        return cssWidth;
+    const width = els.rightRail.getBoundingClientRect().width;
+    return Number.isFinite(width) ? Math.max(0, width) : 0;
+}
+
+function getVisibleSidebarWidth() {
+    if (!els.sidebar || els.sidebar.classList.contains('collapsed')) {
+        return 0;
     }
-    return fallback;
+    const width = els.sidebar.getBoundingClientRect().width;
+    return Number.isFinite(width) ? Math.max(0, width) : 0;
 }
 
 function setRailResizeDragging(isDragging) {

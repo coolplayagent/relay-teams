@@ -7,6 +7,23 @@ import subprocess
 from typing import cast
 
 
+def test_subagent_rail_dom_refs_are_cached() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    shared_dom_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "dom.js"
+    ).read_text(encoding="utf-8")
+
+    for expected_ref in (
+        'toggleSubagentsBtn: qs("#toggle-subagents")',
+        'rightRail: qs("#right-rail")',
+        'rightRailResizer: qs("#right-rail-resizer")',
+        'subagentRoleSelect: qs("#subagent-role-select")',
+        'subagentStatusSummary: qs("#subagent-status-summary")',
+        'subagentRoleMeta: qs("#subagent-role-meta")',
+    ):
+        assert expected_ref in shared_dom_source
+
+
 def test_subagent_rail_filters_dynamic_coordinator_role(tmp_path: Path) -> None:
     payload = _run_subagent_rail_script(
         tmp_path=tmp_path,
@@ -32,6 +49,7 @@ console.log(JSON.stringify({
     metaHtml: globalThis.__elements.subagentRoleMeta.innerHTML,
     metaHidden: globalThis.__elements.subagentRoleMeta.hidden,
     openAgentPanelCalls: globalThis.__openAgentPanelCalls,
+    rememberedSubagents: globalThis.__rememberedSubagents,
 }));
 """.strip(),
     )
@@ -40,11 +58,14 @@ console.log(JSON.stringify({
         {
             "instance_id": "writer-2",
             "role_id": "writer",
+            "run_id": "run-1",
             "status": "running",
             "created_at": "2026-03-13T00:01:00Z",
             "updated_at": "2026-03-13T00:02:00.000Z",
             "runtime_system_prompt": "You are the runtime writer.",
             "runtime_tools_json": '{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
+            "reflection_summary_preview": "",
+            "reflection_updated_at": "",
         }
     ]
     assert payload["sessionTasks"] == [
@@ -87,6 +108,47 @@ console.log(JSON.stringify({
             },
         },
     ]
+    assert payload["rememberedSubagents"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "runId": "run-1",
+        },
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-2",
+            "roleId": "writer",
+            "runId": "run-1",
+        },
+    ]
+
+
+def test_remember_live_subagent_updates_sidebar_session_cache(tmp_path: Path) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { rememberLiveSubagent } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.activeRunId = "run-live";
+rememberLiveSubagent("writer-live", "writer");
+
+console.log(JSON.stringify({
+    rememberedSubagents: globalThis.__rememberedSubagents,
+}));
+""".strip(),
+    )
+
+    assert payload["rememberedSubagents"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-live",
+            "roleId": "writer",
+            "runId": "run-live",
+        }
+    ]
 
 
 def test_subagent_rail_rebuilds_labels_when_language_changes(tmp_path: Path) -> None:
@@ -111,6 +173,50 @@ console.log(JSON.stringify({
     assert payload["summaryText"] == "1 个运行中 / 1 个角色"
     assert "子代理" in cast(str, payload["toggleHtml"])
     assert payload["clearPanelCalls"] == 1
+
+
+def test_subagent_rail_force_refreshes_agents_and_tasks(tmp_path: Path) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+
+await refreshSubagentRail("session-1", { forceRefresh: true, priority: "high" });
+
+console.log(JSON.stringify({
+    agentCalls: globalThis.__fetchSessionAgentsCalls,
+    taskCalls: globalThis.__fetchSessionTasksCalls,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "agentCalls": [
+            {
+                "sessionId": "session-1",
+                "options": {
+                    "priority": "high",
+                    "forceRefresh": True,
+                    "signal": None,
+                },
+            }
+        ],
+        "taskCalls": [
+            {
+                "sessionId": "session-1",
+                "options": {
+                    "priority": "high",
+                    "forceRefresh": True,
+                    "signal": None,
+                },
+            }
+        ],
+    }
 
 
 def test_subagent_rail_keeps_agent_running_when_assigned_task_runs(
@@ -159,11 +265,14 @@ console.log(JSON.stringify({
         {
             "instance_id": "writer-1",
             "role_id": "writer",
+            "run_id": "run-1",
             "status": "running",
             "created_at": "2026-03-13T00:01:00Z",
             "updated_at": "2026-03-13T00:04:00Z",
             "runtime_system_prompt": "",
             "runtime_tools_json": "",
+            "reflection_summary_preview": "",
+            "reflection_updated_at": "",
         }
     ]
     assert payload["summaryText"] == "1 running / 1 roles"
@@ -217,11 +326,14 @@ console.log(JSON.stringify({
         {
             "instance_id": "writer-1",
             "role_id": "writer",
+            "run_id": "run-1",
             "status": "completed",
             "created_at": "2026-03-13T00:01:00Z",
             "updated_at": "2026-03-13T00:02:00.000Z",
             "runtime_system_prompt": "",
             "runtime_tools_json": "",
+            "reflection_summary_preview": "",
+            "reflection_updated_at": "",
         }
     ]
     assert payload["sessionTasks"] == [
@@ -293,11 +405,14 @@ console.log(JSON.stringify({
         {
             "instance_id": "writer-2",
             "role_id": "writer",
+            "run_id": "",
             "status": "completed",
             "created_at": "2026-03-13T00:01:50Z",
             "updated_at": "2026-03-13T00:02:00Z",
             "runtime_system_prompt": "",
             "runtime_tools_json": "",
+            "reflection_summary_preview": "",
+            "reflection_updated_at": "",
         }
     ]
     assert payload["summaryText"] == "0 running / 1 roles"
@@ -353,11 +468,14 @@ console.log(JSON.stringify({
         {
             "instance_id": "writer-1",
             "role_id": "writer",
+            "run_id": "run-1",
             "status": "running",
             "created_at": "2026-03-13T00:02:00Z",
             "updated_at": "2026-03-13T00:04:00Z",
             "runtime_system_prompt": "",
             "runtime_tools_json": "",
+            "reflection_summary_preview": "",
+            "reflection_updated_at": "",
         }
     ]
     assert payload["selectedRoleId"] == "writer"
@@ -424,6 +542,7 @@ def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, o
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
+    mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
@@ -432,7 +551,15 @@ def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, o
 
     mock_api_path.write_text(
         """
-export async function fetchSessionAgents() {
+export async function fetchSessionAgents(sessionId = "", options = {}) {
+    globalThis.__fetchSessionAgentsCalls.push({
+        sessionId,
+        options: {
+            priority: options.priority || "",
+            forceRefresh: options.forceRefresh === true,
+            signal: options.signal || null,
+        },
+    });
     return globalThis.__fetchSessionAgentsPayload || [
         {
             instance_id: "coord-1",
@@ -460,7 +587,15 @@ export async function fetchSessionAgents() {
     ];
 }
 
-export async function fetchSessionTasks() {
+export async function fetchSessionTasks(sessionId = "", options = {}) {
+    globalThis.__fetchSessionTasksCalls.push({
+        sessionId,
+        options: {
+            priority: options.priority || "",
+            forceRefresh: options.forceRefresh === true,
+            signal: options.signal || null,
+        },
+    });
     return globalThis.__fetchSessionTasksPayload || [
         {
             task_id: "task-coordinator",
@@ -503,6 +638,7 @@ export const state = {
     pausedSubagent: null,
     currentRecoverySnapshot: null,
     activeAgentRoleId: null,
+    activeRunId: null,
     coordinatorRoleId: null,
     mainAgentRoleId: null,
     rightRailExpanded: true,
@@ -536,6 +672,20 @@ export function clearAllPanels() {
 
 export function openAgentPanel(instanceId, roleId, options = {}) {
     globalThis.__openAgentPanelCalls.push({ instanceId, roleId, options });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_subagent_sessions_path.write_text(
+        """
+export function rememberOrchestrationSubagentSession(sessionId, record = {}) {
+    globalThis.__rememberedSubagents.push({
+        sessionId,
+        instanceId: record.instance_id || "",
+        roleId: record.role_id || "",
+        runId: record.run_id || "",
+    });
+    return record;
 }
 """.strip(),
         encoding="utf-8",
@@ -584,6 +734,7 @@ export function sysLog() {
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("../core/state.js", "./mockState.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
         .replace("../utils/dom.js", "./mockDom.mjs")
         .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
@@ -634,6 +785,9 @@ globalThis.__elements = {{
 }};
 globalThis.__openAgentPanelCalls = [];
 globalThis.__clearAllPanelsCalls = 0;
+globalThis.__rememberedSubagents = [];
+globalThis.__fetchSessionAgentsCalls = [];
+globalThis.__fetchSessionTasksCalls = [];
 globalThis.__language = "en-US";
 globalThis.CustomEvent = class CustomEvent {{
     constructor(type, init = {{}}) {{

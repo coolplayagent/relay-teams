@@ -42,12 +42,14 @@ def test_recovery_ui_tracks_background_tasks_in_banner_and_events() -> None:
     assert "ensureBackgroundTaskHost" in recovery_script
     assert "renderBackgroundTaskList" in recovery_script
     assert "handleBackgroundTaskAction" in recovery_script
+    assert "forceRefresh: forceRefresh === true" in recovery_script
     assert (
-        "await refreshSubagentRail(safeSessionId, { preserveSelection: true, priority, signal });"
-        in recovery_script
-    )
-    assert (
-        "await refreshSubagentRail(safeSessionId, { preserveSelection: true, priority, signal });\n"
+        "await refreshSubagentRail(safeSessionId, {\n"
+        "        preserveSelection: true,\n"
+        "        priority,\n"
+        "        forceRefresh: forceRefresh === true,\n"
+        "        signal,\n"
+        "    });\n"
         "    throwIfAborted(signal);\n"
         "    syncSessionContinuity();" in recovery_script
     )

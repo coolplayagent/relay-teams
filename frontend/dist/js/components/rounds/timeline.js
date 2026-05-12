@@ -125,10 +125,16 @@ export async function loadSessionRounds(sessionId, options = {}) {
     const timelineLoadMode = options.timelineLoadMode === 'background' ? 'background' : 'await';
     abortRoundTokenUsageRequests();
     try {
-        const timelinePageResult = timelineLoadMode === 'await'
-            ? fetchTimelineRoundPageResult(sessionId, { priority, signal })
+        const shouldForceRefresh = options.forceRefresh === true;
+        const timelinePageResult = timelineLoadMode === 'await' && !shouldForceRefresh
+            ? fetchTimelineRoundPageResult(sessionId, {
+                forceRefresh: false,
+                priority,
+                signal,
+            })
             : null;
         const page = await fetchInitialRoundsPage(sessionId, {
+            forceRefresh: shouldForceRefresh,
             priority,
             signal,
             summary: timelineLoadMode === 'background',
@@ -180,7 +186,13 @@ export async function loadSessionRounds(sessionId, options = {}) {
             return;
         }
 
-        const timelineResult = await timelinePageResult;
+        const timelineResult = timelinePageResult
+            ? await timelinePageResult
+            : await fetchTimelineRoundPageResult(sessionId, {
+                forceRefresh: shouldForceRefresh,
+                priority,
+                signal,
+            });
         throwIfAborted(signal);
         if (!isSessionLoadCurrent(sessionId)) {
             return;
@@ -198,8 +210,11 @@ export async function loadSessionRounds(sessionId, options = {}) {
     }
 }
 
-function fetchTimelineRoundPageResult(sessionId, { priority = '', signal = null } = {}) {
-    return fetchTimelineRoundsPage(sessionId, { priority, signal })
+function fetchTimelineRoundPageResult(
+    sessionId,
+    { forceRefresh = false, priority = '', signal = null } = {},
+) {
+    return fetchTimelineRoundsPage(sessionId, { forceRefresh, priority, signal })
         .then(value => ({ status: 'fulfilled', value }))
         .catch(reason => ({ status: 'rejected', reason }));
 }
@@ -214,7 +229,11 @@ async function applyTimelineRoundPageInBackground(sessionId, { priority, renderP
 }
 
 async function applyFullRoundPageInBackground(sessionId, { options, renderPlan, signal }) {
-    const page = await fetchInitialRoundsPage(sessionId, { priority: '', signal });
+    const page = await fetchInitialRoundsPage(sessionId, {
+        forceRefresh: options.forceRefresh === true,
+        priority: '',
+        signal,
+    });
     throwIfAborted(signal);
     if (!isSessionLoadCurrent(sessionId)) {
         return;
@@ -1318,7 +1337,7 @@ function applyTerminalRoundOverlays() {
 export function updateRoundTodo(runId, todoSnapshot) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) {
-        return;
+        return false;
     }
     const normalizedTodo = normalizeRoundTodoSnapshot(todoSnapshot, safeRunId, state.currentSessionId);
     let changed = false;
@@ -1348,8 +1367,7 @@ export function updateRoundTodo(runId, todoSnapshot) {
         patchTodo,
     );
     if (!changed) {
-        syncRoundTodoVisibility(safeRunId);
-        return;
+        return syncRoundTodoVisibility(safeRunId);
     }
     if (roundsState.currentRound?.run_id === safeRunId) {
         roundsState.currentRound = roundsState.currentRounds.find(
@@ -1357,7 +1375,7 @@ export function updateRoundTodo(runId, todoSnapshot) {
         ) || null;
     }
     syncExportedState();
-    syncRoundTodoVisibility(safeRunId);
+    return syncRoundTodoVisibility(safeRunId);
 }
 
 export function syncRoundTodoVisibility(runId = '') {
@@ -1367,10 +1385,11 @@ export function syncRoundTodoVisibility(runId = '') {
             || roundsState.currentRounds.find(item => item.run_id === safeRunId)
             || null;
         if (round && patchRoundNavigatorTodo(safeRunId, round.todo || null)) {
-            return;
+            return true;
         }
     }
     renderNavigatorForTimeline();
+    return false;
 }
 
 export async function selectRound(round) {

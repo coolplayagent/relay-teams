@@ -6,6 +6,12 @@
     margin-top: 0.45rem;
 }
 
+.message.is-streaming .message-copy-actions,
+.message:has(.tool-block[data-status="running"]) .message-copy-actions,
+.message-copy-actions[hidden] {
+    display: none !important;
+}
+
 .message-copy-btn,
 .message-read-btn {
     display: inline-flex;

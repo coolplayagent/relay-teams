@@ -50,6 +50,39 @@ console.log(JSON.stringify({
     assert payload["activeAgentInstanceId"] == "writer-1"
 
 
+def test_model_step_started_auto_switches_each_subagent_once(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepStarted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'orchestration';
+state.coordinatorRoleId = 'Coordinator';
+
+handleModelStepStarted({ run_id: 'run-1' }, 'writer-1', 'writer');
+handleModelStepStarted({ run_id: 'run-1' }, 'writer-1', 'writer');
+handleModelStepStarted({ run_id: 'run-1' }, 'reviewer-1', 'reviewer');
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    openCalls: globalThis.__openAgentPanelCalls,
+    autoSwitched: state.autoSwitchedSubagentInstances,
+}));
+""".strip(),
+    )
+
+    assert payload["openCalls"] == [
+        {"instanceId": "writer-1", "roleId": "writer"},
+        {"instanceId": "reviewer-1", "roleId": "reviewer"},
+    ]
+    assert payload["autoSwitched"] == {"writer-1": True, "reviewer-1": True}
+
+
 def test_model_step_started_tracks_normal_mode_subagents_as_child_sessions(
     tmp_path: Path,
 ) -> None:
@@ -1462,7 +1495,13 @@ export function syncRoundTodoVisibility() {
     return undefined;
 }
 
-export function updateRoundTodo() {
+export function updateRoundTodo(...args) {
+    globalThis.__updateRoundTodoCalls.push(args);
+    return globalThis.__updateRoundTodoResult === true;
+}
+
+export async function loadSessionRounds(...args) {
+    globalThis.__loadSessionRoundsCalls.push(args);
     return undefined;
 }
 """.strip(),
@@ -1579,6 +1618,9 @@ globalThis.__runEventCalls = [];
 globalThis.__normalModeSubagentEvents = [];
 globalThis.__subagentSessionStatusEvents = [];
 globalThis.__applyBackgroundTaskEventCalls = [];
+globalThis.__updateRoundTodoCalls = [];
+globalThis.__updateRoundTodoResult = false;
+globalThis.__loadSessionRoundsCalls = [];
 
 {runner_source}
 """.strip(),
@@ -1603,3 +1645,88 @@ globalThis.__applyBackgroundTaskEventCalls = [];
         )
 
     return json.loads(completed.stdout)
+
+
+def test_event_router_force_refreshes_rounds_when_todo_patch_misses(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path,
+        """
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent(
+    'todo_updated',
+    {
+        run_id: 'run-1',
+        session_id: 'session-1',
+        items: [{ content: 'Persist todo', status: 'completed' }],
+        version: 1,
+    },
+    { run_id: 'run-1', trace_id: 'run-1' },
+);
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    updateCalls: globalThis.__updateRoundTodoCalls,
+    loadCalls: globalThis.__loadSessionRoundsCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["updateCalls"] == [
+        [
+            "run-1",
+            {
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "items": [{"content": "Persist todo", "status": "completed"}],
+                "version": 1,
+            },
+        ]
+    ]
+    assert payload["loadCalls"] == [
+        [
+            "session-1",
+            {
+                "forceRefresh": True,
+                "navigatorLayoutReason": "todo-update",
+                "scrollPolicy": "preserve-anchor",
+            },
+        ]
+    ]
+
+
+def test_event_router_skips_rounds_force_refresh_when_todo_patch_applies(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path,
+        """
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+globalThis.__updateRoundTodoResult = true;
+routeEvent(
+    'todo_updated',
+    {
+        run_id: 'run-1',
+        session_id: 'session-1',
+        items: [{ content: 'Persist todo', status: 'completed' }],
+        version: 1,
+    },
+    { run_id: 'run-1', trace_id: 'run-1' },
+);
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    updateCalls: globalThis.__updateRoundTodoCalls,
+    loadCalls: globalThis.__loadSessionRoundsCalls,
+}));
+""".strip(),
+    )
+
+    update_calls = cast(list[object], payload["updateCalls"])
+    assert len(update_calls) == 1
+    assert payload["loadCalls"] == []

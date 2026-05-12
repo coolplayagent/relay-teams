@@ -304,6 +304,30 @@ def test_run_event_hub_publish_returns_event_id() -> None:
     assert delivered.event_id == 1
 
 
+def test_run_event_hub_publish_listeners_are_isolated() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    observed_event_ids: list[int | None] = []
+
+    def failing_listener(event: RunEvent) -> None:
+        _ = event
+        raise RuntimeError("listener failed")
+
+    def observing_listener(event: RunEvent) -> None:
+        observed_event_ids.append(event.event_id)
+
+    hub.add_publish_listener(failing_listener)
+    hub.add_publish_listener(observing_listener)
+
+    event_id = hub.publish(_event(RunEventType.RUN_STARTED))
+
+    assert observed_event_ids == [event_id]
+
+
 @pytest.mark.asyncio
 async def test_run_event_hub_serializes_mixed_sync_and_async_publishes() -> None:
     event_log = _SequencedEventLog()

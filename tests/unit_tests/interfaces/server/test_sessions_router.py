@@ -27,6 +27,11 @@ from relay_teams.sessions.session_models import (
     SessionMode,
     SessionRecord,
 )
+from relay_teams.sessions.session_read_models import (
+    SessionSnapshotCacheDiagnostics,
+    SessionSubagentsSnapshotResponse,
+    utc_now,
+)
 
 
 class _FakeSessionService:
@@ -47,6 +52,13 @@ class _FakeSessionService:
         self.raise_missing_list_subagents = False
         self.raise_missing_subagent_stream = False
         self.subagent_stream_calls: list[tuple[str, int]] = []
+        self.sessions_force_refresh_calls: list[bool] = []
+        self.rounds_force_refresh_calls: list[bool] = []
+        self.recovery_force_refresh_calls: list[bool] = []
+        self.agents_force_refresh_calls: list[bool] = []
+        self.subagents_force_refresh_calls: list[bool] = []
+        self.tasks_force_refresh_calls: list[bool] = []
+        self.token_usage_force_refresh_calls: list[bool] = []
         self.delete_subagent_error: Exception | None = None
 
     def create_session(
@@ -100,7 +112,12 @@ class _FakeSessionService:
         self.list_calls += 1
         return (SessionRecord(session_id="session-listed", workspace_id="default"),)
 
-    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
+    async def list_sessions_async(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[SessionRecord, ...]:
+        self.sessions_force_refresh_calls.append(force_refresh)
         return self.list_sessions()
 
     def list_normal_mode_subagents(
@@ -142,9 +159,43 @@ class _FakeSessionService:
     ) -> tuple[dict[str, object], ...]:
         return self.list_normal_mode_subagents(session_id)
 
-    async def list_agents_in_session_async(
-        self, session_id: str
+    async def list_session_subagents_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
     ) -> tuple[dict[str, object], ...]:
+        self.subagents_force_refresh_calls.append(force_refresh)
+        return self.list_normal_mode_subagents(session_id)
+
+    async def list_session_subagents_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SessionSubagentsSnapshotResponse:
+        _ = force_refresh
+        return SessionSubagentsSnapshotResponse(
+            session_id=session_id,
+            items=list(self.list_normal_mode_subagents(session_id)),
+            cache=SessionSnapshotCacheDiagnostics(
+                cache_hit=True,
+                stale=False,
+                dirty=False,
+                snapshot_age_ms=0,
+                refresh_duration_ms=1,
+                refresh_in_progress=False,
+                generated_at=utc_now(),
+            ),
+        )
+
+    async def list_agents_in_session_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[dict[str, object], ...]:
+        self.agents_force_refresh_calls.append(force_refresh)
         return self.list_agents_in_session(session_id)
 
     async def stream_normal_mode_subagent_events(
@@ -280,8 +331,12 @@ class _FakeSessionService:
         )
 
     async def get_token_usage_by_session_async(
-        self, session_id: str
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
     ) -> SessionTokenUsage:
+        self.token_usage_force_refresh_calls.append(force_refresh)
         return self.get_token_usage_by_session(session_id)
 
     def get_session_rounds(
@@ -310,7 +365,9 @@ class _FakeSessionService:
         cursor_run_id: str | None,
         timeline: bool = False,
         summary: bool = False,
+        force_refresh: bool = False,
     ) -> dict[str, object]:
+        self.rounds_force_refresh_calls.append(force_refresh)
         return self.get_session_rounds(
             session_id,
             limit=limit,
@@ -322,7 +379,13 @@ class _FakeSessionService:
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         return {"session_id": session_id, "runs": []}
 
-    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        self.recovery_force_refresh_calls.append(force_refresh)
         return self.get_recovery_snapshot(session_id)
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
@@ -362,7 +425,13 @@ class _FakeSessionService:
     def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
         return [{"session_id": session_id, "task": "task-1"}]
 
-    async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
+    async def get_session_tasks_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict[str, object]]:
+        self.tasks_force_refresh_calls.append(force_refresh)
         return self.get_session_tasks(session_id)
 
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
@@ -403,7 +472,13 @@ class _SleepingRecoveryService(_FakeSessionService):
         time.sleep(0.2)
         return {"session_id": session_id, "runs": []}
 
-    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        _ = force_refresh
         return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
 
 
@@ -418,7 +493,13 @@ class _BlockingRecoveryService(_FakeSessionService):
         _ = self.release.wait(timeout=5.0)
         return {"session_id": session_id, "runs": []}
 
-    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        _ = force_refresh
         return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
 
 
@@ -696,6 +777,7 @@ def test_session_routes_call_service() -> None:
         client.get("/api/sessions/session-1/rounds/run-1"),
         client.get("/api/sessions/session-1/agents"),
         client.get("/api/sessions/session-1/subagents"),
+        client.get("/api/sessions/session-1/subagents:snapshot"),
         client.delete("/api/sessions/session-1/subagents/inst-subagent-1"),
         client.get("/api/sessions/session-1/events"),
         client.get("/api/sessions/session-1/messages"),
@@ -1087,6 +1169,97 @@ def test_list_session_subagents_route_returns_projected_subagents() -> None:
             "conversation_id": "conv_session_1_explorer_inst_subagent_1",
         }
     ]
+    assert fake_service.subagents_force_refresh_calls == [False]
+
+
+def test_list_session_subagents_route_forwards_force_refresh() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/subagents?force_refresh=true")
+
+    assert response.status_code == 200
+    assert fake_service.subagents_force_refresh_calls == [True]
+
+
+def test_cached_session_read_routes_use_fast_read_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_service = _FakeSessionService()
+    operations: list[str] = []
+
+    async def fake_fast_read_runner(operation, function, *args, **kwargs):
+        operations.append(str(operation))
+        result = function(*args, **kwargs)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
+
+    monkeypatch.setattr(
+        sessions,
+        "call_maybe_async_in_session_fast_read_thread",
+        fake_fast_read_runner,
+    )
+    client = _create_client(fake_service)
+
+    responses = [
+        client.get("/api/sessions"),
+        client.get("/api/sessions/session-1/rounds"),
+        client.get("/api/sessions/session-1/recovery"),
+        client.get("/api/sessions/session-1/agents"),
+        client.get("/api/sessions/session-1/subagents"),
+        client.get("/api/sessions/session-1/subagents:snapshot"),
+        client.get("/api/sessions/session-1/tasks"),
+        client.get("/api/sessions/session-1/token-usage"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert operations == [
+        "session.list",
+        "session.rounds",
+        "session.recovery",
+        "session.agents",
+        "session.subagents",
+        "session.subagents.snapshot",
+        "session.tasks",
+        "session.token_usage",
+    ]
+
+
+def test_cached_session_read_routes_forward_force_refresh() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    responses = [
+        client.get("/api/sessions?force_refresh=true"),
+        client.get("/api/sessions/session-1/rounds?force_refresh=true"),
+        client.get("/api/sessions/session-1/recovery?force_refresh=true"),
+        client.get("/api/sessions/session-1/agents?force_refresh=true"),
+        client.get("/api/sessions/session-1/tasks?force_refresh=true"),
+        client.get("/api/sessions/session-1/token-usage?force_refresh=true"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert fake_service.sessions_force_refresh_calls == [True]
+    assert fake_service.rounds_force_refresh_calls == [True]
+    assert fake_service.recovery_force_refresh_calls == [True]
+    assert fake_service.agents_force_refresh_calls == [True]
+    assert fake_service.tasks_force_refresh_calls == [True]
+    assert fake_service.token_usage_force_refresh_calls == [True]
+
+
+def test_list_session_subagents_snapshot_route_returns_diagnostics() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/subagents:snapshot")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == "session-1"
+    assert payload["items"][0]["instance_id"] == "inst-subagent-1"
+    assert payload["cache"]["cache_hit"] is True
+    assert payload["cache"]["stale"] is False
 
 
 def test_stream_session_subagent_events_route_returns_sse_events() -> None:

@@ -1179,6 +1179,9 @@ Notes:
 
 Lists sessions.
 
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale list snapshot and waits for a fresh projection before returning.
+
 ### `GET /sessions/{session_id}`
 
 Gets one session.
@@ -1255,6 +1258,7 @@ Query parameters:
 - optional `cursor_run_id`: cursor for loading older normal round projections
 - optional `timeline=true`: returns the full lightweight round index for timeline navigation; this mode ignores `limit` and `cursor_run_id`, sets `has_more = false`, and omits heavy message/task mapping fields such as `coordinator_messages`, `tasks`, `instance_role_map`, `role_instance_map`, `task_instance_map`, and `task_status_map`
 - optional `summary=true`: returns the paged lightweight round index for fast session switching; this mode honors `limit` and `cursor_run_id`, keeps pagination fields, and omits the same heavy fields as `timeline=true`
+- optional `force_refresh=true`: bypasses any stale round snapshot for this query key and waits for a fresh projection before returning
 
 Response shape:
 
@@ -1355,6 +1359,9 @@ Gets one round projection.
 
 Returns active run recovery state, pending tool approvals, pending user questions, managed background task state, paused subagent state, and round snapshot.
 
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale recovery snapshot and waits for a fresh projection before returning.
+
 `active_run` also includes:
 - `last_event_id`
 - `checkpoint_event_id`
@@ -1433,6 +1440,9 @@ Notes:
 
 Lists one reusable session-level agent instance per delegated role in the session. Each entry includes the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
 
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale agent snapshot and waits for a fresh projection before returning.
+
 Notes:
 - This endpoint continues to back the orchestration/legacy right-rail agent list.
 - Ephemeral same-role clones are excluded from this projection.
@@ -1449,12 +1459,20 @@ Response fields include:
 
 ### `GET /sessions/{session_id}/subagents`
 
-Lists normal-mode `spawn_subagent` runs as instance-level child-session projections.
+Lists the unified subagent children for a session. Normal-mode `spawn_subagent`
+runs and orchestration-mode role agents share this endpoint so the left sidebar
+can use one list/count model.
+
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale snapshot and waits for a fresh projection before returning.
 
 Notes:
-- Returns only subagent instances whose `run_id` is a normal-mode synthetic `subagent_run_*`.
-- Results are instance-scoped and are not collapsed by `role_id`, so multiple subagent runs under the same role are all returned.
-- Intended for the left sidebar child-session navigation, not the orchestration right rail.
+- Normal-mode rows use `subagent_kind: "normal"`, `interactive: false`, and `deletable: true`.
+- Orchestration rows use `subagent_kind: "orchestration"`, `interactive: true`, and `deletable: false`.
+- Normal-mode results remain instance-scoped and are not collapsed by `role_id`.
+- Orchestration results return the latest non-system agent instance per role.
+- `SessionRecord.subagent_session_count` uses the same unified count semantics.
+- The raw response remains an array for backward compatibility; cache diagnostics are exposed through `/sessions/{session_id}/subagents:snapshot`.
 
 Response fields include:
 - `instance_id`
@@ -1470,8 +1488,36 @@ Response fields include:
 - `updated_at`
 - `conversation_id`
 - `title`
+- `subagent_kind`
+- `interactive`
+- `deletable`
 - `runtime_system_prompt`
 - `runtime_tools_json`
+
+### `GET /sessions/{session_id}/subagents:snapshot`
+
+Returns the same subagent rows plus stale-first cache diagnostics.
+
+Query:
+- `force_refresh`: optional boolean, default `false`.
+
+Session read cache behavior:
+- `/sessions` and high-frequency session detail reads use short-lived in-process stale-first snapshots. Dirty reads return an existing snapshot immediately and refresh projections in a separate background worker pool.
+- Cold reads wait only for the configured cold-miss budget before returning a safe empty snapshot shape and allowing the background refresh to complete.
+- Cache timing can be tuned with `RELAY_TEAMS_LIST_SESSIONS_CACHE_MS`, `RELAY_TEAMS_SESSION_SNAPSHOT_CACHE_MS`, and `RELAY_TEAMS_SESSION_SNAPSHOT_REFRESH_MIN_INTERVAL_MS`.
+
+Response fields:
+- `session_id`
+- `items`: subagent rows with the same item contract as `GET /sessions/{session_id}/subagents`
+- `cache`
+  - `cache_hit`
+  - `stale`
+  - `dirty`
+  - `snapshot_age_ms`
+  - `refresh_duration_ms`
+  - `refresh_in_progress`
+  - `generated_at`
+  - `refresh_error`
 
 ### `DELETE /sessions/{session_id}/subagents/{instance_id}`
 
@@ -1509,6 +1555,9 @@ Response entries are ordered oldest to newest and use `entry_type`:
 
 Lists delegated tasks in the session.
 
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale task snapshot and waits for a fresh projection before returning.
+
 Task summaries include the persisted lifecycle view plus spec/evidence metadata used by the subagent panel:
 - `spec_artifact_id`
 - `spec_source_task_id`
@@ -1519,6 +1568,9 @@ Task summaries include the persisted lifecycle view plus spec/evidence metadata 
 ### `GET /sessions/{session_id}/token-usage`
 
 Returns aggregated token usage for the active session segment, grouped by `role_id`. The totals include the coordinator agent and every subagent run recorded under the same `session_id` after the latest logical `clear` marker. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
+
+Query:
+- `force_refresh`: optional boolean, default `false`. When `true`, bypasses any stale token usage snapshot and waits for a fresh projection before returning.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
 

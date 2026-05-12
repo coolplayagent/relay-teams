@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import Callable
 from threading import Lock
 from typing import Protocol, runtime_checkable
 
@@ -46,6 +48,10 @@ class RunEventHub:
         self._event_log = event_log
         self._run_state_repo = run_state_repo
         self._publish_lock = Lock()
+        self._publish_listeners: list[Callable[[RunEvent], None]] = []
+
+    def add_publish_listener(self, listener: Callable[[RunEvent], None]) -> None:
+        self._publish_listeners.append(listener)
 
     def subscribe(self, run_id: str) -> asyncio.Queue[RunEvent]:
         queue: asyncio.Queue[RunEvent] = asyncio.Queue()
@@ -128,6 +134,7 @@ class RunEventHub:
         if event_id > 0:
             event = event.model_copy(update={"event_id": event_id})
 
+        self._notify_publish_listeners(event)
         listeners = self._subscribers.get(event.run_id, [])
         for queue in listeners:
             queue.put_nowait(event)
@@ -170,6 +177,7 @@ class RunEventHub:
             if event_id > 0:
                 event = event.model_copy(update={"event_id": event_id})
 
+            self._notify_publish_listeners(event)
             listeners = self._subscribers.get(event.run_id, [])
             for queue in listeners:
                 queue.put_nowait(event)
@@ -202,6 +210,7 @@ class RunEventHub:
                 for event, event_id in zip(events, event_ids, strict=True)
             )
             for event in published_events:
+                self._notify_publish_listeners(event)
                 listeners = self._subscribers.get(event.run_id, [])
                 for queue in listeners:
                     queue.put_nowait(event)
@@ -211,6 +220,11 @@ class RunEventHub:
             return event_ids
         finally:
             self._publish_lock.release()
+
+    def _notify_publish_listeners(self, event: RunEvent) -> None:
+        for listener in self._publish_listeners:
+            with contextlib.suppress(Exception):
+                listener(event)
 
     async def _acquire_publish_lock_async(self) -> None:
         while not self._publish_lock.acquire(blocking=False):

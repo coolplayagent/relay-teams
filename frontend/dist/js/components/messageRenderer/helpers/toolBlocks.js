@@ -465,6 +465,7 @@ export function setToolStatus(toolBlock, status) {
         statusEl.innerHTML = CHECK_SVG;
     }
     toolBlock.dataset.status = String(status || '');
+    syncToolMessageStreamingState(toolBlock);
 }
 
 export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, toolCallId) {
@@ -479,6 +480,7 @@ export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, to
         bucket.push(toolBlock);
         pendingToolBlocks[nameKey] = bucket;
     }
+    syncToolMessageStreamingState(toolBlock);
 }
 
 export function resolvePendingToolBlock(pendingToolBlocks, toolName, toolCallId) {
@@ -832,4 +834,36 @@ function handleCopyClick(event) {
 function pendingToolKey(toolName, toolCallId) {
     if (toolCallId) return `id:${toolCallId}`;
     return `name:${toolName || ''}`;
+}
+
+function syncToolMessageStreamingState(toolBlock) {
+    const message = toolBlock?.closest?.('.message') || null;
+    if (!message) return;
+    if (messageHasRunningTool(message)) {
+        message.classList?.add?.('is-streaming');
+        message.querySelectorAll?.('.message-copy-actions').forEach(actions => {
+            actions.hidden = true;
+        });
+        return;
+    }
+    if (messageHasStreamingContent(message)) {
+        return;
+    }
+    message.classList?.remove?.('is-streaming');
+    message.querySelectorAll?.('.message-copy-actions').forEach(actions => {
+        actions.hidden = false;
+    });
+}
+
+function messageHasRunningTool(message) {
+    return Array.from(message?.querySelectorAll?.('.tool-block') || [])
+        .some(block => String(block?.dataset?.status || '').trim().toLowerCase() === 'running');
+}
+
+function messageHasStreamingContent(message) {
+    if (!message) return false;
+    if (message.querySelector?.('.streaming-cursor')) return true;
+    if (message.querySelector?.('.msg-text[data-idle-cursor="true"]')) return true;
+    return Array.from(message.querySelectorAll?.('.thinking-block') || [])
+        .some(block => String(block.dataset?.streaming || '') === 'true');
 }

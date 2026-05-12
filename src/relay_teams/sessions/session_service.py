@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from time import monotonic
 from typing import TYPE_CHECKING, Protocol, cast
 
 from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
@@ -24,6 +24,13 @@ from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
     SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
+)
+from relay_teams.sessions.session_list_cache import SessionListCache
+from relay_teams.sessions.session_read_models import (
+    CachedReadResult,
+    SessionRoundsQueryKey,
+    SessionSnapshotSection,
+    SessionSubagentsSnapshotResponse,
 )
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -80,11 +87,17 @@ from relay_teams.sessions.session_history_marker_models import (
 )
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.models import TaskRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import (
     RunTokenUsage,
     SessionTokenUsage,
     TokenUsageRepository,
+)
+from relay_teams.sessions.session_snapshot_cache import (
+    ProjectionRefreshRunner,
+    SessionSnapshotCache,
 )
 from relay_teams.workspace import (
     WorkspaceManager,
@@ -127,8 +140,78 @@ _LEGACY_COORDINATOR_IDENTIFIERS = (
 )
 _MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
 _AUTO_SESSION_TITLE_MAX_CHARS = 120
-_LIST_SESSIONS_CACHE_TTL_SECONDS = 0.5
 LOGGER = get_logger(__name__)
+_SNAPSHOT_DIRTY_EVENT_TYPES = frozenset(
+    {
+        *(RunEventType(event_type) for event_type in ROUND_PROJECTION_EVENT_TYPES),
+        RunEventType.RUN_STARTED,
+        RunEventType.RUN_PAUSED,
+        RunEventType.RUN_RESUMED,
+        RunEventType.RUN_COMPLETED,
+        RunEventType.RUN_FAILED,
+        RunEventType.RUN_STOPPED,
+        RunEventType.TOOL_CALL,
+        RunEventType.TOOL_RESULT,
+        RunEventType.TOOL_APPROVAL_REQUESTED,
+        RunEventType.TOOL_APPROVAL_RESOLVED,
+        RunEventType.TODO_UPDATED,
+        RunEventType.USER_QUESTION_REQUESTED,
+        RunEventType.USER_QUESTION_ANSWERED,
+        RunEventType.SUBAGENT_SESSION_STATUS_CHANGED,
+        RunEventType.SUBAGENT_STOPPED,
+        RunEventType.SUBAGENT_RESUMED,
+        RunEventType.BACKGROUND_TASK_STARTED,
+        RunEventType.BACKGROUND_TASK_UPDATED,
+        RunEventType.BACKGROUND_TASK_COMPLETED,
+        RunEventType.BACKGROUND_TASK_STOPPED,
+        RunEventType.TOKEN_USAGE,
+    }
+)
+_LIST_DIRTY_EVENT_TYPES = frozenset(
+    {
+        RunEventType.RUN_STARTED,
+        RunEventType.RUN_PAUSED,
+        RunEventType.RUN_RESUMED,
+        RunEventType.RUN_COMPLETED,
+        RunEventType.RUN_FAILED,
+        RunEventType.RUN_STOPPED,
+        RunEventType.TOOL_APPROVAL_REQUESTED,
+        RunEventType.TOOL_APPROVAL_RESOLVED,
+        RunEventType.USER_QUESTION_REQUESTED,
+        RunEventType.USER_QUESTION_ANSWERED,
+        RunEventType.BACKGROUND_TASK_STARTED,
+        RunEventType.BACKGROUND_TASK_UPDATED,
+        RunEventType.BACKGROUND_TASK_COMPLETED,
+        RunEventType.BACKGROUND_TASK_STOPPED,
+    }
+)
+_TERMINAL_RUN_EVENT_TYPES = frozenset(
+    {
+        RunEventType.RUN_COMPLETED,
+        RunEventType.RUN_FAILED,
+        RunEventType.RUN_STOPPED,
+    }
+)
+_FRESH_READ_EVENT_TYPES = frozenset(
+    {
+        RunEventType.RUN_COMPLETED,
+        RunEventType.RUN_FAILED,
+        RunEventType.RUN_STOPPED,
+        RunEventType.TODO_UPDATED,
+        RunEventType.USER_QUESTION_REQUESTED,
+        RunEventType.USER_QUESTION_ANSWERED,
+        RunEventType.TOKEN_USAGE,
+    }
+)
+_LIST_FRESH_READ_EVENT_TYPES = frozenset(
+    {
+        *_TERMINAL_RUN_EVENT_TYPES,
+        RunEventType.TOOL_APPROVAL_REQUESTED,
+        RunEventType.TOOL_APPROVAL_RESOLVED,
+        RunEventType.USER_QUESTION_REQUESTED,
+        RunEventType.USER_QUESTION_ANSWERED,
+    }
+)
 
 
 class BoardTodoSessionLifecycleService(Protocol):
@@ -191,6 +274,7 @@ class SessionService:
         media_asset_service: MediaAssetService | None = None,
         run_intent_repo: RunIntentRepository | None = None,
         get_runtime: Callable[[], RuntimeConfig] | None = None,
+        projection_refresh_runner: ProjectionRefreshRunner[object] | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._task_repo = task_repo
@@ -221,10 +305,103 @@ class SessionService:
         self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
         self._board_todo_service: BoardTodoSessionLifecycleService | None = None
-        self._list_sessions_cache: tuple[float, tuple[SessionRecord, ...]] | None = None
+        self._session_list_cache = SessionListCache(
+            refresh_runner=projection_refresh_runner,
+        )
+        self._session_snapshot_cache = SessionSnapshotCache(
+            refresh_runner=projection_refresh_runner,
+        )
 
-    def _invalidate_list_sessions_cache(self) -> None:
-        self._list_sessions_cache = None
+    def _invalidate_list_sessions_cache(
+        self,
+        *,
+        requires_fresh_read: bool = False,
+    ) -> None:
+        self._session_list_cache.mark_dirty(requires_fresh_read=requires_fresh_read)
+
+    def _merge_session_list_cache_record(self, record: SessionRecord) -> None:
+        self._session_list_cache.merge_record(record)
+
+    def _merge_enriched_session_list_cache_record(self, session_id: str) -> None:
+        with contextlib.suppress(KeyError):
+            for record in self.list_sessions():
+                if record.session_id == session_id:
+                    self._merge_session_list_cache_record(record)
+                    return
+            self._merge_session_list_cache_record(self.get_session(session_id))
+
+    def _remove_session_list_cache_record(self, session_id: str) -> None:
+        self._session_list_cache.remove_record(session_id)
+        self._session_list_cache.clear()
+
+    def _invalidate_session_read_cache(self, session_id: str) -> None:
+        self._session_snapshot_cache.mark_session_dirty(session_id)
+
+    def _invalidate_session_read_cache_for_event(
+        self,
+        session_id: str,
+        *,
+        requires_fresh_read: bool,
+    ) -> None:
+        self._session_snapshot_cache.mark_session_dirty(
+            session_id,
+            requires_fresh_read=requires_fresh_read,
+        )
+
+    def _clear_session_read_cache(self, session_id: str) -> None:
+        self._session_snapshot_cache.clear_session(session_id)
+
+    def mark_run_event_dirty(self, event: RunEvent) -> None:
+        safe_session_id = str(event.session_id or "").strip()
+        if not safe_session_id:
+            return
+        spawn_subagent_dirty = self._event_is_spawn_subagent_tool_event(event)
+        if event.event_type in _LIST_DIRTY_EVENT_TYPES or spawn_subagent_dirty:
+            self._invalidate_list_sessions_cache(
+                requires_fresh_read=event.event_type in _LIST_FRESH_READ_EVENT_TYPES,
+            )
+            if (
+                event.event_type in _TERMINAL_RUN_EVENT_TYPES
+                and not self._is_running_async_publish_listener()
+            ):
+                self._merge_terminal_session_projection_into_list_cache(safe_session_id)
+        if (
+            event.event_type not in _SNAPSHOT_DIRTY_EVENT_TYPES
+            and not spawn_subagent_dirty
+        ):
+            return
+        self._invalidate_session_read_cache_for_event(
+            safe_session_id,
+            requires_fresh_read=event.event_type in _FRESH_READ_EVENT_TYPES,
+        )
+
+    @staticmethod
+    def _event_is_spawn_subagent_tool_event(event: RunEvent) -> bool:
+        if event.event_type not in {RunEventType.TOOL_CALL, RunEventType.TOOL_RESULT}:
+            return False
+        try:
+            payload = json.loads(event.payload_json or "{}")
+        except ValueError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        tool_name = payload.get("tool_name")
+        return isinstance(tool_name, str) and tool_name.strip() == "spawn_subagent"
+
+    def _merge_terminal_session_projection_into_list_cache(
+        self,
+        session_id: str,
+    ) -> None:
+        with contextlib.suppress(KeyError):
+            self._merge_session_list_cache_record(self.get_session(session_id))
+
+    @staticmethod
+    def _is_running_async_publish_listener() -> bool:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        return True
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
         self._role_registry = role_registry
@@ -266,8 +443,7 @@ class SessionService:
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
-        self._invalidate_list_sessions_cache()
-        return self._session_repo.create(
+        record = self._session_repo.create(
             session_id=resolved_session_id,
             workspace_id=workspace_id,
             metadata=metadata,
@@ -277,6 +453,10 @@ class SessionService:
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=resolved_orchestration_preset_id,
         )
+        self._invalidate_list_sessions_cache()
+        self._merge_session_list_cache_record(record)
+        self._invalidate_session_read_cache(resolved_session_id)
+        return record
 
     async def create_session_async(
         self,
@@ -309,8 +489,7 @@ class SessionService:
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
-        self._invalidate_list_sessions_cache()
-        return await self._session_repo.create_async(
+        record = await self._session_repo.create_async(
             session_id=resolved_session_id,
             workspace_id=workspace_id,
             metadata=metadata,
@@ -320,6 +499,10 @@ class SessionService:
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=resolved_orchestration_preset_id,
         )
+        self._invalidate_list_sessions_cache()
+        self._merge_session_list_cache_record(record)
+        self._invalidate_session_read_cache(resolved_session_id)
+        return record
 
     @staticmethod
     def _resolve_session_create_id(session_id: str | None) -> str:
@@ -464,6 +647,8 @@ class SessionService:
 
         self._session_repo.update_metadata(session_id, next_metadata)
         self._invalidate_list_sessions_cache()
+        self._merge_enriched_session_list_cache_record(session_id)
+        self._invalidate_session_read_cache(session_id)
 
     async def update_session_async(
         self, session_id: str, patch: SessionMetadataPatch
@@ -478,6 +663,8 @@ class SessionService:
         _ = self._session_repo.get(session_id)
         self._session_repo.update_metadata(session_id, dict(metadata))
         self._invalidate_list_sessions_cache()
+        self._merge_enriched_session_list_cache_record(session_id)
+        self._invalidate_session_read_cache(session_id)
 
     def _replace_custom_metadata(
         self,
@@ -661,7 +848,10 @@ class SessionService:
             orchestration_preset_id=orchestration_preset_id,
         )
         self._invalidate_list_sessions_cache()
-        return self.get_session(session_id)
+        updated = self.get_session(session_id)
+        self._merge_session_list_cache_record(updated)
+        self._invalidate_session_read_cache(session_id)
+        return updated
 
     async def update_session_topology_async(
         self,
@@ -701,11 +891,14 @@ class SessionService:
             project_id=project_id or workspace_id,
         )
         self._invalidate_list_sessions_cache()
+        self._invalidate_session_read_cache(session_id)
         self._agent_repo.update_session_workspace(
             session_id,
             workspace_id=workspace_id,
         )
-        return self.get_session(session_id)
+        updated = self.get_session(session_id)
+        self._merge_session_list_cache_record(updated)
+        return updated
 
     def _resolve_normal_root_role_id(self, role_id: str | None) -> str | None:
         if self._role_registry is None:
@@ -847,6 +1040,8 @@ class SessionService:
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
         self._invalidate_list_sessions_cache()
+        self._remove_session_list_cache_record(session_id)
+        self._clear_session_read_cache(session_id)
 
     async def delete_session_async(
         self,
@@ -964,6 +1159,7 @@ class SessionService:
             )
         self._token_usage_repo.delete_by_run(agent.run_id)
         self._invalidate_list_sessions_cache()
+        self._invalidate_session_read_cache(session_id)
 
     async def delete_normal_mode_subagent_async(
         self, session_id: str, instance_id: str
@@ -1031,10 +1227,6 @@ class SessionService:
         )
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
-        cached = self._list_sessions_cache
-        now = monotonic()
-        if cached is not None and now - cached[0] <= _LIST_SESSIONS_CACHE_TTL_SECONDS:
-            return cached[1]
         sessions = self._session_repo.list_all()
         session_ids = tuple(record.session_id for record in sessions)
         runtimes_by_session: dict[str, tuple[RunRuntimeRecord, ...]] = (
@@ -1066,14 +1258,7 @@ class SessionService:
         first_user_messages = self._message_repo.first_user_messages_by_session_ids(
             session_ids_needing_message_titles
         )
-        normal_session_ids = tuple(
-            record.session_id
-            for record in sessions
-            if record.session_mode == SessionMode.NORMAL
-        )
-        subagent_counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
-            normal_session_ids
-        )
+        subagent_counts = self._count_subagents_by_session(sessions)
         selected_by_session: dict[str, tuple[str, RunRuntimeRecord]] = {}
         for session_id in session_ids:
             selected = self._select_active_run_from_preloaded(
@@ -1145,13 +1330,18 @@ class SessionService:
                     excluded_run_ids=excluded_run_ids,
                 )
             )
-        result = tuple(enriched)
-        self._list_sessions_cache = (monotonic(), result)
-        return result
+        return tuple(enriched)
 
-    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
-
-        return await asyncio.to_thread(self.list_sessions)
+    async def list_sessions_async(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[SessionRecord, ...]:
+        result = await self._session_list_cache.read(
+            self.list_sessions,
+            force_refresh=force_refresh,
+        )
+        return result.value
 
     def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
         _ = self._session_repo.get(session_id)
@@ -1175,6 +1365,8 @@ class SessionService:
             latest_terminal.run_id,
         )
         self._invalidate_list_sessions_cache()
+        self._merge_session_list_cache_record(self.get_session(session_id))
+        self._invalidate_session_read_cache(session_id)
 
     async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
         await asyncio.to_thread(self.mark_latest_terminal_run_viewed, session_id)
@@ -1254,10 +1446,57 @@ class SessionService:
             for record in records
         )
 
+    def list_session_subagents(self, session_id: str) -> tuple[dict[str, object], ...]:
+        session = self._session_repo.get(session_id)
+        if session.session_mode == SessionMode.NORMAL:
+            return self.list_normal_mode_subagents(session_id)
+        return self._list_orchestration_subagents(session)
+
     async def list_normal_mode_subagents_async(
         self, session_id: str
     ) -> tuple[dict[str, object], ...]:
         return await asyncio.to_thread(self.list_normal_mode_subagents, session_id)
+
+    async def list_session_subagents_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[dict[str, object], ...]:
+        result = await self._read_session_subagents_async(
+            session_id,
+            force_refresh=force_refresh,
+        )
+        return result.value
+
+    async def list_session_subagents_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> SessionSubagentsSnapshotResponse:
+        result = await self._read_session_subagents_async(
+            session_id,
+            force_refresh=force_refresh,
+        )
+        return SessionSubagentsSnapshotResponse(
+            session_id=session_id,
+            items=list(result.value),
+            cache=result.diagnostics,
+        )
+
+    async def _read_session_subagents_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool,
+    ) -> CachedReadResult[tuple[dict[str, object], ...]]:
+        return await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.SUBAGENTS,
+            refresh=lambda: self.list_session_subagents(session_id),
+            force_refresh=force_refresh,
+        )
 
     async def stream_normal_mode_subagent_events(
         self,
@@ -1335,29 +1574,18 @@ class SessionService:
         )
 
     async def list_agents_in_session_async(
-        self, session_id: str
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
     ) -> tuple[dict[str, object], ...]:
-        session = await self._session_repo.get_async(session_id)
-        latest_by_role: dict[str, AgentRuntimeRecord] = {}
-        for record in await self._agent_repo.list_by_session_async(session_id):
-            if self._is_normal_mode_subagent_record(record, session=session):
-                continue
-            existing = latest_by_role.get(record.role_id)
-            if existing is None or (
-                record.updated_at,
-                record.created_at,
-            ) >= (
-                existing.updated_at,
-                existing.created_at,
-            ):
-                latest_by_role[record.role_id] = record
-
-        projections: list[dict[str, object]] = []
-        for role_id in sorted(latest_by_role.keys()):
-            projections.append(
-                await self._agent_projection_async(latest_by_role[role_id])
-            )
-        return tuple(projections)
+        result = await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.AGENTS,
+            refresh=lambda: self.list_agents_in_session(session_id),
+            force_refresh=force_refresh,
+        )
+        return result.value
 
     def get_agent_messages(
         self, session_id: str, instance_id: str
@@ -1384,9 +1612,14 @@ class SessionService:
             session_id=session_id,
             conversation_id=agent.conversation_id,
         )
-        return self._build_agent_timeline_entries(
+        entries = self._build_agent_timeline_entries(
             messages=messages,
             markers=markers,
+        )
+        return self._with_terminal_task_result_entry(
+            entries=entries,
+            session_id=session_id,
+            agent=agent,
         )
 
     async def get_agent_messages_async(
@@ -1471,8 +1704,19 @@ class SessionService:
             if record.envelope.parent_task_id is not None
         ]
 
-    async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
-        return await asyncio.to_thread(self.get_session_tasks, session_id)
+    async def get_session_tasks_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict[str, object]]:
+        result = await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.TASKS,
+            refresh=lambda: self.get_session_tasks(session_id),
+            force_refresh=force_refresh,
+        )
+        return result.value
 
     def build_session_rounds(
         self,
@@ -1744,16 +1988,28 @@ class SessionService:
         cursor_run_id: str | None = None,
         timeline: bool = False,
         summary: bool = False,
+        force_refresh: bool = False,
     ) -> dict[str, object]:
-
-        return await asyncio.to_thread(
-            self.get_session_rounds,
-            session_id,
+        rounds_key = SessionRoundsQueryKey(
             limit=limit,
             cursor_run_id=cursor_run_id,
             timeline=timeline,
             summary=summary,
         )
+        result = await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.ROUNDS,
+            rounds_key=rounds_key,
+            refresh=lambda: self.get_session_rounds(
+                session_id,
+                limit=limit,
+                cursor_run_id=cursor_run_id,
+                timeline=timeline,
+                summary=summary,
+            ),
+            force_refresh=force_refresh,
+        )
+        return result.value
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         safe_run_id = str(run_id or "").strip()
@@ -1876,9 +2132,19 @@ class SessionService:
             "round_snapshot": round_snapshot,
         }
 
-    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
-
-        return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
+    ) -> dict[str, object]:
+        result = await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.RECOVERY,
+            refresh=lambda: self.get_recovery_snapshot(session_id),
+            force_refresh=force_refresh,
+        )
+        return result.value
 
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return self._token_usage_repo.get_by_run(run_id)
@@ -1891,11 +2157,46 @@ class SessionService:
         return await asyncio.to_thread(self._token_usage_repo.get_by_run, run_id)
 
     async def get_token_usage_by_session_async(
-        self, session_id: str
+        self,
+        session_id: str,
+        *,
+        force_refresh: bool = False,
     ) -> SessionTokenUsage:
+        result = await self._session_snapshot_cache.read(
+            session_id=session_id,
+            section=SessionSnapshotSection.TOKEN_USAGE,
+            refresh=lambda: self.get_token_usage_by_session(session_id),
+            force_refresh=force_refresh,
+        )
+        return result.value
 
-        return await asyncio.to_thread(
-            self._token_usage_repo.get_by_session, session_id
+    @staticmethod
+    def _empty_rounds_snapshot() -> dict[str, object]:
+        return {"items": [], "next_cursor": None}
+
+    @staticmethod
+    def _empty_recovery_snapshot() -> dict[str, object]:
+        return {
+            "active_run": None,
+            "background_tasks": [],
+            "pending_tool_approvals": [],
+            "pending_user_questions": [],
+            "paused_subagent": None,
+            "round_snapshot": None,
+        }
+
+    @staticmethod
+    def _empty_token_usage_snapshot(session_id: str) -> SessionTokenUsage:
+        return SessionTokenUsage(
+            session_id=session_id,
+            total_input_tokens=0,
+            total_cached_input_tokens=0,
+            total_output_tokens=0,
+            total_reasoning_output_tokens=0,
+            total_tokens=0,
+            total_requests=0,
+            total_tool_calls=0,
+            by_role={},
         )
 
     def clear_session_messages(self, session_id: str) -> int:
@@ -1907,6 +2208,10 @@ class SessionService:
         else:
             self._message_repo.delete_by_session(session_id)
             self._token_usage_repo.delete_by_session(session_id)
+        self._invalidate_session_read_cache_for_event(
+            session_id,
+            requires_fresh_read=True,
+        )
         return count
 
     def _get_session_history_markers(
@@ -2009,6 +2314,145 @@ class SessionService:
             )
             clear_index += 1
         return entries
+
+    def _with_terminal_task_result_entry(
+        self,
+        *,
+        entries: list[dict[str, object]],
+        session_id: str,
+        agent: AgentRuntimeRecord,
+    ) -> list[dict[str, object]]:
+        if not agent.run_id.startswith("subagent_run_"):
+            return entries
+        terminal_task = self._terminal_task_result_for_agent(
+            session_id=session_id,
+            agent=agent,
+        )
+        if terminal_task is None:
+            return entries
+        result_text = str(terminal_task.result or "").strip()
+        if not result_text:
+            return entries
+        if not self._should_append_terminal_task_result(entries):
+            return entries
+        return [
+            *entries,
+            self._project_terminal_task_result_entry(
+                task=terminal_task,
+                agent=agent,
+                result_text=result_text,
+            ),
+        ]
+
+    def _terminal_task_result_for_agent(
+        self,
+        *,
+        session_id: str,
+        agent: AgentRuntimeRecord,
+    ) -> TaskRecord | None:
+        records = [
+            record
+            for record in self._task_repo.list_by_session(session_id)
+            if record.assigned_instance_id == agent.instance_id
+            and record.status == TaskStatus.COMPLETED
+            and str(record.result or "").strip()
+        ]
+        exact_run_records = [
+            record for record in records if record.envelope.trace_id == agent.run_id
+        ]
+        candidates = exact_run_records or records
+        if not candidates:
+            return None
+        return max(candidates, key=lambda record: record.updated_at)
+
+    @staticmethod
+    def _should_append_terminal_task_result(
+        entries: list[dict[str, object]],
+    ) -> bool:
+        last_assistant_text_index = -1
+        last_tool_return_index = -1
+        for index, entry in enumerate(entries):
+            if SessionService._entry_has_assistant_text(entry):
+                last_assistant_text_index = index
+            if SessionService._entry_has_tool_return(entry):
+                last_tool_return_index = index
+        return last_assistant_text_index <= last_tool_return_index
+
+    @staticmethod
+    def _entry_has_assistant_text(entry: dict[str, object]) -> bool:
+        if str(entry.get("role") or "") != "assistant":
+            return False
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            return False
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            return False
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            part_kind = str(part.get("part_kind") or "").strip()
+            if part_kind != "text":
+                continue
+            if str(part.get("content") or "").strip():
+                return True
+        return False
+
+    @staticmethod
+    def _entry_has_tool_return(entry: dict[str, object]) -> bool:
+        message = entry.get("message")
+        if not isinstance(message, dict):
+            return False
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            return False
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            part_kind = str(part.get("part_kind") or "").strip()
+            if part_kind == "tool-return":
+                return True
+            has_legacy_tool_return_shape = (
+                part.get("tool_name") is not None
+                and part.get("content") is not None
+                and part.get("args") is None
+            )
+            if has_legacy_tool_return_shape:
+                return True
+        return False
+
+    @staticmethod
+    def _project_terminal_task_result_entry(
+        *,
+        task: TaskRecord,
+        agent: AgentRuntimeRecord,
+        result_text: str,
+    ) -> dict[str, object]:
+        return {
+            "entry_type": "terminal_result",
+            "conversation_id": agent.conversation_id,
+            "agent_role_id": agent.role_id,
+            "instance_id": agent.instance_id,
+            "role_id": agent.role_id,
+            "task_id": task.envelope.task_id,
+            "trace_id": task.envelope.trace_id,
+            "run_id": agent.run_id,
+            "role": "assistant",
+            "label": agent.role_id,
+            "created_at": task.updated_at.isoformat(),
+            "hidden_from_context": False,
+            "hidden_reason": "",
+            "hidden_at": "",
+            "hidden_marker_id": "",
+            "message": {
+                "parts": [
+                    {
+                        "part_kind": "text",
+                        "content": result_text,
+                    },
+                ],
+            },
+        }
 
     def _with_terminal_run_projection(self, record: SessionRecord) -> SessionRecord:
         latest_terminal = self._latest_terminal_run(record.session_id)
@@ -2278,6 +2722,75 @@ class SessionService:
             or normalized in _main_agent_identifiers()
         )
 
+    def _count_subagents_by_session(
+        self,
+        sessions: tuple[SessionRecord, ...],
+    ) -> dict[str, int]:
+        session_ids = tuple(session.session_id for session in sessions)
+        records_by_session = self._agent_repo.list_by_session_ids(session_ids)
+        counts: dict[str, int] = {}
+        for session in sessions:
+            records = records_by_session.get(session.session_id, ())
+            if session.session_mode == SessionMode.NORMAL:
+                counts[session.session_id] = sum(
+                    1
+                    for record in records
+                    if self._is_normal_mode_subagent_record(record, session=session)
+                )
+                continue
+            latest_by_role = self._latest_orchestration_subagents_by_role(
+                records,
+                session=session,
+            )
+            counts[session.session_id] = len(latest_by_role)
+        return counts
+
+    def _list_orchestration_subagents(
+        self,
+        session: SessionRecord,
+    ) -> tuple[dict[str, object], ...]:
+        records = self._latest_orchestration_subagents_by_role(
+            self._agent_repo.list_by_session(session.session_id),
+            session=session,
+        )
+        rows = tuple(records[role_id] for role_id in sorted(records.keys()))
+        run_ids = tuple(dict.fromkeys(record.run_id for record in rows))
+        runtime_by_run = {
+            runtime.run_id: runtime
+            for runtime in self._run_runtime_repo.list_by_session(session.session_id)
+            if runtime.run_id in run_ids
+        }
+        return tuple(
+            self._orchestration_subagent_projection(
+                record,
+                runtime_by_run=runtime_by_run,
+            )
+            for record in rows
+        )
+
+    def _latest_orchestration_subagents_by_role(
+        self,
+        records: tuple[AgentRuntimeRecord, ...],
+        *,
+        session: SessionRecord,
+    ) -> dict[str, AgentRuntimeRecord]:
+        latest_by_role: dict[str, AgentRuntimeRecord] = {}
+        for record in records:
+            if self._is_normal_mode_subagent_record(record, session=session):
+                continue
+            if self._is_reserved_system_role(record.role_id):
+                continue
+            existing = latest_by_role.get(record.role_id)
+            if existing is None or (
+                record.updated_at,
+                record.created_at,
+            ) >= (
+                existing.updated_at,
+                existing.created_at,
+            ):
+                latest_by_role[record.role_id] = record
+        return latest_by_role
+
     def _require_session_agent(
         self,
         session_id: str,
@@ -2307,6 +2820,33 @@ class SessionService:
         record: AgentRuntimeRecord,
     ) -> dict[str, object]:
         return record.model_dump(mode="json")
+
+    def _orchestration_subagent_projection(
+        self,
+        record: AgentRuntimeRecord,
+        *,
+        runtime_by_run: Mapping[str, RunRuntimeRecord] | None = None,
+    ) -> dict[str, object]:
+        projected = self._agent_projection(record)
+        runtime = (
+            runtime_by_run.get(record.run_id)
+            if runtime_by_run is not None
+            else self._run_runtime_repo.get(record.run_id)
+        )
+        projected["title"] = record.role_id
+        projected["subagent_kind"] = "orchestration"
+        projected["interactive"] = True
+        projected["deletable"] = False
+        projected["run_status"] = (
+            runtime.status.value if runtime is not None else projected["status"]
+        )
+        projected["run_phase"] = (
+            self._public_phase(runtime, 0, 0) if runtime is not None else ""
+        )
+        projected["last_event_id"] = 0
+        projected["checkpoint_event_id"] = 0
+        projected["stream_connected"] = False
+        return projected
 
     def _normal_mode_subagent_projection(
         self,
@@ -2353,6 +2893,9 @@ class SessionService:
             stream_connected = self._run_event_hub.has_subscribers(
                 record.run_id
             ) or self._run_event_hub.has_session_subscribers(record.session_id)
+        projected["subagent_kind"] = "normal"
+        projected["interactive"] = False
+        projected["deletable"] = True
         projected["run_status"] = (
             runtime.status.value if runtime is not None else projected["status"]
         )

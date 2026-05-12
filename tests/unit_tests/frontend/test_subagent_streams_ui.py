@@ -992,6 +992,7 @@ export async function hydrateSessionView(sessionId, options = {}) {
     globalThis.__hydrateCalls.push({
         sessionId,
         includeRounds: options.includeRounds === true,
+        forceRefresh: options.forceRefresh === true,
         roundsScrollPolicy: options.roundsScrollPolicy || "",
     });
 }
@@ -1254,6 +1255,7 @@ console.log(JSON.stringify({
         {
             "sessionId": "session-1",
             "includeRounds": True,
+            "forceRefresh": True,
             "roundsScrollPolicy": "completion-auto",
         }
     ]

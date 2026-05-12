@@ -114,6 +114,9 @@ from relay_teams.memory.service import MemoryBankService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
+from relay_teams.interfaces.server.async_call import (
+    call_maybe_async_in_session_projection_refresh_thread,
+)
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
 from relay_teams.mcp.config_reload_service import McpConfigReloadService
@@ -913,6 +916,12 @@ class ServerContainer:
             media_asset_service=self.media_asset_service,
             run_intent_repo=self.run_intent_repo,
             get_runtime=lambda: self.runtime,
+            projection_refresh_runner=(
+                call_maybe_async_in_session_projection_refresh_thread
+            ),
+        )
+        self.run_event_hub.add_publish_listener(
+            self.session_service.mark_run_event_dirty
         )
         self.session_ingress_service = GatewaySessionIngressService(
             run_service=self.run_service,

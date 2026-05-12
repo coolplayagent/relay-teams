@@ -8,6 +8,7 @@ from relay_teams.sessions.session_service import SessionService
 from relay_teams.agent_runtimes.instances.instance_repository import (
     AgentInstanceRepository,
 )
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -379,3 +380,98 @@ def test_list_normal_mode_subagents_reports_awaiting_tool_approval_phase(
     assert len(subagents) == 1
     assert subagents[0]["run_phase"] == "awaiting_tool_approval"
     assert subagents[0]["run_status"] == "paused"
+
+
+def test_list_sessions_counts_orchestration_subagents_by_role(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_orchestration_subagent_count.db"
+    service = _build_service(db_path)
+    _ = service.create_session(
+        session_id="session-orch",
+        workspace_id="default",
+        session_mode=SessionMode.ORCHESTRATION,
+    )
+
+    from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-orch",
+        trace_id="run-orch",
+        session_id="session-orch",
+        instance_id="inst-coordinator",
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.RUNNING,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-orch",
+        trace_id="run-orch",
+        session_id="session-orch",
+        instance_id="inst-explorer-old",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    agent_repo.upsert_instance(
+        run_id="run-orch",
+        trace_id="run-orch",
+        session_id="session-orch",
+        instance_id="inst-explorer-new",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.RUNNING,
+    )
+
+    by_id = {record.session_id: record for record in service.list_sessions()}
+
+    assert by_id["session-orch"].subagent_session_count == 1
+
+
+def test_list_session_subagents_returns_orchestration_projection(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_orchestration_subagents.db"
+    service = _build_service(db_path)
+    _ = service.create_session(
+        session_id="session-orch",
+        workspace_id="default",
+        session_mode=SessionMode.ORCHESTRATION,
+    )
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.ensure(
+        run_id="run-orch",
+        session_id="session-orch",
+        root_task_id="task-root-1",
+    )
+    runtime_repo.update(
+        "run-orch",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+
+    from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-orch",
+        trace_id="run-orch",
+        session_id="session-orch",
+        instance_id="inst-crafter",
+        role_id="Crafter",
+        workspace_id="default",
+        conversation_id="conv_session_orch_crafter",
+        status=InstanceStatus.RUNNING,
+    )
+
+    subagents = service.list_session_subagents("session-orch")
+
+    assert len(subagents) == 1
+    assert subagents[0]["instance_id"] == "inst-crafter"
+    assert subagents[0]["role_id"] == "Crafter"
+    assert subagents[0]["run_id"] == "run-orch"
+    assert subagents[0]["subagent_kind"] == "orchestration"
+    assert subagents[0]["interactive"] is True
+    assert subagents[0]["deletable"] is False
+    assert subagents[0]["run_status"] == "running"

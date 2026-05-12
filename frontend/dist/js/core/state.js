@@ -42,7 +42,6 @@ export const state = {
     selectedRoleId: null,
     coordinatorRoleId: null,
     mainAgentRoleId: null,
-    rightRailExpanded: true,
 };
 
 export function setCoordinatorRoleId(roleId) {
@@ -396,12 +395,6 @@ export const els = {
     promptInput: document.getElementById('prompt-input'),
     sendBtn: document.getElementById('send-btn'),
     stopBtn: document.getElementById('stop-btn'),
-    systemLogs: document.getElementById('system-logs'),
-    toggleInspector: document.getElementById('toggle-inspector'),
-    inspectorPanel: document.getElementById('rail-inspector'),
     toggleSidebar: document.getElementById('toggle-sidebar'),
     sidebar: document.querySelector('.sidebar'),
-    toggleSubagents: document.getElementById('toggle-subagents'),
-    rightRail: document.getElementById('right-rail'),
-    rightRailResizer: document.getElementById('right-rail-resizer'),
 };

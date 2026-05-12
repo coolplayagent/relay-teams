@@ -140,6 +140,43 @@ def test_upsert_preserves_existing_lifecycle_when_not_explicit(
     assert refreshed.parent_instance_id == "inst-new-parent"
 
 
+def test_repository_lists_instances_by_session_ids(tmp_path: Path) -> None:
+    repository = AgentInstanceRepository(tmp_path / "agent_instances_batch.db")
+    repository.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        status=InstanceStatus.IDLE,
+    )
+    repository.upsert_instance(
+        run_id="run-2",
+        trace_id="run-2",
+        session_id="session-2",
+        instance_id="inst-2",
+        role_id="reviewer",
+        workspace_id="workspace-1",
+        conversation_id="conversation-2",
+        status=InstanceStatus.RUNNING,
+    )
+
+    records_by_session = repository.list_by_session_ids(
+        ("session-1", "session-2", "missing-session")
+    )
+
+    assert repository.list_by_session_ids(()) == {}
+    assert [record.instance_id for record in records_by_session["session-1"]] == [
+        "inst-1"
+    ]
+    assert [record.instance_id for record in records_by_session["session-2"]] == [
+        "inst-2"
+    ]
+    assert records_by_session["missing-session"] == ()
+
+
 @pytest.mark.asyncio
 async def test_async_repository_methods_use_direct_sqlite_paths(
     tmp_path: Path,
@@ -199,6 +236,16 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
             record.instance_id
             for record in await repository.list_by_session_async("session-1")
         ] == ["inst-coordinator", "inst-reviewer", "inst-ephemeral"]
+        records_by_session = await repository.list_by_session_ids_async(
+            ("session-1", "missing-session")
+        )
+        assert await repository.list_by_session_ids_async(()) == {}
+        assert [record.instance_id for record in records_by_session["session-1"]] == [
+            "inst-coordinator",
+            "inst-reviewer",
+            "inst-ephemeral",
+        ]
+        assert records_by_session["missing-session"] == ()
         assert [
             record.instance_id
             for record in await repository.list_running_async("run-1")

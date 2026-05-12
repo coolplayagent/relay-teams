@@ -410,6 +410,7 @@ export function syncStreamingCursor(textEl, active) {
     if (existingCursor) {
         existingCursor.remove();
     }
+    syncStreamingMessageState(textEl, active === true);
     if (!active || !textEl) return textEl;
 
     const cursor = document.createElement('span');
@@ -417,6 +418,32 @@ export function syncStreamingCursor(textEl, active) {
     cursor.setAttribute('aria-hidden', 'true');
     resolveStreamingCursorHost(textEl).appendChild(cursor);
     return textEl;
+}
+
+function syncStreamingMessageState(textEl, active) {
+    const message = textEl?.closest?.('.message') || null;
+    if (!message) {
+        return;
+    }
+    if (active) {
+        message.classList?.add?.('is-streaming');
+        message.querySelectorAll?.('.message-copy-actions').forEach(actions => {
+            actions.hidden = true;
+        });
+        return;
+    }
+    const stillStreaming = !!(
+        message.querySelector?.(`.${STREAMING_CURSOR_CLASS}`)
+        || message.querySelector?.('.msg-text[data-idle-cursor="true"]')
+        || Array.from(message.querySelectorAll?.('.thinking-block') || [])
+            .some(block => String(block.dataset?.streaming || '') === 'true')
+    );
+    if (!stillStreaming) {
+        message.classList?.remove?.('is-streaming');
+        message.querySelectorAll?.('.message-copy-actions').forEach(actions => {
+            actions.hidden = false;
+        });
+    }
 }
 
 function roleClassName(role, label) {

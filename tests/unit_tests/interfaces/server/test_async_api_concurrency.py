@@ -6,6 +6,7 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
+from relay_teams.interfaces.server import async_call
 from relay_teams.interfaces.server.deps import (
     get_general_config_service,
     get_run_service,
@@ -72,7 +73,12 @@ class _AsyncSessionService:
             self._records[resolved_session_id] = record
             return record
 
-    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
+    async def list_sessions_async(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[SessionRecord, ...]:
+        _ = force_refresh
         return await self.list_sessions()
 
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
@@ -254,3 +260,16 @@ async def test_session_run_and_tool_call_routes_handle_concurrent_requests() -> 
     assert sorted(run_service.started_run_ids) == sorted(run_ids)
     assert len(run_service.injected_messages) == request_count
     assert len(run_service.resolved_tool_approvals) == request_count
+
+
+def test_route_work_env_resolver_ignores_invalid_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RELAY_TEAMS_TEST_WORKERS", "many")
+    assert async_call._resolve_positive_int_env("RELAY_TEAMS_TEST_WORKERS", 8) == 8
+
+    monkeypatch.setenv("RELAY_TEAMS_TEST_WORKERS", "-1")
+    assert async_call._resolve_positive_int_env("RELAY_TEAMS_TEST_WORKERS", 8) == 8
+
+    monkeypatch.setenv("RELAY_TEAMS_TEST_WORKERS", "12")
+    assert async_call._resolve_positive_int_env("RELAY_TEAMS_TEST_WORKERS", 8) == 12

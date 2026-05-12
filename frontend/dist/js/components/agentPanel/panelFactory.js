@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/agentPanel/panelFactory.js
  * Panel DOM factory and inject-message bindings.
  */

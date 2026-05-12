@@ -115,6 +115,43 @@ console.log(JSON.stringify({
     }
 
 
+def test_load_session_rounds_serializes_forced_initial_and_timeline_fetches(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.__initialRoundsPage = {
+    items: [{ run_id: 'run-2', created_at: '2026-04-25T11:02:00' }],
+    has_more: false,
+    next_cursor: null,
+};
+globalThis.__timelineRoundsPage = {
+    items: [
+        { run_id: 'run-1', created_at: '2026-04-25T11:01:00' },
+        { run_id: 'run-2', created_at: '2026-04-25T11:02:00' },
+    ],
+    has_more: false,
+    next_cursor: null,
+};
+
+const { loadSessionRounds } = await import('./timeline.mjs');
+
+await loadSessionRounds('session-1', { render: false, forceRefresh: true });
+
+console.log(JSON.stringify({
+    initialFetches: globalThis.__initialRoundFetches,
+    timelineFetches: globalThis.__timelineRoundFetches,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "initialFetches": [{"summary": False, "forceRefresh": True}],
+        "timelineFetches": [{"forceRefresh": True}],
+    }
+
+
 def test_load_session_rounds_falls_back_when_timeline_page_fails(
     tmp_path: Path,
 ) -> None:
@@ -396,12 +433,18 @@ console.log(JSON.stringify({
 
     assert payload == {
         "afterSummary": {
-            "initialFetches": [{"summary": True}, {"summary": False}],
+            "initialFetches": [
+                {"summary": True, "forceRefresh": False},
+                {"summary": False, "forceRefresh": False},
+            ],
             "currentRunIds": ["run-1"],
             "hasCoordinatorMessages": False,
         },
         "afterFull": {
-            "initialFetches": [{"summary": True}, {"summary": False}],
+            "initialFetches": [
+                {"summary": True, "forceRefresh": False},
+                {"summary": False, "forceRefresh": False},
+            ],
             "hasCoordinatorMessages": True,
         },
     }
@@ -1037,7 +1080,10 @@ export async function fetchInitialRoundsPage(_sessionId, options = {}) {
     if (!Array.isArray(globalThis.__initialRoundFetches)) {
         globalThis.__initialRoundFetches = [];
     }
-    globalThis.__initialRoundFetches.push({ summary: options.summary === true });
+    globalThis.__initialRoundFetches.push({
+        summary: options.summary === true,
+        forceRefresh: options.forceRefresh === true,
+    });
     if (options.summary === true && globalThis.__summaryRoundsPage) {
         return globalThis.__summaryRoundsPage;
     }
@@ -1047,7 +1093,13 @@ export async function fetchInitialRoundsPage(_sessionId, options = {}) {
     return globalThis.__initialRoundsPage || { items: [] };
 }
 
-export async function fetchTimelineRoundsPage() {
+export async function fetchTimelineRoundsPage(_sessionId, options = {}) {
+    if (!Array.isArray(globalThis.__timelineRoundFetches)) {
+        globalThis.__timelineRoundFetches = [];
+    }
+    globalThis.__timelineRoundFetches.push({
+        forceRefresh: options.forceRefresh === true,
+    });
     if (globalThis.__timelineRoundsPagePromise) {
         return await globalThis.__timelineRoundsPagePromise;
     }

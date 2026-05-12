@@ -151,7 +151,9 @@ def test_voice_input_button_and_assets_are_linked() -> None:
     assert "padding: 18px 312px 16px 18px;" in interface_css
     assert "padding: 18px 204px 18px 16px;" in interface_css
     assert "padding: 22px 420px 64px 22px;" in new_session_css
-    assert "padding: 18px 204px 58px 18px;" in new_session_css
+    assert "padding: 18px 320px 58px 18px;" in new_session_css
+    assert "padding: 22px 22px 64px;" not in new_session_css
+    assert "padding: 18px 204px 58px 18px;" not in new_session_css
     assert (
         "#input-container:not(.is-new-session-draft-composer) #prompt-input"
         in voice_css
