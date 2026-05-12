@@ -4279,33 +4279,96 @@ Response: `StateMapResponse`
 ### Workspace TODO Board
 
 Workspace TODO board APIs are owned by the boards domain and are independent from
-external tracker state. Open GitHub issues and manual TODOs are board sources;
-pull requests are linked review/completion evidence. Board columns are Agent
-Teams state.
+external tracker state. Configured GitHub issue sources import TODOs. Local or
+manual TODO rows are no longer supported board items; if old data exists, board
+list, delta, and sync responses ignore it. Pull requests are linked
+review/completion evidence. Board columns are Agent Teams state.
 
-- `GET /api/boards/todos?workspace_id=...&include_archived=false` returns a full `BoardTodoBoardResponse`.
-- `GET /api/boards/todos:changes?workspace_id=...&include_archived=false&after_revision=...` returns a `BoardTodoDeltaResponse`.
-- `POST /api/boards/todos:sync` performs a force-full GitHub sync and returns a full board response.
-- `POST /api/boards/todos:sync-changes` performs an incremental GitHub issue/PR sync when a workspace cursor exists and returns a delta response. `force_full=true` performs the same open-issue reconciliation as `/api/boards/todos:sync`.
-- `POST /api/boards/todos` creates a manual local TODO.
-- `POST /api/boards/todos/{todo_id}:start` creates a dedicated session/run and moves the item to `in_progress`.
+- `GET /api/boards/todos?workspace_id=...&include_archived=false` returns a full `BoardTodoBoardResponse`, including `source_groups` for grouped board rendering.
+- `GET /api/boards/todos:changes?workspace_id=...&include_archived=false&after_revision=...` returns a `BoardTodoDeltaResponse`, including the current `source_groups`.
+- `GET /api/boards/todo-sources?workspace_id=...` returns user-configurable external TODO sources for the resolved board workspace.
+- `POST /api/boards/todo-sources` creates a user-managed `github_issues` source.
+- `PATCH /api/boards/todo-sources/{source_id}` edits `display_name`, `repository_full_name`, or `enabled` for a user-managed source.
+- `DELETE /api/boards/todo-sources/{source_id}` deletes an unused user-managed source. Sources with imported TODOs must be disabled with `enabled=false` instead.
+- `POST /api/boards/todos:sync` performs a force-full sync across enabled GitHub issue sources and returns a full board response.
+- `POST /api/boards/todos:sync-changes` performs an incremental GitHub issue/PR sync against per-source cursors and returns a delta response. `force_full=true` performs the same open-issue reconciliation as `/api/boards/todos:sync`.
+- `POST /api/boards/todos/{todo_id}:preview-start` renders the default start prompt and runtime-control defaults for user review without changing status or creating a session/run.
+- `POST /api/boards/todos/{todo_id}:start` requires a non-empty `final_prompt` after user review, creates a dedicated session/run with the selected runtime controls, and moves the item to `in_progress`. `prompt` is accepted as a compatibility alias.
 - `POST /api/boards/todos/{todo_id}:request-changes` creates a new run in the bound session and moves the item back to `in_progress`.
+- `POST /api/boards/todos/{todo_id}:mark-done` accepts an optional reason and moves a `review` item to `done`; non-`review` items return `409`.
 - `POST /api/boards/todos/{todo_id}:archive` soft-deletes the item into `archived`.
 - `POST /api/boards/todos/{todo_id}:restore` restores an archived item to `todo`.
-- `POST /api/boards/todos/{todo_id}:link-pr` links an issue/manual item to a pull request.
+- `POST /api/boards/todos/{todo_id}:link-pr` links an imported issue item to a pull request.
+
+The first source settings/read or board sync bootstraps GitHub source
+configuration once per board workspace. If the root workspace git remote can be
+resolved to `owner/repo`, the backend creates one enabled `github_issues`
+source. If it cannot be resolved, the API returns diagnostics and no source is
+created; users can add sources manually. Once bootstrap has run, future syncs use
+the persisted source list and do not recreate deleted or disabled sources from
+the git remote.
+
+`source_groups` is a non-persisted display contract derived from configured
+external sources and current imported items. It contains one group per configured
+external source and may contain missing-source groups for existing imported items
+whose source setting is no longer present. There is no Manual pseudo group.
+Frontends may render `grouped` mode by nesting every status column under these
+groups, or `mixed` mode by showing status columns without group nesting while
+still displaying each card's source label.
+
+`preview-start` accepts optional `view_workspace_id` and returns
+`board_workspace_id`, `view_workspace_id`, `is_fork_view`,
+`forked_from_workspace_id`, the rendered `prompt`, and runtime defaults:
+`session_mode`, `normal_root_role_id`, `normal_mode_roles`,
+`orchestration_preset_id`, `orchestration_presets`, `yolo`, and `thinking`.
+The first phase may return empty role/preset option arrays when clients already
+load those option sets through the shared role and orchestration config APIs.
+
+`start` accepts `view_workspace_id`, `final_prompt`, `session_mode`,
+`normal_root_role_id`, `orchestration_preset_id`, `yolo`, and `thinking`.
+For fork views, `view_workspace_id` selects the workspace where the run session
+is created while the TODO item still belongs to the resolved root board.
+`session_mode = normal` applies `normal_root_role_id` to the created session and
+run `target_role_id`; `session_mode = orchestration` applies
+`orchestration_preset_id` to the created session and does not set a normal target
+role. `thinking.enabled` and `thinking.effort` are passed to the run intent.
 
 `BoardTodoItem.status` is one of `todo`, `in_progress`, `review`, `done`, or
-`archived`. Run completion moves bound items to `review`; linked GitHub pull
-request merges move non-archived items to `done`. If the bound session is
-deleted, non-archived and non-`done` items return to `todo` and clear stale
-session/run references.
+`archived`. Run completion moves bound items to `review`; users can mark
+review items done after manual acceptance; linked GitHub pull request merges
+move non-archived items to `done`. Bound `in_progress` items do
+not automatically regress to `todo` for `failed`, `stopped`, `paused`,
+`stopping`, `queued`, or `running` run runtime states while their runtime row
+still exists. A missing bound run is treated as stale and returns to `todo`
+with cleared session/run references. If the bound session is deleted,
+non-archived and non-`done` items return to `todo` and clear stale session/run
+references.
+
+Board item responses include non-persisted runtime display fields when a bound
+run runtime exists: `run_status`, `run_phase`, `run_recoverable`, and
+`run_last_error`. These fields are derived from `run_runtime` and are not stored
+in `board_todo_items`.
 
 `BoardTodoItem.updated_at` is the local board row update time used for
 revision/delta bookkeeping and status-machine mutations. GitHub issue items also
 include `source_updated_at`, copied from GitHub issue `updated_at`; UI time
 sorting uses `source_updated_at || updated_at` so issue ordering follows GitHub
-activity rather than local sync/write time. Manual TODOs leave
-`source_updated_at` unset.
+activity rather than local sync/write time.
+
+`workspace_id` in board API requests is the current view workspace. If the view
+workspace is a `git_worktree` fork, board sources and sync cursors resolve to the
+root board workspace. Board, delta, source settings, and prompt preview responses
+include `board_workspace_id`, `view_workspace_id`,
+`is_fork_view`, and `forked_from_workspace_id` so clients can cache settings by
+the root board while preserving the current view.
+
+On first board load, source settings load, or sync, if source bootstrap has not
+run and the root workspace git remote resolves to `owner/repo`, the service
+creates an enabled persisted `github_issues` source for that repository. After
+creation, sync uses the persisted source configuration as the source of truth;
+users can edit the repo, disable the source, delete unused sources, or add
+another source in settings. If no GitHub remote can be resolved, the API returns
+diagnostics and no source is created.
 
 `BoardTodoBoardResponse` includes the current `revision`. Delta responses include
 `changed_items`, `removed_todo_ids`, `status_counts`, diagnostics, `synced_at`,
@@ -4320,8 +4383,7 @@ archived unless they already have a merged linked PR, in which case they move to
 truth and archives previously active GitHub issue items that are no longer open,
 with status reason `GitHub issue no longer open`. If GitHub later reports the
 same issue as open, sync restores items archived by GitHub closed/non-open
-reconciliation to `todo`; manually archived rows still require explicit
-`restore`.
+reconciliation to `todo`; user-archived rows still require explicit `restore`.
 
 Domain module: `src/relay_teams/boards/`
 

@@ -9,16 +9,25 @@ from typing import cast
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from relay_teams.boards import (
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
-    BoardTodoCreateInput,
     BoardTodoDeltaResponse,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
+    BoardTodoMarkDoneRequest,
+    BoardTodoPreviewStartRequest,
+    BoardTodoPreviewStartResponse,
     BoardTodoService,
+    BoardTodoSource,
+    BoardTodoSourceCreateRequest,
+    BoardTodoSourceDeleteResponse,
+    BoardTodoSourceKind,
     BoardTodoStartRequest,
+    BoardTodoSourceSettingsResponse,
+    BoardTodoSourceUpdateRequest,
     BoardTodoStatusUpdateRequest,
     BoardTodoSyncChangesRequest,
     BoardTodoSyncRequest,
@@ -68,15 +77,20 @@ def _load_boards_router_module() -> types.ModuleType:
 
 _BOARDS_ROUTER = _load_boards_router_module()
 archive_board_todo = _BOARDS_ROUTER.archive_board_todo
-create_board_todo = _BOARDS_ROUTER.create_board_todo
+create_board_todo_source = _BOARDS_ROUTER.create_board_todo_source
+delete_board_todo_source = _BOARDS_ROUTER.delete_board_todo_source
 link_board_todo_pull_request = _BOARDS_ROUTER.link_board_todo_pull_request
+mark_board_todo_done = _BOARDS_ROUTER.mark_board_todo_done
 list_board_todo_changes = _BOARDS_ROUTER.list_board_todo_changes
+list_board_todo_sources = _BOARDS_ROUTER.list_board_todo_sources
 list_board_todos = _BOARDS_ROUTER.list_board_todos
+preview_start_board_todo = _BOARDS_ROUTER.preview_start_board_todo
 request_board_todo_changes = _BOARDS_ROUTER.request_board_todo_changes
 restore_board_todo = _BOARDS_ROUTER.restore_board_todo
 start_board_todo = _BOARDS_ROUTER.start_board_todo
 sync_board_todo_changes = _BOARDS_ROUTER.sync_board_todo_changes
 sync_board_todos = _BOARDS_ROUTER.sync_board_todos
+update_board_todo_source = _BOARDS_ROUTER.update_board_todo_source
 
 
 @pytest.mark.asyncio
@@ -108,22 +122,48 @@ async def test_board_todo_router_delegates_to_service() -> None:
         ),
         service=route_service,
     )
-    created = await create_board_todo(
-        request=BoardTodoCreateInput(
+    sources = await list_board_todo_sources(
+        service=route_service,
+        workspace_id="workspace",
+    )
+    created_source = await create_board_todo_source(
+        request=BoardTodoSourceCreateRequest(
             workspace_id="workspace",
-            title="Manual",
-            body="Body",
+            display_name="Configured",
+            repository_full_name="owner/configured",
         ),
+        service=route_service,
+    )
+    updated_source = await update_board_todo_source(
+        source_id="bsrc_github",
+        request=BoardTodoSourceUpdateRequest(
+            workspace_id="workspace",
+            repository_full_name="owner/updated",
+        ),
+        service=route_service,
+    )
+    deleted_source = await delete_board_todo_source(
+        source_id="bsrc_github",
+        service=route_service,
+    )
+    preview = await preview_start_board_todo(
+        todo_id="todo_1",
+        request=BoardTodoPreviewStartRequest(view_workspace_id="workspace"),
         service=route_service,
     )
     started = await start_board_todo(
         todo_id="todo_1",
-        request=BoardTodoStartRequest(prompt="Process", yolo=False),
+        request=BoardTodoStartRequest(final_prompt="Process", yolo=False),
         service=route_service,
     )
     requested = await request_board_todo_changes(
         todo_id="todo_1",
         request=BoardTodoStatusUpdateRequest(feedback="Revise", yolo=True),
+        service=route_service,
+    )
+    marked_done = await mark_board_todo_done(
+        todo_id="todo_1",
+        request=BoardTodoMarkDoneRequest(reason="Looks good"),
         service=route_service,
     )
     archived = await archive_board_todo(
@@ -145,9 +185,14 @@ async def test_board_todo_router_delegates_to_service() -> None:
     assert changes.revision == 7
     assert synced.synced_at == _NOW
     assert synced_changes.changed_items == (_item(),)
-    assert created.title == "Manual"
+    assert sources.board_workspace_id == "workspace"
+    assert created_source.repository_full_name == "owner/configured"
+    assert updated_source.repository_full_name == "owner/updated"
+    assert deleted_source.deleted is True
+    assert preview.prompt == "Preview prompt"
     assert started.status == BoardTodoStatus.IN_PROGRESS
     assert requested.last_status_reason == "Changes requested by user"
+    assert marked_done.status == BoardTodoStatus.DONE
     assert archived.status == BoardTodoStatus.ARCHIVED
     assert restored.status == BoardTodoStatus.TODO
     assert linked.linked_pr_number == 12
@@ -156,13 +201,42 @@ async def test_board_todo_router_delegates_to_service() -> None:
         "list_board_changes:workspace:False:3",
         "sync_board:workspace:True",
         "sync_board_changes:workspace:True:4:True",
-        "create_todo:workspace:Manual",
+        "list_sources:workspace",
+        "create_source:workspace:owner/configured",
+        "update_source:bsrc_github:owner/updated",
+        "delete_source:bsrc_github",
+        "preview_start_todo:todo_1:workspace",
         "start_todo:todo_1:Process:False",
         "request_changes:todo_1:Revise:True",
+        "mark_done:todo_1:Looks good",
         "archive_todo:todo_1:Done elsewhere",
         "restore_todo:todo_1",
         "link_pull_request:todo_1:12",
     ]
+
+
+def test_board_todo_router_does_not_register_manual_create_route() -> None:
+    post_todo_routes = [
+        route
+        for route in _BOARDS_ROUTER.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/boards/todos"
+        and "POST" in route.methods
+    ]
+
+    assert post_todo_routes == []
+
+
+def test_board_todo_router_registers_mark_done_route() -> None:
+    mark_done_routes = [
+        route
+        for route in _BOARDS_ROUTER.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/boards/todos/{todo_id}:mark-done"
+        and "POST" in route.methods
+    ]
+
+    assert len(mark_done_routes) == 1
 
 
 @pytest.mark.asyncio
@@ -184,6 +258,37 @@ async def test_board_todo_router_maps_service_key_errors() -> None:
             request=BoardTodoSyncChangesRequest(workspace_id="workspace"),
             service=route_service,
         )
+    with pytest.raises(HTTPException) as list_sources_error:
+        await list_board_todo_sources(
+            service=route_service,
+            workspace_id="workspace",
+        )
+    with pytest.raises(HTTPException) as create_source_error:
+        await create_board_todo_source(
+            request=BoardTodoSourceCreateRequest(
+                workspace_id="workspace",
+                display_name="Configured",
+                repository_full_name="owner/repo",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as update_source_error:
+        await update_board_todo_source(
+            source_id="bsrc_github",
+            request=BoardTodoSourceUpdateRequest(workspace_id="workspace"),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as delete_source_error:
+        await delete_board_todo_source(
+            source_id="bsrc_github",
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as preview_error:
+        await preview_start_board_todo(
+            todo_id="todo_1",
+            request=BoardTodoPreviewStartRequest(),
+            service=route_service,
+        )
     with pytest.raises(HTTPException) as start_error:
         await start_board_todo(
             todo_id="todo_1",
@@ -194,6 +299,12 @@ async def test_board_todo_router_maps_service_key_errors() -> None:
         await request_board_todo_changes(
             todo_id="todo_1",
             request=BoardTodoStatusUpdateRequest(feedback="Again"),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as mark_done_error:
+        await mark_board_todo_done(
+            todo_id="todo_1",
+            request=BoardTodoMarkDoneRequest(),
             service=route_service,
         )
     with pytest.raises(HTTPException) as archive_error:
@@ -215,8 +326,14 @@ async def test_board_todo_router_maps_service_key_errors() -> None:
     assert changes_error.value.status_code == 404
     assert sync_error.value.status_code == 404
     assert sync_changes_error.value.status_code == 404
+    assert list_sources_error.value.status_code == 404
+    assert create_source_error.value.status_code == 404
+    assert update_source_error.value.status_code == 404
+    assert delete_source_error.value.status_code == 404
+    assert preview_error.value.status_code == 404
     assert start_error.value.status_code == 404
     assert request_error.value.status_code == 404
+    assert mark_done_error.value.status_code == 404
     assert archive_error.value.status_code == 404
     assert restore_error.value.status_code == 404
     assert link_error.value.status_code == 404
@@ -241,9 +358,35 @@ async def test_board_todo_router_maps_service_value_errors() -> None:
             request=BoardTodoSyncChangesRequest(workspace_id="workspace"),
             service=route_service,
         )
-    with pytest.raises(HTTPException) as create_error:
-        await create_board_todo(
-            request=BoardTodoCreateInput(workspace_id="workspace", title="Manual"),
+    with pytest.raises(HTTPException) as list_sources_error:
+        await list_board_todo_sources(
+            service=route_service,
+            workspace_id="workspace",
+        )
+    with pytest.raises(HTTPException) as create_source_error:
+        await create_board_todo_source(
+            request=BoardTodoSourceCreateRequest(
+                workspace_id="workspace",
+                display_name="Configured",
+                repository_full_name="owner/repo",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as update_source_error:
+        await update_board_todo_source(
+            source_id="bsrc_github",
+            request=BoardTodoSourceUpdateRequest(workspace_id="workspace"),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as delete_source_error:
+        await delete_board_todo_source(
+            source_id="bsrc_github",
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as preview_error:
+        await preview_start_board_todo(
+            todo_id="todo_1",
+            request=BoardTodoPreviewStartRequest(),
             service=route_service,
         )
     with pytest.raises(HTTPException) as start_error:
@@ -256,6 +399,12 @@ async def test_board_todo_router_maps_service_value_errors() -> None:
         await request_board_todo_changes(
             todo_id="todo_1",
             request=BoardTodoStatusUpdateRequest(feedback="Again"),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as mark_done_error:
+        await mark_board_todo_done(
+            todo_id="todo_1",
+            request=BoardTodoMarkDoneRequest(),
             service=route_service,
         )
     with pytest.raises(HTTPException) as restore_error:
@@ -271,9 +420,14 @@ async def test_board_todo_router_maps_service_value_errors() -> None:
     assert changes_error.value.status_code == 422
     assert sync_error.value.status_code == 422
     assert sync_changes_error.value.status_code == 422
-    assert create_error.value.status_code == 422
+    assert list_sources_error.value.status_code == 422
+    assert create_source_error.value.status_code == 422
+    assert update_source_error.value.status_code == 422
+    assert delete_source_error.value.status_code == 409
+    assert preview_error.value.status_code == 409
     assert start_error.value.status_code == 409
     assert request_error.value.status_code == 409
+    assert mark_done_error.value.status_code == 409
     assert restore_error.value.status_code == 409
     assert link_error.value.status_code == 409
 
@@ -297,6 +451,23 @@ def _item(
         repository_full_name="owner/repo",
         issue_number=1,
         html_url="https://github.com/owner/repo/issues/1",
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _source(
+    *,
+    repository_full_name: str = "owner/repo",
+) -> BoardTodoSource:
+    return BoardTodoSource(
+        source_id="bsrc_github",
+        workspace_id="workspace",
+        kind=BoardTodoSourceKind.GITHUB_ISSUES,
+        provider=BoardTodoSourceProvider.GITHUB,
+        display_name="GitHub",
+        enabled=True,
+        repository_full_name=repository_full_name,
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -369,9 +540,62 @@ class _BoardTodoRouteService:
             revision=9,
         )
 
-    async def create_todo(self, request: BoardTodoCreateInput) -> BoardTodoItem:
-        self.calls.append(f"create_todo:{request.workspace_id}:{request.title}")
-        return _item(title=request.title)
+    async def list_sources(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoSourceSettingsResponse:
+        self.calls.append(f"list_sources:{workspace_id}")
+        return BoardTodoSourceSettingsResponse(
+            workspace_id=workspace_id,
+            board_workspace_id=workspace_id,
+            view_workspace_id=workspace_id,
+            sources=(),
+        )
+
+    async def create_source(
+        self,
+        payload: BoardTodoSourceCreateRequest,
+    ) -> BoardTodoSource:
+        self.calls.append(
+            f"create_source:{payload.workspace_id}:{payload.repository_full_name}"
+        )
+        return _source(
+            repository_full_name=payload.repository_full_name or "owner/repo"
+        )
+
+    async def update_source(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoSourceUpdateRequest,
+    ) -> BoardTodoSource:
+        self.calls.append(f"update_source:{source_id}:{payload.repository_full_name}")
+        return _source(
+            repository_full_name=payload.repository_full_name or "owner/repo"
+        )
+
+    async def delete_source(
+        self,
+        *,
+        source_id: str,
+    ) -> BoardTodoSourceDeleteResponse:
+        self.calls.append(f"delete_source:{source_id}")
+        return BoardTodoSourceDeleteResponse(deleted=True, source_id=source_id)
+
+    async def preview_start_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewStartRequest,
+    ) -> BoardTodoPreviewStartResponse:
+        self.calls.append(f"preview_start_todo:{todo_id}:{payload.view_workspace_id}")
+        return BoardTodoPreviewStartResponse(
+            todo_id=todo_id,
+            board_workspace_id="workspace",
+            view_workspace_id=payload.view_workspace_id or "workspace",
+            prompt="Preview prompt",
+        )
 
     async def start_todo(
         self,
@@ -379,7 +603,7 @@ class _BoardTodoRouteService:
         todo_id: str,
         payload: BoardTodoStartRequest,
     ) -> BoardTodoItem:
-        self.calls.append(f"start_todo:{todo_id}:{payload.prompt}:{payload.yolo}")
+        self.calls.append(f"start_todo:{todo_id}:{payload.final_prompt}:{payload.yolo}")
         return _item(status=BoardTodoStatus.IN_PROGRESS)
 
     async def request_changes(
@@ -393,6 +617,17 @@ class _BoardTodoRouteService:
         )
         return _item().model_copy(
             update={"last_status_reason": "Changes requested by user"}
+        )
+
+    async def mark_done(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoMarkDoneRequest,
+    ) -> BoardTodoItem:
+        self.calls.append(f"mark_done:{todo_id}:{payload.reason}")
+        return _item(status=BoardTodoStatus.DONE).model_copy(
+            update={"last_status_reason": payload.reason}
         )
 
     async def archive_todo(
@@ -460,7 +695,40 @@ class _FailingBoardTodoRouteService:
     ) -> BoardTodoDeltaResponse:
         raise self._error
 
-    async def create_todo(self, request: BoardTodoCreateInput) -> BoardTodoItem:
+    async def list_sources(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoSourceSettingsResponse:
+        raise self._error
+
+    async def create_source(
+        self,
+        payload: BoardTodoSourceCreateRequest,
+    ) -> BoardTodoSource:
+        raise self._error
+
+    async def update_source(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoSourceUpdateRequest,
+    ) -> BoardTodoSource:
+        raise self._error
+
+    async def delete_source(
+        self,
+        *,
+        source_id: str,
+    ) -> BoardTodoSourceDeleteResponse:
+        raise self._error
+
+    async def preview_start_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewStartRequest,
+    ) -> BoardTodoPreviewStartResponse:
         raise self._error
 
     async def start_todo(
@@ -476,6 +744,14 @@ class _FailingBoardTodoRouteService:
         *,
         todo_id: str,
         payload: BoardTodoStatusUpdateRequest,
+    ) -> BoardTodoItem:
+        raise self._error
+
+    async def mark_done(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoMarkDoneRequest,
     ) -> BoardTodoItem:
         raise self._error
 

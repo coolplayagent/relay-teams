@@ -4,13 +4,12 @@
  */
 import {
     archiveBoardTodo,
-    createBoardTodo,
     fetchBoardTodoChanges,
     fetchBoardTodos,
     linkBoardTodoPullRequest,
+    markBoardTodoDone,
     requestBoardTodoChanges,
     restoreBoardTodo,
-    startBoardTodo,
     syncBoardTodoChanges,
     syncBoardTodos,
     fetchWorkspaces,
@@ -19,12 +18,13 @@ import { state } from '../../core/state.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { showConfirmDialog, showFormDialog, showToast } from '../../utils/feedback.js';
 import { escapeHtml } from '../newSessionDraftIcons.js';
+import { reviewAndStartBoardTodo } from './todoHandoff.js';
+import { openBoardTodoSourceSettings } from './todoSourceSettings.js';
 
 const ROOT_ID = 'board-todo-root';
 const CACHE_STORAGE_KEY = 'agent_teams_board_todo_cache_v3';
+const DISPLAY_MODE_STORAGE_KEY = 'agent_teams_board_todo_display_modes_v1';
 const AUTO_SYNC_INTERVAL_MS = 60 * 60 * 1000;
-const PROGRESSIVE_BATCH_SIZE = 8;
-const PROGRESSIVE_FRAME_MS = 120;
 const DETAIL_BODY_PAGE_CHARS = 2800;
 const STATUSES = ['todo', 'in_progress', 'review', 'done'];
 const STATUS_CONFIG = {
@@ -40,11 +40,15 @@ const SORT_OPTIONS = [
     { value: 'title_asc', labelKey: 'board_todos.sort.title_asc' },
     { value: 'title_desc', labelKey: 'board_todos.sort.title_desc' },
 ];
+const DISPLAY_MODES = {
+    GROUPED: 'grouped',
+    MIXED: 'mixed',
+};
 
 const boardCache = new Map();
-const stagedCounts = new Map();
 const columnViews = new Map();
-const enteringTodoIds = new Set();
+const displayModes = new Map();
+const collapsedGroups = new Set();
 const boardLoadRequests = new Map();
 const boardSyncModes = new Map();
 const autoSyncTimes = new Map();
@@ -55,9 +59,9 @@ let loadState = 'idle';
 let loadError = '';
 let listenersBound = false;
 let cacheHydrated = false;
+let displayPreferencesHydrated = false;
 let detailTodoId = '';
 let detailBodyPage = 1;
-let progressiveRenderToken = 0;
 let boardMountToken = 0;
 
 export function mountBoardTodoBoard({ preferredWorkspaceId = '' } = {}) {
@@ -68,6 +72,7 @@ export function mountBoardTodoBoard({ preferredWorkspaceId = '' } = {}) {
     }
     bindListeners();
     hydrateBoardCache();
+    hydrateBoardDisplayPreferences();
     const preferred = String(preferredWorkspaceId || state.pendingNewSessionWorkspaceId || state.currentWorkspaceId || '').trim();
     if (preferred) {
         selectedWorkspaceId = preferred;
@@ -354,7 +359,7 @@ function renderBoard(root) {
                         <span>${escapeHtml(t('board_todos.show_archived'))}</span>
                     </label>
                     ${renderSyncButton()}
-                    <button class="board-todos-primary-btn" type="button" data-board-todo-action="create">${escapeHtml(t('board_todos.action.new'))}</button>
+                    ${renderSettingsToolbarButton()}
                 </div>
             </div>
             <div data-board-todo-diagnostics>${renderDiagnostics(board)}</div>
@@ -479,7 +484,7 @@ function renderBoardContent({ board }) {
     }
     return `
         <div class="board-todos-columns" role="list">
-            ${STATUSES.map(status => renderColumn(status, items)).join('')}
+            ${STATUSES.map(status => renderColumn(status, items, board)).join('')}
         </div>
     `;
 }
@@ -502,21 +507,74 @@ function renderArchivedContent(items) {
     `;
 }
 
-function renderColumn(status, items) {
+function renderColumn(status, items, board = null) {
     const config = STATUS_CONFIG[status] || STATUS_CONFIG.todo;
     const columnItems = items.filter(item => String(item?.status || '') === status);
     const filteredItems = filterAndSortColumnItems(status, columnItems);
     const visibleItems = stagedItems(status, filteredItems);
+    const grouped = currentDisplayMode(board) === DISPLAY_MODES.GROUPED;
     return `
         <section class="board-todos-column is-${escapeHtml(config.tone)}" role="listitem" data-board-todo-column="${escapeHtml(status)}">
             <header class="board-todos-column-head">
-                <span class="board-todos-dot"></span>
-                <strong>${escapeHtml(t(config.titleKey))}</strong>
-                <span data-board-todo-count="${escapeHtml(status)}">${renderColumnCount(filteredItems.length, columnItems.length)}</span>
+                <div class="board-todos-column-title">
+                    <span class="board-todos-dot"></span>
+                    <strong>${escapeHtml(t(config.titleKey))}</strong>
+                    <span data-board-todo-count="${escapeHtml(status)}">${renderColumnCount(filteredItems.length, columnItems.length)}</span>
+                </div>
             </header>
             ${renderColumnControls(status)}
             <div class="board-todos-card-list" data-board-todo-list="${escapeHtml(status)}">
-                ${visibleItems.map(renderCard).join('') || renderColumnEmptyOrSkeleton(filteredItems)}
+                ${grouped
+                    ? renderGroupedColumn({ status, board, allItems: columnItems, filteredItems, visibleItems })
+                    : visibleItems.map(renderCard).join('') || renderColumnEmptyOrSkeleton(filteredItems)}
+            </div>
+        </section>
+    `;
+}
+
+function renderGroupedColumn({ status, board, allItems, filteredItems, visibleItems }) {
+    const groups = sourceGroupsForBoard(board);
+    if (!groups.length && filteredItems.length) {
+        return visibleItems.map(renderCard).join('') || renderColumnEmptyOrSkeleton(filteredItems);
+    }
+    const groupEntries = groups
+        .map(group => {
+            const groupItems = visibleItems.filter(item => sourceGroupIdForItem(item, groups) === group.group_id);
+            const total = filteredItems.filter(item => sourceGroupIdForItem(item, groups) === group.group_id).length;
+            const rawTotal = allItems.filter(item => sourceGroupIdForItem(item, groups) === group.group_id).length;
+            if (!total && !rawTotal) {
+                return '';
+            }
+            return renderSourceGroup({ status, group, groupItems, total, rawTotal });
+        })
+        .filter(Boolean);
+    if (!groupEntries.length) {
+        return renderColumnEmptyOrSkeleton(filteredItems);
+    }
+    return groupEntries.join('');
+}
+
+function renderSourceGroup({ status, group, groupItems, total, rawTotal }) {
+    const collapsed = total === 0 || isSourceGroupCollapsed(status, group.group_id);
+    return `
+        <section class="board-todos-source-group ${collapsed ? 'is-collapsed' : ''}" data-source-group="${escapeHtml(group.group_id)}">
+            <header class="board-todos-source-group-head">
+                <button
+                    type="button"
+                    data-board-todo-action="toggle-source-group"
+                    data-status="${escapeHtml(status)}"
+                    data-group-id="${escapeHtml(group.group_id)}"
+                    aria-expanded="${collapsed ? 'false' : 'true'}"
+                >
+                    <span class="board-todos-source-group-chevron" aria-hidden="true">${renderIcon('chevron-down')}</span>
+                    <span>${escapeHtml(group.display_name || sourceLabelFromGroup(group))}</span>
+                    <span>${renderColumnCount(total, rawTotal)}</span>
+                </button>
+            </header>
+            <div class="board-todos-source-group-list" aria-hidden="${collapsed ? 'true' : 'false'}">
+                <div class="board-todos-source-group-list-inner">
+                    ${groupItems.map(renderCard).join('')}
+                </div>
             </div>
         </section>
     `;
@@ -614,12 +672,7 @@ function renderArchiveEmptyOrSkeleton(archivedItems) {
 }
 
 function stagedItems(status, items) {
-    const staged = stagedCounts.get(currentCacheKey());
-    if (!staged) {
-        return items;
-    }
-    const limit = Number(staged[status] || 0);
-    return items.slice(0, limit);
+    return items;
 }
 
 function renderCard(item) {
@@ -627,14 +680,14 @@ function renderCard(item) {
     const sessionId = String(item?.session_id || '');
     const sourceLabel = formatSourceLabel(item);
     const htmlUrl = String(item?.html_url || '').trim();
-    const enteringClass = enteringTodoIds.has(todoId) ? ' is-entering' : '';
+    const runtimeBadge = renderRuntimeBadge(item);
     const prLink = item?.linked_pr_url
         ? `<a href="${escapeHtml(item.linked_pr_url)}" target="_blank" rel="noreferrer">PR #${escapeHtml(String(item.linked_pr_number || ''))}</a>`
         : item?.linked_pr_number
             ? `PR #${escapeHtml(String(item.linked_pr_number))}`
             : t('board_todos.value.no_pr');
     return `
-        <article class="board-todos-card${enteringClass}" data-board-todo-card="${escapeHtml(todoId)}">
+        <article class="board-todos-card" data-board-todo-card="${escapeHtml(todoId)}">
             <div class="board-todos-card-top">
                 <div class="board-todos-card-meta">
                     <span>${escapeHtml(sourceLabel)}</span>
@@ -646,6 +699,7 @@ function renderCard(item) {
                 </div>
             </div>
             <h3>${escapeHtml(item?.title || '')}</h3>
+            ${runtimeBadge}
             ${item?.body ? `<p>${escapeHtml(truncateText(item.body, 96))}</p>` : ''}
             <div class="board-todos-card-links">
                 <span>${escapeHtml(t('board_todos.card.session'))}: ${sessionId ? escapeHtml(sessionId) : escapeHtml(t('board_todos.value.none'))}</span>
@@ -669,13 +723,63 @@ function formatSourceLabel(item) {
     if (sourceType === 'github_pull_request' && item?.pull_request_number) {
         return `${providerLabel || t('board_todos.source.local')} PR #${item.pull_request_number}`;
     }
-    if (sourceType === 'manual') {
-        return t('board_todos.source.manual');
-    }
     if (sourceType) {
         return providerLabel ? `${providerLabel} ${sourceType}` : sourceType;
     }
-    return t('board_todos.source.manual');
+    return t('board_todos.value.none');
+}
+
+function sourceGroupsForBoard(board) {
+    const groups = Array.isArray(board?.source_groups) ? board.source_groups : [];
+    const normalized = groups
+        .map(group => ({
+            group_id: String(group?.group_id || '').trim(),
+            source_id: String(group?.source_id || '').trim() || null,
+            kind: String(group?.kind || '').trim(),
+            display_name: String(group?.display_name || '').trim(),
+            repository_full_name: String(group?.repository_full_name || '').trim(),
+            enabled: group?.enabled !== false,
+        }))
+        .filter(group => group.group_id && group.display_name);
+    return normalized;
+}
+
+function sourceGroupIdForItem(item, groups) {
+    const provider = String(item?.source_provider || '').trim().toLowerCase();
+    if (provider === 'local' || String(item?.source_type || '') === 'manual') {
+        return '';
+    }
+    const sourceId = String(item?.source_id || '').trim();
+    if (sourceId && groups.some(group => group.group_id === sourceId)) {
+        return sourceId;
+    }
+    const repository = String(item?.repository_full_name || '').trim();
+    if (repository) {
+        const repositoryGroup = groups.find(group => group.repository_full_name === repository);
+        if (repositoryGroup) {
+            return repositoryGroup.group_id;
+        }
+    }
+    const unknownGroup = groups.find(group => group.source_id === sourceId && sourceId);
+    if (unknownGroup?.group_id) {
+        return unknownGroup.group_id;
+    }
+    const sourceKey = String(item?.source_key || '').trim();
+    return sourceId || (provider && sourceKey ? `source:${provider}:${sourceKey}` : '');
+}
+
+function sourceLabelFromGroup(group) {
+    const repository = String(group?.repository_full_name || '').trim();
+    if (repository) {
+        return repository;
+    }
+    return String(group?.kind || '').trim() || t('board_todos.value.none');
+}
+
+function isSupportedBoardTodoItem(item) {
+    const provider = String(item?.source_provider || '').trim().toLowerCase();
+    const sourceType = String(item?.source_type || '').trim().toLowerCase();
+    return provider !== 'local' && sourceType !== 'manual';
 }
 
 function renderCardActions(item) {
@@ -690,6 +794,7 @@ function renderCardActions(item) {
         actions.push(`<button type="button" data-board-todo-action="open-session" data-session-id="${escapeHtml(sessionId)}">${escapeHtml(t('board_todos.action.open_session'))}</button>`);
     }
     if (status === 'review') {
+        actions.push(`<button type="button" data-board-todo-action="mark-done" data-todo-id="${todoId}">${escapeHtml(t('board_todos.action.mark_done'))}</button>`);
         actions.push(`<button type="button" data-board-todo-action="request-changes" data-todo-id="${todoId}">${escapeHtml(t('board_todos.action.request_changes'))}</button>`);
     }
     if (status !== 'archived') {
@@ -792,8 +897,19 @@ async function handleAction(button) {
         await forceSyncBoard({ workspaceId: selectedWorkspaceId });
         return;
     }
-    if (action === 'create') {
-        await handleCreate();
+    if (action === 'sources') {
+        await handleSources();
+        return;
+    }
+    if (action === 'view-mode') {
+        const mode = String(button.getAttribute('data-mode') || '').trim();
+        setDisplayModeForCurrentBoard(mode);
+        return;
+    }
+    if (action === 'toggle-source-group') {
+        const status = String(button.getAttribute('data-status') || '').trim();
+        const groupId = String(button.getAttribute('data-group-id') || '').trim();
+        toggleSourceGroup(status, groupId);
         return;
     }
     if (action === 'open-session') {
@@ -816,38 +932,66 @@ async function handleAction(button) {
         return;
     }
     if (action === 'start') await handleStart(todoId);
+    if (action === 'mark-done') await handleMarkDone(todoId);
     if (action === 'request-changes') await handleRequestChanges(todoId);
     if (action === 'link-pr') await handleLinkPr(todoId);
     if (action === 'archive') await handleArchive(todoId);
     if (action === 'restore') await handleRestore(todoId);
 }
 
-async function handleCreate() {
-    const values = await showFormDialog({
-        title: t('board_todos.dialog.create_title'),
-        confirmLabel: t('board_todos.action.new'),
-        fields: [
-            { id: 'title', label: t('board_todos.field.title'), value: '' },
-            { id: 'body', label: t('board_todos.field.body'), type: 'textarea', rows: 4, value: '' },
-        ],
+async function handleStart(todoId) {
+    const item = await reviewAndStartBoardTodo({
+        todoId,
+        workspaceId: selectedWorkspaceId,
     });
-    if (!values?.title || !selectedWorkspaceId) {
+    if (!item) {
         return;
     }
-    const item = await createBoardTodo({
-        workspaceId: selectedWorkspaceId,
-        title: values.title,
-        body: values.body || '',
-    });
+    showToast({ tone: 'success', message: t('board_todos.toast.started') });
     applyReturnedItem(item);
     void refreshCurrentDelta();
 }
 
-async function handleStart(todoId) {
-    const item = await startBoardTodo(todoId, {});
-    showToast({ tone: 'success', message: t('board_todos.toast.started') });
-    applyReturnedItem(item);
-    void refreshCurrentDelta();
+function renderRuntimeBadge(item) {
+    const status = String(item?.run_status || '').trim().toLowerCase();
+    if (!status || String(item?.status || '') !== 'in_progress') {
+        return '';
+    }
+    const recoverable = item?.run_recoverable === true;
+    const badgeKey = recoverable && ['stopped', 'paused'].includes(status)
+        ? 'recoverable'
+        : status;
+    const label = t(`board_todos.run.${badgeKey}`);
+    return `<span class="board-todos-run-badge is-${escapeHtml(badgeKey)}">${escapeHtml(label)}</span>`;
+}
+
+function renderSettingsToolbarButton() {
+    const label = t('board_todos.action.sources');
+    return `
+        <button
+            class="board-todos-toolbar-icon-btn board-todos-settings-btn"
+            type="button"
+            data-board-todo-action="sources"
+            title="${escapeHtml(label)}"
+            aria-label="${escapeHtml(label)}"
+        >${renderIcon('settings')}</button>
+    `;
+}
+
+async function handleSources() {
+    const board = selectedWorkspaceId ? boardCache.get(currentCacheKey()) : null;
+    const changed = await openBoardTodoSourceSettings({
+        workspaceId: selectedWorkspaceId,
+        displayMode: currentDisplayMode(board),
+        onDisplayModeChange: mode => {
+            setDisplayModeForCurrentBoard(mode);
+        },
+    });
+    if (!changed) {
+        return;
+    }
+    showToast({ tone: 'success', message: t('board_todos.sources.saved') });
+    await forceSyncBoard({ workspaceId: selectedWorkspaceId });
 }
 
 async function handleRequestChanges(todoId) {
@@ -862,6 +1006,13 @@ async function handleRequestChanges(todoId) {
         return;
     }
     const item = await requestBoardTodoChanges(todoId, { feedback: values.feedback });
+    applyReturnedItem(item);
+    void refreshCurrentDelta();
+}
+
+async function handleMarkDone(todoId) {
+    const item = await markBoardTodoDone(todoId, {});
+    showToast({ tone: 'success', message: t('board_todos.toast.marked_done') });
     applyReturnedItem(item);
     void refreshCurrentDelta();
 }
@@ -966,7 +1117,9 @@ function isStaleDeltaResponse(cached, response) {
 function normalizeBoardResponse(response) {
     return {
         ...response,
-        items: Array.isArray(response?.items) ? response.items : [],
+        items: (Array.isArray(response?.items) ? response.items : [])
+            .filter(isSupportedBoardTodoItem),
+        source_groups: Array.isArray(response?.source_groups) ? response.source_groups : [],
         revision: Number(response?.revision || 0),
     };
 }
@@ -986,11 +1139,20 @@ function mergeBoardDelta(cached, delta) {
                 itemsById.set(todoId, item);
             }
         });
-    const items = Array.from(itemsById.values()).sort(compareBoardItems);
+    const items = Array.from(itemsById.values())
+        .filter(isSupportedBoardTodoItem)
+        .sort(compareBoardItems);
     return {
         workspace_id: delta?.workspace_id || cached?.workspace_id || selectedWorkspaceId,
+        board_workspace_id: delta?.board_workspace_id || cached?.board_workspace_id || null,
+        view_workspace_id: delta?.view_workspace_id || cached?.view_workspace_id || null,
         repository_full_name: delta?.repository_full_name || cached?.repository_full_name || null,
         items,
+        source_groups: Array.isArray(delta?.source_groups)
+            ? delta.source_groups
+            : Array.isArray(cached?.source_groups)
+                ? cached.source_groups
+                : [],
         status_counts: delta?.status_counts || computeStatusCounts(items),
         diagnostics: Array.isArray(delta?.diagnostics) ? delta.diagnostics : [],
         synced_at: delta?.synced_at || cached?.synced_at || null,
@@ -1033,6 +1195,49 @@ async function refreshCurrentDelta() {
 
 function currentCacheKey() {
     return cacheKey(selectedWorkspaceId, includeArchived);
+}
+
+function currentBoardKey(board = null) {
+    return String(board?.board_workspace_id || board?.workspace_id || selectedWorkspaceId || '').trim();
+}
+
+function currentDisplayMode(board = null) {
+    const key = currentBoardKey(board);
+    return displayModes.get(key) || DISPLAY_MODES.GROUPED;
+}
+
+function setDisplayModeForCurrentBoard(mode) {
+    const nextMode = mode === DISPLAY_MODES.MIXED ? DISPLAY_MODES.MIXED : DISPLAY_MODES.GROUPED;
+    const board = selectedWorkspaceId ? boardCache.get(currentCacheKey()) : null;
+    const key = currentBoardKey(board);
+    if (key) {
+        displayModes.set(key, nextMode);
+        persistBoardDisplayPreferences();
+    }
+    renderBoard(getRoot());
+}
+
+function sourceGroupCollapseKey(status, groupId) {
+    const board = selectedWorkspaceId ? boardCache.get(currentCacheKey()) : null;
+    return `${currentBoardKey(board)}::${String(status || '').trim()}::${String(groupId || '').trim()}`;
+}
+
+function isSourceGroupCollapsed(status, groupId) {
+    return collapsedGroups.has(sourceGroupCollapseKey(status, groupId));
+}
+
+function toggleSourceGroup(status, groupId) {
+    if (!String(status || '').trim() || !String(groupId || '').trim()) {
+        return;
+    }
+    const key = sourceGroupCollapseKey(status, groupId);
+    if (collapsedGroups.has(key)) {
+        collapsedGroups.delete(key);
+    } else {
+        collapsedGroups.add(key);
+    }
+    persistBoardDisplayPreferences();
+    refreshBoardContent(getRoot());
 }
 
 function cacheKey(workspaceId, archived) {
@@ -1144,7 +1349,8 @@ function refreshBoardTodoColumn(status) {
         return;
     }
     const safeStatus = String(status || '').trim();
-    const items = Array.isArray(board?.items) ? board.items : [];
+    const items = (Array.isArray(board?.items) ? board.items : [])
+        .filter(isSupportedBoardTodoItem);
     const columnItems = items.filter(item => String(item?.status || '') === safeStatus);
     const filteredItems = filterAndSortColumnItems(safeStatus, columnItems);
     const visibleItems = stagedItems(safeStatus, filteredItems);
@@ -1160,7 +1366,9 @@ function refreshBoardTodoColumn(status) {
         listElement.innerHTML = visibleItems.map(renderCard).join('') || renderArchiveEmptyOrSkeleton(filteredItems);
         return;
     }
-    listElement.innerHTML = visibleItems.map(renderCard).join('') || renderColumnEmptyOrSkeleton(filteredItems);
+    listElement.innerHTML = currentDisplayMode(board) === DISPLAY_MODES.GROUPED
+        ? renderGroupedColumn({ status: safeStatus, board, allItems: columnItems, filteredItems, visibleItems })
+        : visibleItems.map(renderCard).join('') || renderColumnEmptyOrSkeleton(filteredItems);
 }
 
 function computeStatusCounts(items) {
@@ -1179,81 +1387,14 @@ function startProgressiveRender(key, mountToken = boardMountToken) {
     if (!board || !root || !isCurrentBoardMount(mountToken)) {
         return;
     }
-    const token = ++progressiveRenderToken;
-    stagedCounts.set(key, initialStagedCounts());
     renderBoard(root);
-    const advance = () => {
-        if (token !== progressiveRenderToken || !isCurrentBoardMount(mountToken)) {
-            return;
-        }
-        const previousCounts = { ...(stagedCounts.get(key) || initialStagedCounts()) };
-        const nextCounts = { ...previousCounts };
-        const items = Array.isArray(board.items) ? board.items : [];
-        const done = updateStagedCounts(nextCounts, items);
-        markEnteringItems(previousCounts, nextCounts, items);
-        stagedCounts.set(key, nextCounts);
-        renderBoard(root);
-        if (done) {
-            window.setTimeout(() => {
-                if (token !== progressiveRenderToken || !isCurrentBoardMount(mountToken)) {
-                    return;
-                }
-                stagedCounts.delete(key);
-                enteringTodoIds.clear();
-                renderBoard(root);
-            }, PROGRESSIVE_FRAME_MS);
-            return;
-        }
-        window.setTimeout(advance, PROGRESSIVE_FRAME_MS);
-    };
-    window.setTimeout(advance, PROGRESSIVE_FRAME_MS);
 }
 
 function cancelProgressiveRender() {
-    progressiveRenderToken += 1;
-    stagedCounts.clear();
-    enteringTodoIds.clear();
 }
 
 function isCurrentBoardMount(mountToken) {
     return mountToken === boardMountToken && !!getRoot();
-}
-
-function initialStagedCounts() {
-    return { todo: 0, in_progress: 0, review: 0, done: 0, archived: 0 };
-}
-
-function updateStagedCounts(counts, items) {
-    let done = true;
-    const statuses = includeArchived ? ['archived'] : STATUSES;
-    statuses.forEach(status => {
-        const total = items.filter(item => String(item?.status || '') === status).length;
-        const nextValue = Math.min(total, Number(counts[status] || 0) + PROGRESSIVE_BATCH_SIZE);
-        counts[status] = nextValue;
-        if (nextValue < total) {
-            done = false;
-        }
-    });
-    return done;
-}
-
-function markEnteringItems(previousCounts, nextCounts, items) {
-    enteringTodoIds.clear();
-    const statuses = includeArchived ? ['archived'] : STATUSES;
-    statuses.forEach(status => {
-        const statusItems = filterAndSortColumnItems(
-            status,
-            items.filter(item => String(item?.status || '') === status),
-        );
-        const previousLimit = Number(previousCounts[status] || 0);
-        const nextLimit = Number(nextCounts[status] || 0);
-        statusItems.slice(previousLimit, nextLimit).forEach(item => {
-            const todoId = String(item?.todo_id || '');
-            if (todoId) {
-                enteringTodoIds.add(todoId);
-            }
-        });
-    });
 }
 
 function paginateDetailBody(value) {
@@ -1285,6 +1426,12 @@ function renderIcon(name) {
     }
     if (name === 'search') {
         return '<svg aria-hidden="true" viewBox="0 0 20 20" focusable="false"><path d="m14 14 3 3M8.8 15a6.2 6.2 0 1 1 0-12.4 6.2 6.2 0 0 1 0 12.4Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+    }
+    if (name === 'settings') {
+        return '<svg aria-hidden="true" viewBox="0 0 20 20" focusable="false"><path d="M8.9 2.8h2.2l.35 2.05c.42.15.82.31 1.2.5l1.7-1.2 1.55 1.55-1.2 1.7c.2.38.36.78.5 1.2l2.05.35v2.2l-2.05.35c-.14.42-.3.82-.5 1.2l1.2 1.7-1.55 1.55-1.7-1.2c-.38.19-.78.35-1.2.5l-.35 2.05H8.9l-.35-2.05a6.6 6.6 0 0 1-1.2-.5l-1.7 1.2-1.55-1.55 1.2-1.7a6.6 6.6 0 0 1-.5-1.2l-2.05-.35v-2.2L4.8 8.6c.14-.42.3-.82.5-1.2L4.1 5.7l1.55-1.55 1.7 1.2c.38-.19.78-.35 1.2-.5L8.9 2.8Z" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.7" fill="none" stroke="currentColor" stroke-width="1.35"/></svg>';
+    }
+    if (name === 'chevron-down') {
+        return '<svg aria-hidden="true" viewBox="0 0 20 20" focusable="false"><path d="m5 8 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     }
     return '<svg aria-hidden="true" viewBox="0 0 20 20" focusable="false"><path d="M10 9.5v5m0-9h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 }
@@ -1333,6 +1480,53 @@ function hydrateBoardCache() {
         });
     } catch {
         // A corrupt UI cache should not block the board page.
+    }
+}
+
+function hydrateBoardDisplayPreferences() {
+    if (displayPreferencesHydrated) {
+        return;
+    }
+    displayPreferencesHydrated = true;
+    try {
+        const rawValue = window.localStorage?.getItem(DISPLAY_MODE_STORAGE_KEY);
+        if (!rawValue) {
+            return;
+        }
+        const payload = JSON.parse(rawValue);
+        const modes = Array.isArray(payload?.display_modes) ? payload.display_modes : [];
+        modes.forEach(entry => {
+            if (!Array.isArray(entry) || entry.length !== 2) {
+                return;
+            }
+            const boardId = String(entry[0] || '').trim();
+            const mode = String(entry[1] || '').trim();
+            if (boardId && (mode === DISPLAY_MODES.GROUPED || mode === DISPLAY_MODES.MIXED)) {
+                displayModes.set(boardId, mode);
+            }
+        });
+        const collapsed = Array.isArray(payload?.collapsed_groups) ? payload.collapsed_groups : [];
+        collapsed.forEach(value => {
+            const key = String(value || '').trim();
+            if (key) {
+                collapsedGroups.add(key);
+            }
+        });
+    } catch {
+        // A corrupt view preference cache should not block the board page.
+    }
+}
+
+function persistBoardDisplayPreferences() {
+    try {
+        window.localStorage?.setItem(DISPLAY_MODE_STORAGE_KEY, JSON.stringify({
+            version: 1,
+            saved_at: new Date().toISOString(),
+            display_modes: Array.from(displayModes.entries()).slice(-24),
+            collapsed_groups: Array.from(collapsedGroups.values()).slice(-80),
+        }));
+    } catch {
+        // Ignore browser storage failures and keep the in-memory preferences.
     }
 }
 

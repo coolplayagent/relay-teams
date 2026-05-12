@@ -256,6 +256,7 @@ function createInitialGatewayFeatureState() {
             password: '',
         },
         w3Saving: false,
+        w3PasswordRevealed: false,
         w3StatusMessage: '',
         w3StatusTone: '',
         workspaces: [],
@@ -6001,6 +6002,11 @@ function renderConnectorW3Management() {
     const saveLabel = hasPassword
         ? t('feature.connectors.w3.test_update_auth')
         : t('feature.connectors.w3.test_save_auth');
+    const w3PasswordRevealed = currentGatewayFeatureState.w3PasswordRevealed === true;
+    const hasPasswordValue = hasPassword || String(draft.password || '').trim().length > 0;
+    const passwordToggleLabel = w3PasswordRevealed
+        ? t('settings.model.hide_password')
+        : t('settings.model.show_password');
     return `
         <section class="connectors-account-management connectors-w3-management">
             <div class="connectors-account-management-header">
@@ -6013,7 +6019,15 @@ function renderConnectorW3Management() {
                 </label>
                 <label>
                     <span>${escapeHtml(t('settings.model.password'))}</span>
-                    <input type="password" value="${escapeHtml(String(draft.password || ''))}" placeholder="${escapeHtml(passwordPlaceholder)}" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-feature-w3-password>
+                    <div class="secure-input-row">
+                        <input type="${w3PasswordRevealed ? 'text' : 'password'}" value="${escapeHtml(String(draft.password || ''))}" placeholder="${escapeHtml(passwordPlaceholder)}" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-feature-w3-password>
+                        <button class="secure-input-btn${w3PasswordRevealed ? ' is-active' : ''}" type="button" title="${escapeHtml(passwordToggleLabel)}" aria-label="${escapeHtml(passwordToggleLabel)}" data-feature-w3-password-toggle style="${hasPasswordValue ? '' : 'display:none;'}">
+                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                            </svg>
+                        </button>
+                    </div>
                 </label>
                 <div class="connectors-w3-actions">
                     <button class="primary-btn section-action-btn" type="button" data-feature-w3-save ${busy ? 'disabled' : ''}>${escapeHtml(currentGatewayFeatureState.w3Saving ? t('settings.action.saving') : saveLabel)}</button>
@@ -6271,6 +6285,29 @@ function bindConnectorConfigModalHandlers(root) {
                     password: String(input.value || ''),
                 },
             };
+            const toggleBtn = root.querySelector('[data-feature-w3-password-toggle]');
+            if (toggleBtn) {
+                const hasVal = Boolean(input.value.trim());
+                const hasPersisted = currentGatewayFeatureState.w3Connector?.has_password === true;
+                toggleBtn.style.display = (hasVal || hasPersisted) ? '' : 'none';
+            }
+        });
+    });
+    root.querySelectorAll('[data-feature-w3-password-toggle]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const nextRevealed = !currentGatewayFeatureState.w3PasswordRevealed;
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                w3PasswordRevealed: nextRevealed,
+            };
+            const passwordInput = root.querySelector('[data-feature-w3-password]');
+            if (passwordInput) {
+                passwordInput.type = nextRevealed ? 'text' : 'password';
+            }
+            btn.className = 'secure-input-btn' + (nextRevealed ? ' is-active' : '');
+            const label = nextRevealed ? t('settings.model.hide_password') : t('settings.model.show_password');
+            btn.title = label;
+            btn.setAttribute('aria-label', label);
         });
     });
     root.querySelectorAll('[data-feature-w3-save]').forEach(button => {
@@ -6696,6 +6733,7 @@ async function loadW3ConnectorState() {
             },
             w3StatusMessage: '',
             w3StatusTone: '',
+            w3PasswordRevealed: false,
         };
     } catch (error) {
         currentGatewayFeatureState = {
@@ -6749,6 +6787,7 @@ async function handleSaveW3Connector() {
                 password: '',
             },
             w3Saving: false,
+            w3PasswordRevealed: false,
             w3StatusMessage: String(result?.message || ''),
             w3StatusTone: result?.ok === true ? 'success' : 'danger',
         };

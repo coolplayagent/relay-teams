@@ -16,13 +16,25 @@ from pydantic import JsonValue
 from relay_teams.boards.todo_models import (
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
-    BoardTodoCreateInput,
     BoardTodoDeltaResponse,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
+    BoardTodoMarkDoneRequest,
+    BoardTodoPreviewStartRequest,
+    BoardTodoPreviewStartResponse,
+    BoardTodoScope,
+    BoardTodoSource,
+    BoardTodoSourceCreateRequest,
+    BoardTodoSourceDeleteResponse,
+    BoardTodoSourceGroup,
+    BoardTodoSourceKind,
     BoardTodoSourceProvider,
+    BoardTodoSourceSettingsResponse,
     BoardTodoSourceType,
+    BoardTodoSourceUpdateRequest,
+    BoardTodoSourceView,
     BoardTodoStartRequest,
+    BoardTodoSyncStatus,
     BoardTodoStatus,
     BoardTodoStatusCounts,
     BoardTodoStatusUpdateRequest,
@@ -33,18 +45,19 @@ from relay_teams.logger import get_logger
 from relay_teams.media import content_parts_from_text
 from relay_teams.persistence.db import run_async_blocking
 from relay_teams.sessions.runs.enums import InjectionSource
-from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeStatus,
 )
-from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.triggers.github_client import GitHubApiError, JsonObject
 from relay_teams.triggers.models import (
     GitHubTriggerAccountRecord,
     GitHubTriggerAccountStatus,
 )
 from relay_teams.workspace.workspace_models import WorkspaceRecord
+from relay_teams.workspace.workspace_models import FileScopeBackend
 
 LOGGER = get_logger(__name__)
 _GITHUB_REMOTE_PATTERN = re.compile(
@@ -116,7 +129,13 @@ class SessionServiceLike(Protocol):
         session_id: str | None = None,
         workspace_id: str,
         metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
+        raise NotImplementedError
+
+    async def get_session_async(self, session_id: str) -> SessionRecord:
         raise NotImplementedError
 
 
@@ -164,25 +183,187 @@ class BoardTodoService:
             lambda: True
         )
 
+    async def list_sources(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoSourceSettingsResponse:
+        scope = await self._resolve_board_scope(workspace_id)
+        diagnostics = await self._ensure_default_sources(scope)
+        sources = await self._repository.list_sources_async(
+            workspace_id=scope.board_workspace_id
+        )
+        visible_sources = _configurable_sources(sources)
+        states = {
+            state.source_id: state
+            for state in await self._repository.list_source_states_async(
+                workspace_id=scope.board_workspace_id
+            )
+        }
+        return BoardTodoSourceSettingsResponse(
+            workspace_id=scope.view_workspace_id,
+            board_workspace_id=scope.board_workspace_id,
+            view_workspace_id=scope.view_workspace_id,
+            is_fork_view=scope.is_fork_view,
+            forked_from_workspace_id=scope.forked_from_workspace_id,
+            sources=tuple(
+                BoardTodoSourceView(
+                    source=source,
+                    state=states.get(source.source_id),
+                )
+                for source in visible_sources
+            ),
+            diagnostics=diagnostics,
+        )
+
+    async def create_source(
+        self,
+        payload: BoardTodoSourceCreateRequest,
+    ) -> BoardTodoSource:
+        scope = await self._resolve_board_scope(payload.workspace_id)
+        if payload.kind != BoardTodoSourceKind.GITHUB_ISSUES:
+            raise ValueError("only github_issues sources can be created manually")
+        repository_full_name = _normalize_repository_full_name(
+            payload.repository_full_name
+        )
+        if repository_full_name is None:
+            raise ValueError("repository_full_name is required")
+        existing = await self._repository.find_source_by_repository_async(
+            workspace_id=scope.board_workspace_id,
+            repository_full_name=repository_full_name,
+        )
+        if existing is not None:
+            raise ValueError("GitHub TODO source already exists for this repository")
+        display_name = payload.display_name.strip()
+        if not display_name:
+            raise ValueError("display_name cannot be blank")
+        now = _utc_now()
+        return await self._repository.create_source_async(
+            BoardTodoSource(
+                source_id=_new_source_id(),
+                workspace_id=scope.board_workspace_id,
+                kind=BoardTodoSourceKind.GITHUB_ISSUES,
+                provider=BoardTodoSourceProvider.GITHUB,
+                display_name=display_name,
+                enabled=payload.enabled,
+                repository_full_name=repository_full_name,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def update_source(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoSourceUpdateRequest,
+    ) -> BoardTodoSource:
+        source = await self._repository.require_source_async(source_id)
+        if payload.workspace_id is not None:
+            scope = await self._resolve_board_scope(payload.workspace_id)
+            if scope.board_workspace_id != source.workspace_id:
+                raise ValueError("source does not belong to the resolved board")
+        if source.kind != BoardTodoSourceKind.GITHUB_ISSUES:
+            raise ValueError("only github_issues sources can be edited")
+        if source.system_managed and source.kind == BoardTodoSourceKind.MANUAL:
+            raise ValueError("unsupported source settings cannot be edited")
+        patch: dict[str, object] = {}
+        repository_changed = False
+        if payload.display_name is not None:
+            display_name = payload.display_name.strip()
+            if not display_name:
+                raise ValueError("display_name cannot be blank")
+            patch["display_name"] = display_name
+        if payload.enabled is not None:
+            patch["enabled"] = payload.enabled
+        if payload.repository_full_name is not None:
+            repository_full_name = _normalize_repository_full_name(
+                payload.repository_full_name
+            )
+            if repository_full_name is None:
+                raise ValueError("repository_full_name cannot be blank")
+            existing = await self._repository.find_source_by_repository_async(
+                workspace_id=source.workspace_id,
+                repository_full_name=repository_full_name,
+            )
+            if existing is not None and existing.source_id != source.source_id:
+                raise ValueError(
+                    "GitHub TODO source already exists for this repository"
+                )
+            if repository_full_name != source.repository_full_name:
+                item_count = (
+                    await self._repository.count_items_for_source_identity_async(
+                        source=source
+                    )
+                )
+                if item_count > 0:
+                    raise ValueError(
+                        "source repository cannot be changed after importing TODOs"
+                    )
+                repository_changed = True
+            patch["repository_full_name"] = repository_full_name
+        updated_source = await self._repository.update_source_async(
+            source.model_copy(update=patch)
+        )
+        if repository_changed:
+            await self._repository.update_source_sync_state_async(
+                source_id=source.source_id,
+                workspace_id=source.workspace_id,
+                sync_cursor=None,
+                status=BoardTodoSyncStatus.IDLE,
+                diagnostics=(),
+                started_at=None,
+                finished_at=None,
+            )
+        return updated_source
+
+    async def delete_source(
+        self,
+        *,
+        source_id: str,
+    ) -> BoardTodoSourceDeleteResponse:
+        source = await self._repository.require_source_async(source_id)
+        if source.system_managed:
+            raise ValueError("system-managed sources cannot be deleted")
+        item_count = await self._repository.count_items_for_source_identity_async(
+            source=source
+        )
+        if item_count > 0:
+            raise ValueError("source has imported TODOs; disable it instead")
+        await self._repository.delete_source_async(source_id)
+        return BoardTodoSourceDeleteResponse(deleted=True, source_id=source_id)
+
     async def list_board(
         self,
         *,
         workspace_id: str,
         include_archived: bool = False,
     ) -> BoardTodoBoardResponse:
-        repository_full_name, diagnostics = await self._resolve_repository_full_name(
-            workspace_id
+        scope = await self._resolve_board_scope(workspace_id)
+        diagnostics = await self._ensure_default_sources(scope)
+        repository_full_name = await self._primary_repository_full_name(
+            scope.board_workspace_id
         )
-        await self.reconcile_workspace_async(workspace_id=workspace_id)
-        items = await self._repository.list_by_workspace_async(
-            workspace_id=workspace_id,
-            include_archived=include_archived,
+        await self.reconcile_workspace_async(workspace_id=scope.board_workspace_id)
+        items = await self._runtime_display_items(
+            _supported_board_items(
+                await self._repository.list_by_workspace_async(
+                    workspace_id=scope.board_workspace_id,
+                    include_archived=include_archived,
+                )
+            )
         )
-        revision = await self._repository.get_workspace_revision_async(workspace_id)
+        sources = await self._repository.list_sources_async(
+            workspace_id=scope.board_workspace_id
+        )
+        revision = await self._repository.get_workspace_revision_async(
+            scope.board_workspace_id
+        )
         return _board_response(
-            workspace_id=workspace_id,
+            scope=scope,
             repository_full_name=repository_full_name,
             items=items,
+            sources=sources,
             diagnostics=diagnostics,
             synced_at=None,
             revision=revision,
@@ -195,12 +376,14 @@ class BoardTodoService:
         include_archived: bool = False,
         after_revision: int = 0,
     ) -> BoardTodoDeltaResponse:
-        repository_full_name, diagnostics = await self._resolve_repository_full_name(
-            workspace_id
+        scope = await self._resolve_board_scope(workspace_id)
+        diagnostics = await self._ensure_default_sources(scope)
+        repository_full_name = await self._primary_repository_full_name(
+            scope.board_workspace_id
         )
-        await self.reconcile_workspace_async(workspace_id=workspace_id)
+        await self.reconcile_workspace_async(workspace_id=scope.board_workspace_id)
         return await self._delta_response(
-            workspace_id=workspace_id,
+            scope=scope,
             repository_full_name=repository_full_name,
             include_archived=include_archived,
             after_revision=after_revision,
@@ -214,20 +397,31 @@ class BoardTodoService:
         workspace_id: str,
         include_archived: bool = False,
     ) -> BoardTodoBoardResponse:
+        scope = await self._resolve_board_scope(workspace_id)
         repository_full_name, sync_diagnostics, synced_at = await self._sync_github(
             workspace_id=workspace_id,
             force_full=True,
         )
-        await self.reconcile_workspace_async(workspace_id=workspace_id)
-        items = await self._repository.list_by_workspace_async(
-            workspace_id=workspace_id,
-            include_archived=include_archived,
+        await self.reconcile_workspace_async(workspace_id=scope.board_workspace_id)
+        items = await self._runtime_display_items(
+            _supported_board_items(
+                await self._repository.list_by_workspace_async(
+                    workspace_id=scope.board_workspace_id,
+                    include_archived=include_archived,
+                )
+            )
         )
-        revision = await self._repository.get_workspace_revision_async(workspace_id)
+        sources = await self._repository.list_sources_async(
+            workspace_id=scope.board_workspace_id
+        )
+        revision = await self._repository.get_workspace_revision_async(
+            scope.board_workspace_id
+        )
         return _board_response(
-            workspace_id=workspace_id,
+            scope=scope,
             repository_full_name=repository_full_name,
             items=items,
+            sources=sources,
             diagnostics=sync_diagnostics,
             synced_at=synced_at,
             revision=revision,
@@ -237,13 +431,14 @@ class BoardTodoService:
         self,
         request: BoardTodoSyncChangesRequest,
     ) -> BoardTodoDeltaResponse:
+        scope = await self._resolve_board_scope(request.workspace_id)
         repository_full_name, diagnostics, synced_at = await self._sync_github(
             workspace_id=request.workspace_id,
             force_full=request.force_full,
         )
-        await self.reconcile_workspace_async(workspace_id=request.workspace_id)
+        await self.reconcile_workspace_async(workspace_id=scope.board_workspace_id)
         return await self._delta_response(
-            workspace_id=request.workspace_id,
+            scope=scope,
             repository_full_name=repository_full_name,
             include_archived=request.include_archived,
             after_revision=request.after_revision,
@@ -257,21 +452,67 @@ class BoardTodoService:
         workspace_id: str,
         force_full: bool,
     ) -> tuple[str | None, tuple[str, ...], datetime | None]:
-        repository_full_name, diagnostics = await self._resolve_repository_full_name(
-            workspace_id
+        scope = await self._resolve_board_scope(workspace_id)
+        diagnostics = list(await self._ensure_default_sources(scope))
+        sources = tuple(
+            source
+            for source in await self._repository.list_sources_async(
+                workspace_id=scope.board_workspace_id
+            )
+            if source.kind == BoardTodoSourceKind.GITHUB_ISSUES and source.enabled
         )
+        if not sources:
+            diagnostics.append(
+                "No enabled GitHub TODO source is configured for this board."
+            )
+            return None, tuple(diagnostics), None
+        repository_full_name: str | None = None
+        synced_at: datetime | None = None
+        for source in sources:
+            (
+                source_repository,
+                source_diagnostics,
+                source_synced_at,
+            ) = await self._sync_github_source(
+                workspace_id=scope.board_workspace_id,
+                source=source,
+                force_full=force_full,
+            )
+            repository_full_name = repository_full_name or source_repository
+            diagnostics.extend(source_diagnostics)
+            synced_at = source_synced_at or synced_at
+        return repository_full_name, tuple(diagnostics), synced_at
+
+    async def _sync_github_source(
+        self,
+        *,
+        workspace_id: str,
+        source: BoardTodoSource,
+        force_full: bool,
+    ) -> tuple[str | None, tuple[str, ...], datetime | None]:
+        repository_full_name = source.repository_full_name
         if repository_full_name is None:
+            diagnostics = ("GitHub TODO source is missing repository_full_name.",)
+            await self._repository.update_source_sync_state_async(
+                source_id=source.source_id,
+                workspace_id=workspace_id,
+                sync_cursor=None,
+                status=BoardTodoSyncStatus.FAILED,
+                diagnostics=diagnostics,
+                started_at=_utc_now(),
+                finished_at=_utc_now(),
+            )
             return None, diagnostics, None
         owner, repo = repository_full_name.split("/", maxsplit=1)
         synced_at = _utc_now()
-        sync_diagnostics = list(diagnostics)
+        sync_diagnostics: list[str] = []
         synced = False
         sync_cursor = None
         if not force_full:
-            sync_cursor = await self._repository.get_github_issue_sync_cursor_async(
-                workspace_id=workspace_id,
-                repository_full_name=repository_full_name,
+            state = await self._repository.get_source_state_async(
+                source_id=source.source_id
             )
+            sync_cursor = None if state is None else state.sync_cursor
         for token in await self._github_tokens():
             try:
                 issues = await self._github_client.list_repository_issues(
@@ -308,6 +549,7 @@ class BoardTodoService:
             pull_request_map = _pull_request_map(pull_requests)
             await self._upsert_github_issues(
                 workspace_id=workspace_id,
+                source_id=source.source_id,
                 repository_full_name=repository_full_name,
                 issues=issues,
                 synced_at=synced_at,
@@ -345,10 +587,14 @@ class BoardTodoService:
                     pull_request_map=pull_request_map,
                 )
             await self._archive_untracked_pull_request_items(workspace_id=workspace_id)
-            await self._repository.update_github_issue_sync_cursor_async(
+            await self._repository.update_source_sync_state_async(
+                source_id=source.source_id,
                 workspace_id=workspace_id,
-                repository_full_name=repository_full_name,
-                cursor=_github_sync_cursor(synced_at),
+                sync_cursor=_github_sync_cursor(synced_at),
+                status=BoardTodoSyncStatus.SUCCEEDED,
+                diagnostics=tuple(sync_diagnostics),
+                started_at=synced_at,
+                finished_at=_utc_now(),
             )
             revision = await self._repository.get_workspace_revision_async(workspace_id)
             LOGGER.info(
@@ -376,28 +622,44 @@ class BoardTodoService:
             sync_diagnostics.append(
                 "No enabled GitHub trigger account token is available."
             )
+        if not synced:
+            await self._repository.update_source_sync_state_async(
+                source_id=source.source_id,
+                workspace_id=workspace_id,
+                sync_cursor=sync_cursor,
+                status=BoardTodoSyncStatus.FAILED,
+                diagnostics=tuple(sync_diagnostics),
+                started_at=synced_at,
+                finished_at=_utc_now(),
+            )
         return (
             repository_full_name,
             tuple(sync_diagnostics),
             synced_at if synced else None,
         )
 
-    async def create_todo(self, payload: BoardTodoCreateInput) -> BoardTodoItem:
-        todo_id = _new_todo_id()
-        now = _utc_now()
-        item = BoardTodoItem(
-            todo_id=todo_id,
-            workspace_id=payload.workspace_id,
-            status=BoardTodoStatus.TODO,
-            title=payload.title.strip(),
-            body=payload.body,
-            source_provider=BoardTodoSourceProvider.LOCAL,
-            source_type=BoardTodoSourceType.MANUAL,
-            source_key=f"manual:{todo_id}",
-            created_at=now,
-            updated_at=now,
+    async def preview_start_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewStartRequest,
+    ) -> BoardTodoPreviewStartResponse:
+        item = await self._repository.require_async(todo_id)
+        if item.status != BoardTodoStatus.TODO:
+            raise ValueError("only todo board items can be previewed for start")
+        scope = await self._resolve_board_scope(
+            payload.view_workspace_id or item.workspace_id
         )
-        return await self._repository.create_async(item)
+        if scope.board_workspace_id != item.workspace_id:
+            raise ValueError("todo does not belong to the resolved board")
+        return BoardTodoPreviewStartResponse(
+            todo_id=item.todo_id,
+            board_workspace_id=scope.board_workspace_id,
+            view_workspace_id=scope.view_workspace_id,
+            is_fork_view=scope.is_fork_view,
+            forked_from_workspace_id=scope.forked_from_workspace_id,
+            prompt=_build_start_prompt(item),
+        )
 
     async def start_todo(
         self,
@@ -408,20 +670,50 @@ class BoardTodoService:
         item = await self._repository.require_async(todo_id)
         if item.status != BoardTodoStatus.TODO:
             raise ValueError("only todo board items can be started")
+        prompt = (payload.final_prompt or payload.prompt or "").strip()
+        if not prompt:
+            raise ValueError("final_prompt is required")
+        execution_workspace_id = item.workspace_id
+        if payload.view_workspace_id is not None:
+            scope = await self._resolve_board_scope(payload.view_workspace_id)
+            if scope.board_workspace_id != item.workspace_id:
+                raise ValueError("view workspace does not belong to this board")
+            execution_workspace_id = scope.view_workspace_id
         reserved = await self._repository.reserve_start_async(item)
         try:
+            requested_session_mode = payload.session_mode
             session = await self._session_service.create_session_async(
-                workspace_id=reserved.workspace_id,
+                workspace_id=execution_workspace_id,
                 metadata={
                     "board_todo_id": reserved.todo_id,
                     "board_todo_title": reserved.title,
                 },
+                session_mode=requested_session_mode,
+                normal_root_role_id=(
+                    payload.normal_root_role_id
+                    if requested_session_mode == SessionMode.NORMAL
+                    else None
+                ),
+                orchestration_preset_id=(
+                    payload.orchestration_preset_id
+                    if requested_session_mode == SessionMode.ORCHESTRATION
+                    else None
+                ),
             )
-            prompt = payload.prompt or _build_start_prompt(reserved)
+            run_session_mode = session.session_mode
             run_id, _session_id = await self._create_and_start_run(
                 session_id=session.session_id,
                 prompt=prompt,
                 yolo=payload.yolo,
+                thinking=payload.thinking,
+                target_role_id=(
+                    payload.normal_root_role_id
+                    if requested_session_mode == SessionMode.NORMAL
+                    else session.normal_root_role_id
+                    if run_session_mode == SessionMode.NORMAL
+                    else None
+                ),
+                session_mode=run_session_mode,
             )
             return await self._repository.update_async(
                 reserved.model_copy(
@@ -476,6 +768,14 @@ class BoardTodoService:
             raise ValueError("board todo item is not bound to a session")
         reserved = await self._repository.reserve_request_changes_async(item)
         try:
+            session = await self._session_service.get_session_async(
+                _require_session_id(reserved)
+            )
+            target_role_id = (
+                session.normal_root_role_id
+                if session.session_mode == SessionMode.NORMAL
+                else None
+            )
             prompt = _build_request_changes_prompt(
                 item=reserved,
                 feedback=payload.feedback,
@@ -484,6 +784,8 @@ class BoardTodoService:
                 session_id=_require_session_id(reserved),
                 prompt=prompt,
                 yolo=payload.yolo,
+                target_role_id=target_role_id,
+                session_mode=session.session_mode,
             )
             return await self._repository.update_async(
                 reserved.model_copy(
@@ -530,6 +832,25 @@ class BoardTodoService:
                 exc,
             )
 
+    async def mark_done(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoMarkDoneRequest,
+    ) -> BoardTodoItem:
+        item = await self._repository.require_async(todo_id)
+        if item.status != BoardTodoStatus.REVIEW:
+            raise ValueError("only review board items can be marked done")
+        reason = payload.reason.strip() if payload.reason else ""
+        return await self._repository.update_async(
+            item.model_copy(
+                update={
+                    "status": BoardTodoStatus.DONE,
+                    "last_status_reason": reason or "Completed by user",
+                }
+            )
+        )
+
     async def archive_todo(
         self,
         *,
@@ -572,10 +893,11 @@ class BoardTodoService:
             raise ValueError("archived board todo items cannot link a pull request")
         repository_full_name = item.repository_full_name
         if repository_full_name is None:
-            (
-                repository_full_name,
-                _diagnostics,
-            ) = await self._resolve_repository_full_name(item.workspace_id)
+            scope = await self._resolve_board_scope(item.workspace_id)
+            await self._ensure_default_sources(scope)
+            repository_full_name = await self._primary_repository_full_name(
+                item.workspace_id
+            )
         pull_request_repository = _parse_github_pull_request_url(
             payload.pull_request_url,
             payload.pull_request_number,
@@ -589,13 +911,16 @@ class BoardTodoService:
             repository_full_name = pull_request_repository
         if repository_full_name is None:
             raise ValueError("cannot link a pull request without a GitHub repository")
-        if (
-            pull_request_repository is not None
-            and pull_request_repository != repository_full_name
+        if pull_request_repository is not None and not _same_repository_full_name(
+            pull_request_repository,
+            repository_full_name,
         ):
             raise ValueError(
                 "pull request URL repository does not match the board item"
             )
+        repository_full_name = _normalize_repository_full_name(repository_full_name)
+        if repository_full_name is None:
+            raise ValueError("cannot link a pull request without a GitHub repository")
         pull_request = await self._pull_request_for_link(
             repository_full_name=repository_full_name,
             pull_request_number=payload.pull_request_number,
@@ -644,6 +969,84 @@ class BoardTodoService:
                 )
         return None
 
+    async def _resolve_board_scope(self, view_workspace_id: str) -> BoardTodoScope:
+        current_workspace_id = str(view_workspace_id).strip()
+        seen: set[str] = set()
+        forked_from_workspace_id: str | None = None
+        while True:
+            if current_workspace_id in seen:
+                raise ValueError("workspace fork scope contains a cycle")
+            seen.add(current_workspace_id)
+            workspace = await self._workspace_service.get_workspace_async(
+                current_workspace_id
+            )
+            file_scope = workspace.profile.file_scope
+            if file_scope.backend != FileScopeBackend.GIT_WORKTREE:
+                return BoardTodoScope(
+                    board_workspace_id=current_workspace_id,
+                    view_workspace_id=view_workspace_id,
+                    is_fork_view=current_workspace_id != view_workspace_id,
+                    forked_from_workspace_id=forked_from_workspace_id,
+                )
+            parent_workspace_id = file_scope.forked_from_workspace_id
+            if parent_workspace_id is None:
+                raise ValueError("git_worktree workspace is missing root workspace")
+            forked_from_workspace_id = forked_from_workspace_id or parent_workspace_id
+            current_workspace_id = parent_workspace_id
+
+    async def _ensure_default_sources(self, scope: BoardTodoScope) -> tuple[str, ...]:
+        if await self._repository.get_todo_sources_bootstrapped_async(
+            scope.board_workspace_id
+        ):
+            return ()
+        sources = await self._repository.list_sources_async(
+            workspace_id=scope.board_workspace_id
+        )
+        has_github_source = any(
+            source.kind == BoardTodoSourceKind.GITHUB_ISSUES for source in sources
+        )
+        if has_github_source:
+            await self._repository.mark_todo_sources_bootstrapped_async(
+                scope.board_workspace_id
+            )
+            return ()
+        repository_full_name, diagnostics = await self._resolve_repository_full_name(
+            scope.board_workspace_id
+        )
+        if repository_full_name is None:
+            await self._repository.bootstrap_todo_sources_async(
+                workspace_id=scope.board_workspace_id,
+                source=None,
+            )
+            return diagnostics
+        now = _utc_now()
+        await self._repository.bootstrap_todo_sources_async(
+            workspace_id=scope.board_workspace_id,
+            source=BoardTodoSource(
+                source_id=_new_source_id(),
+                workspace_id=scope.board_workspace_id,
+                kind=BoardTodoSourceKind.GITHUB_ISSUES,
+                provider=BoardTodoSourceProvider.GITHUB,
+                display_name=repository_full_name,
+                enabled=True,
+                repository_full_name=repository_full_name,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+        return ()
+
+    async def _primary_repository_full_name(self, workspace_id: str) -> str | None:
+        sources = await self._repository.list_sources_async(workspace_id=workspace_id)
+        for source in sources:
+            if (
+                source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+                and source.enabled
+                and source.repository_full_name is not None
+            ):
+                return source.repository_full_name
+        return None
+
     async def mark_run_completed_async(self, *, run_id: str) -> None:
         items = await self._repository.list_in_progress_async()
         for item in items:
@@ -664,8 +1067,13 @@ class BoardTodoService:
         repository_full_name: str,
         pull_request_number: int,
     ) -> None:
+        normalized_repository_full_name = _normalize_repository_full_name(
+            repository_full_name
+        )
+        if normalized_repository_full_name is None:
+            return
         await self._repository.mark_pull_request_done_async(
-            repository_full_name=repository_full_name,
+            repository_full_name=normalized_repository_full_name,
             pull_request_number=pull_request_number,
             reason="Linked GitHub pull request merged",
         )
@@ -736,22 +1144,6 @@ class BoardTodoService:
                 )
                 continue
             if runtime.status != RunRuntimeStatus.COMPLETED:
-                if runtime.status in (
-                    RunRuntimeStatus.FAILED,
-                    RunRuntimeStatus.STOPPED,
-                ):
-                    await self._repository.update_async(
-                        item.model_copy(
-                            update={
-                                "status": BoardTodoStatus.TODO,
-                                "session_id": None,
-                                "run_id": None,
-                                "last_status_reason": (
-                                    "Bound session run ended without completion"
-                                ),
-                            }
-                        )
-                    )
                 continue
             await self._repository.update_async(
                 item.model_copy(
@@ -762,49 +1154,140 @@ class BoardTodoService:
                 )
             )
 
-    async def _delta_response(
+    async def _include_runtime_display_delta_items(
         self,
         *,
         workspace_id: str,
+        include_archived: bool,
+        changed_items: tuple[BoardTodoItem, ...],
+    ) -> tuple[BoardTodoItem, ...]:
+        changed_todo_ids = {item.todo_id for item in changed_items}
+        runtime_items = await self._runtime_display_items(
+            tuple(
+                item
+                for item in await self._repository.list_by_workspace_async(
+                    workspace_id=workspace_id,
+                    include_archived=include_archived,
+                )
+                if item.status == BoardTodoStatus.IN_PROGRESS
+                and item.run_id is not None
+                and item.todo_id not in changed_todo_ids
+            )
+        )
+        if not runtime_items:
+            return changed_items
+        return *changed_items, *runtime_items
+
+    async def _runtime_display_items(
+        self,
+        items: tuple[BoardTodoItem, ...],
+    ) -> tuple[BoardTodoItem, ...]:
+        display_items: list[BoardTodoItem] = []
+        for item in items:
+            display_items.append(await self._runtime_display_item(item))
+        return tuple(display_items)
+
+    async def _runtime_display_item(self, item: BoardTodoItem) -> BoardTodoItem:
+        if item.run_id is None:
+            return item
+        runtime = await self._run_runtime_repo.get_async(item.run_id)
+        if runtime is None:
+            return item
+        return item.model_copy(
+            update={
+                "run_status": runtime.status.value,
+                "run_phase": runtime.phase.value,
+                "run_recoverable": runtime.is_recoverable,
+                "run_last_error": runtime.last_error,
+            }
+        )
+
+    async def _delta_response(
+        self,
+        *,
+        scope: BoardTodoScope,
         repository_full_name: str | None,
         include_archived: bool,
         after_revision: int,
         diagnostics: tuple[str, ...],
         synced_at: datetime | None,
     ) -> BoardTodoDeltaResponse:
-        changed_items = await self._repository.list_delta_async(
-            workspace_id=workspace_id,
-            after_revision=after_revision,
-            include_archived=include_archived,
+        changed_items = await self._runtime_display_items(
+            _supported_board_items(
+                await self._repository.list_delta_async(
+                    workspace_id=scope.board_workspace_id,
+                    after_revision=after_revision,
+                    include_archived=include_archived,
+                )
+            )
+        )
+        changed_items = _supported_board_items(
+            await self._include_runtime_display_delta_items(
+                workspace_id=scope.board_workspace_id,
+                include_archived=include_archived,
+                changed_items=changed_items,
+            )
         )
         removed_todo_ids = (
             ()
             if include_archived
-            else await self._repository.list_removed_from_active_since_async(
-                workspace_id=workspace_id,
+            else await self._supported_removed_todo_ids(
+                workspace_id=scope.board_workspace_id,
                 after_revision=after_revision,
             )
         )
-        current_items = await self._repository.list_by_workspace_async(
-            workspace_id=workspace_id,
-            include_archived=include_archived,
+        current_items = await self._runtime_display_items(
+            _supported_board_items(
+                await self._repository.list_by_workspace_async(
+                    workspace_id=scope.board_workspace_id,
+                    include_archived=include_archived,
+                )
+            )
         )
-        revision = await self._repository.get_workspace_revision_async(workspace_id)
+        sources = await self._repository.list_sources_async(
+            workspace_id=scope.board_workspace_id
+        )
+        revision = await self._repository.get_workspace_revision_async(
+            scope.board_workspace_id
+        )
         return BoardTodoDeltaResponse(
-            workspace_id=workspace_id,
+            workspace_id=scope.view_workspace_id,
+            board_workspace_id=scope.board_workspace_id,
+            view_workspace_id=scope.view_workspace_id,
+            is_fork_view=scope.is_fork_view,
+            forked_from_workspace_id=scope.forked_from_workspace_id,
             repository_full_name=repository_full_name,
             changed_items=changed_items,
             removed_todo_ids=removed_todo_ids,
+            source_groups=_source_groups(sources=sources, items=current_items),
             status_counts=_status_counts(current_items),
             diagnostics=diagnostics,
             synced_at=synced_at,
             revision=revision,
         )
 
+    async def _supported_removed_todo_ids(
+        self,
+        *,
+        workspace_id: str,
+        after_revision: int,
+    ) -> tuple[str, ...]:
+        removed_todo_ids = await self._repository.list_removed_from_active_since_async(
+            workspace_id=workspace_id,
+            after_revision=after_revision,
+        )
+        supported_ids: list[str] = []
+        for todo_id in removed_todo_ids:
+            item = await self._repository.get_async(todo_id)
+            if item is not None and _is_supported_board_item(item):
+                supported_ids.append(todo_id)
+        return tuple(supported_ids)
+
     async def _upsert_github_issues(
         self,
         *,
         workspace_id: str,
+        source_id: str | None = None,
         repository_full_name: str,
         issues: Sequence[JsonObject],
         synced_at: datetime,
@@ -822,6 +1305,7 @@ class BoardTodoService:
                 BoardTodoItem(
                     todo_id=_new_todo_id(),
                     workspace_id=workspace_id,
+                    source_id=source_id,
                     status=BoardTodoStatus.TODO,
                     title=title,
                     body=_json_text(issue.get("body")),
@@ -1088,6 +1572,9 @@ class BoardTodoService:
         session_id: str,
         prompt: str,
         yolo: bool,
+        thinking: RunThinkingConfig | None = None,
+        target_role_id: str | None = None,
+        session_mode: SessionMode = SessionMode.NORMAL,
     ) -> tuple[str, str]:
         content = content_parts_from_text(prompt)
         shell_safety_policy_enabled = await asyncio.to_thread(
@@ -1100,6 +1587,9 @@ class BoardTodoService:
                 display_input=content,
                 yolo=yolo,
                 shell_safety_policy_enabled=shell_safety_policy_enabled,
+                thinking=thinking or RunThinkingConfig(),
+                target_role_id=target_role_id,
+                session_mode=session_mode,
             ),
             source=InjectionSource.USER,
         )
@@ -1141,17 +1631,23 @@ class BoardTodoService:
 
 def _board_response(
     *,
-    workspace_id: str,
+    scope: BoardTodoScope,
     repository_full_name: str | None,
     items: tuple[BoardTodoItem, ...],
+    sources: tuple[BoardTodoSource, ...],
     diagnostics: tuple[str, ...],
     synced_at: datetime | None,
     revision: int,
 ) -> BoardTodoBoardResponse:
     return BoardTodoBoardResponse(
-        workspace_id=workspace_id,
+        workspace_id=scope.view_workspace_id,
+        board_workspace_id=scope.board_workspace_id,
+        view_workspace_id=scope.view_workspace_id,
+        is_fork_view=scope.is_fork_view,
+        forked_from_workspace_id=scope.forked_from_workspace_id,
         repository_full_name=repository_full_name,
         items=items,
+        source_groups=_source_groups(sources=sources, items=items),
         status_counts=_status_counts(items),
         diagnostics=diagnostics,
         synced_at=synced_at,
@@ -1173,6 +1669,70 @@ def _status_counts(items: tuple[BoardTodoItem, ...]) -> BoardTodoStatusCounts:
         elif item.status == BoardTodoStatus.ARCHIVED:
             counts.archived += 1
     return counts
+
+
+def _is_supported_board_item(item: BoardTodoItem) -> bool:
+    return (
+        item.source_provider != BoardTodoSourceProvider.LOCAL
+        and item.source_type != BoardTodoSourceType.MANUAL
+    )
+
+
+def _supported_board_items(
+    items: tuple[BoardTodoItem, ...],
+) -> tuple[BoardTodoItem, ...]:
+    return tuple(item for item in items if _is_supported_board_item(item))
+
+
+def _configurable_sources(
+    sources: tuple[BoardTodoSource, ...],
+) -> tuple[BoardTodoSource, ...]:
+    return tuple(
+        source for source in sources if source.kind == BoardTodoSourceKind.GITHUB_ISSUES
+    )
+
+
+def _source_groups(
+    *,
+    sources: tuple[BoardTodoSource, ...],
+    items: tuple[BoardTodoItem, ...],
+) -> tuple[BoardTodoSourceGroup, ...]:
+    groups: list[BoardTodoSourceGroup] = []
+    grouped_source_ids: set[str] = set()
+    for source in _configurable_sources(sources):
+        groups.append(
+            BoardTodoSourceGroup(
+                group_id=source.source_id,
+                source_id=source.source_id,
+                kind=source.kind.value,
+                display_name=source.display_name,
+                enabled=source.enabled,
+                repository_full_name=source.repository_full_name,
+            )
+        )
+        grouped_source_ids.add(source.source_id)
+    for item in items:
+        if not _is_supported_board_item(item):
+            continue
+        source_id = item.source_id
+        if source_id is not None and source_id in grouped_source_ids:
+            continue
+        group_id = source_id or f"source:{item.source_provider.value}:{item.source_key}"
+        if group_id in grouped_source_ids:
+            continue
+        groups.append(
+            BoardTodoSourceGroup(
+                group_id=group_id,
+                source_id=source_id,
+                kind=item.source_type.value,
+                display_name=item.repository_full_name
+                or f"{item.source_provider.value}/{item.source_type.value}",
+                enabled=False,
+                repository_full_name=item.repository_full_name,
+            )
+        )
+        grouped_source_ids.add(group_id)
+    return tuple(groups)
 
 
 def _pull_request_map(
@@ -1357,7 +1917,9 @@ def _first_github_remote_url(remote_output: str) -> str | None:
 def _parse_github_remote(remote_url: str) -> str | None:
     match = _GITHUB_REMOTE_PATTERN.match(remote_url.strip())
     if match is not None:
-        return f"{match.group('owner')}/{_strip_git_suffix(match.group('repo'))}"
+        return _normalize_repository_full_name(
+            f"{match.group('owner')}/{_strip_git_suffix(match.group('repo'))}"
+        )
     parsed = urlparse(remote_url)
     if parsed.hostname != "github.com":
         return None
@@ -1369,7 +1931,7 @@ def _parse_github_remote(remote_url: str) -> str | None:
     repo = _strip_git_suffix(parts[1].strip())
     if not owner or not repo:
         return None
-    return f"{owner}/{repo}"
+    return f"{owner.lower()}/{repo.lower()}"
 
 
 def _parse_github_pull_request_url(
@@ -1394,7 +1956,7 @@ def _parse_github_pull_request_url(
     repo = _strip_git_suffix(parts[1].strip())
     if not owner or not repo:
         return None
-    return f"{owner}/{repo}"
+    return _normalize_repository_full_name(f"{owner}/{repo}")
 
 
 def _has_text(value: str | None) -> bool:
@@ -1440,6 +2002,34 @@ def _json_datetime_or_none(value: JsonValue | None) -> datetime | None:
 
 def _new_todo_id() -> str:
     return f"btodo_{uuid4().hex[:12]}"
+
+
+def _new_source_id() -> str:
+    return f"bsrc_{uuid4().hex[:12]}"
+
+
+def _normalize_repository_full_name(value: str | None) -> str | None:
+    text = str(value or "").strip().strip("/")
+    if not text:
+        return None
+    parts = text.split("/")
+    if len(parts) != 2:
+        return None
+    owner = parts[0].strip()
+    repo = _strip_git_suffix(parts[1].strip())
+    if not owner or not repo:
+        return None
+    return f"{owner.lower()}/{repo.lower()}"
+
+
+def _same_repository_full_name(left: str | None, right: str | None) -> bool:
+    normalized_left = _normalize_repository_full_name(left)
+    normalized_right = _normalize_repository_full_name(right)
+    return (
+        normalized_left is not None
+        and normalized_right is not None
+        and normalized_left == normalized_right
+    )
 
 
 def _require_session_id(item: BoardTodoItem) -> str:

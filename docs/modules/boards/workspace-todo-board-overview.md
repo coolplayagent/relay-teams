@@ -82,7 +82,7 @@ resolve_board_workspace_id(view_workspace_id)
 这意味着：
 
 - Root workspace 与所有 fork workspace 的 TODO 页面显示同一组 board items、sources、cursors、templates 和 revision。
-- Fork workspace 中创建 manual TODO 或 AI-created TODO 时，item 仍写入 root board；event/attempt metadata 记录 `initiated_from_workspace_id = view_workspace_id`。
+- Fork workspace 中创建 AI-created TODO 时，item 仍写入 root board；event/attempt metadata 记录 `initiated_from_workspace_id = view_workspace_id`。
 - Fork workspace 中打开 source settings 时展示 root board sources；如果允许编辑，实际修改 root board source config，并在 UI 中标明这些配置 shared with root workspace。
 - 从 fork workspace 页面触发 sync 时，同步 root board sources 和 root cursors，不把 fork workspace 的 git remote 作为 source identity。
 - TODO board cache、revision 和 delta subscription 以 `board_workspace_id` 为主 key；`view_workspace_id` 只作为页面上下文和 execution workspace shortcut。

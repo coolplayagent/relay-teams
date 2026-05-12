@@ -9,11 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from relay_teams.boards import (
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
-    BoardTodoCreateInput,
     BoardTodoDeltaResponse,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
+    BoardTodoMarkDoneRequest,
+    BoardTodoPreviewStartRequest,
+    BoardTodoPreviewStartResponse,
     BoardTodoService,
+    BoardTodoSource,
+    BoardTodoSourceCreateRequest,
+    BoardTodoSourceDeleteResponse,
+    BoardTodoSourceSettingsResponse,
+    BoardTodoSourceUpdateRequest,
     BoardTodoStartRequest,
     BoardTodoStatusUpdateRequest,
     BoardTodoSyncChangesRequest,
@@ -144,15 +151,71 @@ async def sync_board_todo_changes(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-# POST /api/boards/todos
-async def create_board_todo(
-    request: BoardTodoCreateInput,
+# GET /api/boards/todo-sources
+async def list_board_todo_sources(
     service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
-) -> BoardTodoItem:
+    workspace_id: str = Query(min_length=1),
+) -> BoardTodoSourceSettingsResponse:
     try:
-        return await service.create_todo(request)
+        return await service.list_sources(workspace_id=workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# POST /api/boards/todo-sources
+async def create_board_todo_source(
+    request: BoardTodoSourceCreateRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoSource:
+    try:
+        return await service.create_source(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# PATCH /api/boards/todo-sources/{source_id}
+async def update_board_todo_source(
+    source_id: str,
+    request: BoardTodoSourceUpdateRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoSource:
+    try:
+        return await service.update_source(source_id=source_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# DELETE /api/boards/todo-sources/{source_id}
+async def delete_board_todo_source(
+    source_id: str,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoSourceDeleteResponse:
+    try:
+        return await service.delete_source(source_id=source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:preview-start
+async def preview_start_board_todo(
+    todo_id: str,
+    request: BoardTodoPreviewStartRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoPreviewStartResponse:
+    try:
+        return await service.preview_start_todo(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # POST /api/boards/todos/{todo_id}:start
@@ -177,6 +240,20 @@ async def request_board_todo_changes(
 ) -> BoardTodoItem:
     try:
         return await service.request_changes(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:mark-done
+async def mark_board_todo_done(
+    todo_id: str,
+    request: BoardTodoMarkDoneRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.mark_done(todo_id=todo_id, payload=request)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -299,10 +376,34 @@ router.add_api_route(
     response_model=BoardTodoDeltaResponse,
 )
 router.add_api_route(
-    "/todos",
-    create_board_todo,
+    "/todo-sources",
+    list_board_todo_sources,
+    methods=["GET"],
+    response_model=BoardTodoSourceSettingsResponse,
+)
+router.add_api_route(
+    "/todo-sources",
+    create_board_todo_source,
     methods=["POST"],
-    response_model=BoardTodoItem,
+    response_model=BoardTodoSource,
+)
+router.add_api_route(
+    "/todo-sources/{source_id}",
+    update_board_todo_source,
+    methods=["PATCH"],
+    response_model=BoardTodoSource,
+)
+router.add_api_route(
+    "/todo-sources/{source_id}",
+    delete_board_todo_source,
+    methods=["DELETE"],
+    response_model=BoardTodoSourceDeleteResponse,
+)
+router.add_api_route(
+    "/todos/{todo_id}:preview-start",
+    preview_start_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoPreviewStartResponse,
 )
 router.add_api_route(
     "/todos/{todo_id}:start",
@@ -313,6 +414,12 @@ router.add_api_route(
 router.add_api_route(
     "/todos/{todo_id}:request-changes",
     request_board_todo_changes,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:mark-done",
+    mark_board_todo_done,
     methods=["POST"],
     response_model=BoardTodoItem,
 )

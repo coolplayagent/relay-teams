@@ -499,7 +499,8 @@ stateDiagram-v2
     in_progress --> in_progress: queue ticket waits for slot
     in_progress --> in_progress: attempt claimed slot and workspace/run starting
     in_progress --> review: executor run completed
-    in_progress --> todo: executor run failed/stopped/missing or start failed
+    in_progress --> in_progress: executor run failed/stopped/paused while runtime row exists
+    in_progress --> todo: executor run missing or start failed
 
     review --> review: AI review attempt active
     review --> review: AI approved but human final required
@@ -566,7 +567,7 @@ stateDiagram-v2
 
 ## 前端表现
 
-主看板仍保持四个主列：`todo`、`in_progress`、`review`、`done`。
+主看板仍保持四个主列：`todo`、`in_progress`、`review`、`done`。前端可在每列内按来源 group 折叠展示，也可切换到 mixed 模式平铺展示；这只是视图模式，不新增 board 状态。
 
 卡片展示从事实派生：
 

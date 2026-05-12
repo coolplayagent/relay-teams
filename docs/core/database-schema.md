@@ -1139,6 +1139,7 @@ Notes:
 CREATE TABLE IF NOT EXISTS board_todo_items (
     todo_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
+    source_id TEXT,
     status TEXT NOT NULL,
     title TEXT NOT NULL,
     body TEXT NOT NULL,
@@ -1171,14 +1172,43 @@ CREATE INDEX IF NOT EXISTS idx_board_todo_items_run
     ON board_todo_items(run_id);
 CREATE INDEX IF NOT EXISTS idx_board_todo_items_linked_pr
     ON board_todo_items(repository_full_name, linked_pr_number);
+CREATE INDEX IF NOT EXISTS idx_board_todo_items_source_id
+    ON board_todo_items(workspace_id, source_id, source_key);
 
 CREATE TABLE IF NOT EXISTS board_todo_workspace_state (
     workspace_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL DEFAULT 0,
     github_issue_sync_cursor TEXT,
     repository_full_name TEXT,
+    todo_sources_bootstrapped INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS board_todo_sources (
+    source_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    repository_full_name TEXT,
+    system_managed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS board_todo_source_state (
+    source_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    sync_cursor TEXT,
+    last_sync_started_at TEXT,
+    last_sync_finished_at TEXT,
+    last_sync_status TEXT NOT NULL DEFAULT 'idle',
+    last_diagnostics_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_board_todo_sources_workspace
+    ON board_todo_sources(workspace_id, kind, enabled);
 ```
 
 Purpose: workspace-scoped TODO board state owned by Agent Teams. External
@@ -1187,16 +1217,25 @@ columns.
 
 Notes:
 - `status` is one of `todo`, `in_progress`, `review`, `done`, or `archived`.
-- GitHub sync upserts by `(workspace_id, source_provider, source_key)`.
+- `source_id` points at the configured TODO source for imported items. Old local/manual rows are invalid for the current board contract and are ignored by board list, delta, and sync responses.
+- GitHub sync upserts by source identity and source key while keeping `(workspace_id, source_provider, source_key)` readable for existing data.
 - `updated_at` is the local board row update time; `source_updated_at` stores
   the external source update time, such as GitHub issue `updated_at`, for
   business-time sorting.
 - `session_id/run_id` bind an item to the dedicated session/run created when processing starts.
 - Session deletion clears stale board references; active non-`done` items bound to that session return to `todo`.
-- `linked_pr_number/linked_pr_url` move issue/manual items to `done` when the linked PR merges.
+- Users can explicitly move `review` items to `done`; this updates `status`, `last_status_reason`, and revision metadata without adding new columns.
+- `linked_pr_number/linked_pr_url` move imported issue items to `done` when the linked PR merges.
 - `archived_at` implements soft delete. Sync does not reactivate manually archived rows. Full GitHub sync treats the open issue set as active truth; closed or otherwise non-open GitHub issues without merged linked PR evidence are archived instead of staying in TODO. If GitHub later reports an issue as open again, rows archived by GitHub closed/non-open reconciliation are restored to `todo`.
 - `item_revision` and `board_todo_workspace_state.revision` power frontend delta updates.
-- `github_issue_sync_cursor` stores the per-workspace cursor for incremental GitHub issue sync.
+- `board_todo_sources` stores user-managed `github_issues` sources. Older manual source rows may exist but are ignored by the settings API and are not returned as display groups.
+- `todo_sources_bootstrapped` records that GitHub source auto-initialization has already been attempted for the board workspace. When true, sync and settings reads no longer recreate sources from git remote detection; users manage the list explicitly.
+- GitHub sources persist `display_name`, `enabled`, and `repository_full_name`; sync uses this persisted configuration instead of re-reading git remotes after initialization. Multiple GitHub sources are supported and each owns independent state.
+- `board_todo_source_state` stores per-source cursors and diagnostics. Disabled sources do not participate in board sync and retain their existing state.
+- `board_todo_workspace_state.github_issue_sync_cursor` and `repository_full_name` are retained for existing data; per-source state is authoritative for new sync.
+- TODO board API responses may include `run_status`, `run_phase`, `run_recoverable`, and `run_last_error` on `BoardTodoItem`, but those are derived from `run_runtime` at read time and are not `board_todo_items` columns.
+- TODO board API responses may include non-persisted `source_groups` for grouped/mixed frontend rendering. `source_groups` is derived from `board_todo_sources` and current item source fields and is not a database table.
+- Bound `in_progress` TODO rows keep `session_id` and `run_id` when the runtime row is present but stopped, failed, paused, stopping, queued, or running. Only a missing bound run is treated as stale and clears the session/run references back to `todo`; completed runs move the row to `review`.
 - Repository: `src/relay_teams/boards/todo_repository.py`
 
 ---
