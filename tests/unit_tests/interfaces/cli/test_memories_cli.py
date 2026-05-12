@@ -11,6 +11,7 @@ from relay_teams.interfaces.cli import app as cli_app
 from relay_teams.interfaces.cli.memories_cli import (
     MemoriesOutputFormat,
     _render_entry_detail,
+    _render_evolution_table,
     _render_memories_table,
     _render_search_table,
     _require_object_response,
@@ -519,6 +520,59 @@ class TestEvolveCommand:
         assert isinstance(body, dict)
         assert body["source_memory_ids"] == ["mem-001"]
 
+    def test_evolve_create_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "create",
+                "--workspace-id",
+                "ws-1",
+                "--memory-id",
+                "mem-001",
+                "--skill-id",
+                "review-loop-sop",
+                "--runtime-name",
+                "review-loop-sop",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert r.exit_code == 0
+        data = json.loads(r.output)
+        assert data["draft_id"] == "mem-evo-001"
+
+    def test_evolve_list_table_output_with_filters(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--target",
+                "sop_skill",
+                "--status",
+                "draft",
+            ],
+        )
+
+        assert r.exit_code == 0
+        assert "mem-evo-001" in r.output
+        _, method, path, body = fake_req.calls[0]
+        assert method == "GET"
+        assert path == "/api/workspaces/ws-1/memories/evolutions"
+        assert isinstance(body, dict)
+        assert body["target"] == "sop_skill"
+        assert body["status"] == "draft"
+
     def test_evolve_list_json_output(self) -> None:
         app_obj, _, _ = _build_app()
         from typer.testing import CliRunner as _CR
@@ -550,6 +604,29 @@ class TestEvolveCommand:
         assert "Applied memory evolution draft" in r.output
         assert fake_req.calls[0][2].endswith("mem-evo-001:apply")
 
+    def test_evolve_apply_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "apply",
+                "--workspace-id",
+                "ws-1",
+                "--draft-id",
+                "mem-evo-001",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert r.exit_code == 0
+        data = json.loads(r.output)
+        assert data["status"] == "applied"
+        assert data["applied_skill_ref"] == "review-loop-sop"
+
     def test_evolve_reject_output(self) -> None:
         app_obj, fake_req, _ = _build_app()
         from typer.testing import CliRunner as _CR
@@ -570,6 +647,28 @@ class TestEvolveCommand:
         assert r.exit_code == 0
         assert "Rejected memory evolution draft" in r.output
         assert fake_req.calls[0][2].endswith("mem-evo-001:reject")
+
+    def test_evolve_reject_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "reject",
+                "--workspace-id",
+                "ws-1",
+                "--draft-id",
+                "mem-evo-001",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert r.exit_code == 0
+        data = json.loads(r.output)
+        assert data["status"] == "rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +779,31 @@ class TestRenderSearchTable:
         assert "Fact about X" in result
         assert "A snippet of text" in result
         assert "Found 1 result" in result
+
+
+class TestRenderEvolutionTable:
+    def test_empty_drafts(self) -> None:
+        result = _render_evolution_table({"items": [], "total_count": 0})
+        assert "No memory evolution drafts found" in result
+
+    def test_with_drafts(self) -> None:
+        payload: dict[str, object] = {
+            "items": [
+                {
+                    "draft_id": "mem-evo-001",
+                    "status": "draft",
+                    "target": "sop_skill",
+                    "runtime_name": "review-loop-sop",
+                    "skill_id": "review-loop-sop",
+                },
+                "unexpected",
+            ],
+            "total_count": 1,
+        }
+        result = _render_evolution_table(payload)
+        assert "Total: 1" in result
+        assert "mem-evo-001" in result
+        assert "review-loop-sop" in result
 
 
 class TestRequireObjectResponse:

@@ -397,6 +397,26 @@ class TestMemoryEvolutionDrafts:
         call_req = evolution_svc.create_draft_async.call_args[0][0]
         assert call_req.workspace_id == "ws-1"
 
+    def test_create_evolution_draft_returns_400_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.create_draft_async = AsyncMock(
+            side_effect=ValueError("Unknown source memory entry")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "workspace_id": "ws-original",
+                "source_memory_ids": ["mem-missing"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Unknown source memory entry" in response.json()["detail"]
+
     def test_list_evolution_drafts_returns_200(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         response = client.get(
@@ -419,6 +439,16 @@ class TestMemoryEvolutionDrafts:
             "ws-1", "mem-evo-test001"
         )
 
+    def test_get_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.get_draft_async = AsyncMock(return_value=None)
+
+        response = client.get(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing"
+        )
+
+        assert response.status_code == 404
+
     def test_apply_evolution_draft_returns_200(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         response = client.post(
@@ -429,6 +459,42 @@ class TestMemoryEvolutionDrafts:
         evolution_svc.apply_draft_async.assert_awaited_once()
         assert response.json()["status"] == "applied"
 
+    def test_apply_evolution_draft_accepts_empty_body(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply"
+        )
+
+        assert response.status_code == 200
+        call_req = evolution_svc.apply_draft_async.call_args[0][2]
+        assert call_req.skill_id is None
+
+    def test_apply_evolution_draft_returns_409_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(
+            side_effect=ValueError("not applicable")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply",
+            json={},
+        )
+
+        assert response.status_code == 409
+        assert "not applicable" in response.json()["detail"]
+
+    def test_apply_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(return_value=None)
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing:apply",
+            json={},
+        )
+
+        assert response.status_code == 404
+
     def test_reject_evolution_draft_returns_200(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         response = client.post(
@@ -438,6 +504,42 @@ class TestMemoryEvolutionDrafts:
         assert response.status_code == 200
         evolution_svc.reject_draft_async.assert_awaited_once()
         assert response.json()["status"] == "rejected"
+
+    def test_reject_evolution_draft_accepts_empty_body(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject"
+        )
+
+        assert response.status_code == 200
+        call_req = evolution_svc.reject_draft_async.call_args[0][2]
+        assert call_req.reason == ""
+
+    def test_reject_evolution_draft_returns_409_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(
+            side_effect=ValueError("not rejectable")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject",
+            json={},
+        )
+
+        assert response.status_code == 409
+        assert "not rejectable" in response.json()["detail"]
+
+    def test_reject_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(return_value=None)
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing:reject",
+            json={},
+        )
+
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
