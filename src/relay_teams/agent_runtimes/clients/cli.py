@@ -20,6 +20,7 @@ from relay_teams.agent_runtimes.models import (
     ExternalAgentTestResult,
     StdioTransportConfig,
 )
+from relay_teams.env.w3_auth_token_env import overlay_w3_x_auth_token_env
 from relay_teams.logger import get_logger, log_event
 
 JsonRpcId = str | int
@@ -99,7 +100,7 @@ async def probe_cli_agent(
         transport = _stdio_transport(config)
         command: str = str(transport.command)
         probe_cwd = runtime_cwd or Path.cwd()
-        runtime_env = _runtime_env(transport)
+        runtime_env = await _runtime_env_async(transport)
         if not _cli_command_exists(
             command,
             runtime_cwd=probe_cwd,
@@ -327,6 +328,15 @@ def _runtime_env(transport: StdioTransportConfig) -> dict[str, str]:
         if item.value is not None:
             env[item.name] = item.value
     return env
+
+
+async def _runtime_env_async(transport: StdioTransportConfig) -> dict[str, str]:
+    declared_env: dict[str, object] = {item.name: item.value for item in transport.env}
+    return await overlay_w3_x_auth_token_env(
+        _runtime_env(transport),
+        declared_env=declared_env,
+        inject_missing_declared=True,
+    )
 
 
 def _build_command_args(*, transport: StdioTransportConfig) -> tuple[str, ...]:
@@ -652,7 +662,7 @@ class _StdioCliJsonRpcClient:
             return
         if self._blocking_process is not None and self._blocking_process.poll() is None:
             return
-        env = _runtime_env(self._transport)
+        env = await _runtime_env_async(self._transport)
         command, command_args = _resolve_cli_process_command(
             self._command,
             runtime_cwd=self._runtime_cwd,

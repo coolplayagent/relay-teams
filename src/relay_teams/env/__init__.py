@@ -104,6 +104,14 @@ from relay_teams.env.web_config_models import (
 
 from relay_teams.env.web_config_service import WebConfigService
 
+from relay_teams.env.w3_auth_token_env import (
+    env_declares_w3_x_auth_token,
+    is_w3_x_auth_token_env_name,
+    overlay_w3_x_auth_token_env,
+    resolve_w3_x_auth_token,
+)
+
+
 __all__ = [
     "EnvironmentVariableCatalog",
     "EnvironmentVariableRecord",
@@ -136,6 +144,7 @@ __all__ = [
     "build_clawhub_managed_subprocess_env",
     "build_clawhub_subprocess_env",
     "extract_proxy_env_vars",
+    "env_declares_w3_x_auth_token",
     "build_github_cli_env",
     "clawhub_env_keys",
     "clear_clawhub_path_cache",
@@ -150,6 +159,7 @@ __all__ = [
     "get_user_env_file_path",
     "github_env_keys",
     "host_matches_no_proxy",
+    "is_w3_x_auth_token_env_name",
     "load_proxy_env_config",
     "load_env_file",
     "load_merged_env_vars",
@@ -168,7 +178,9 @@ __all__ = [
     "resolve_clawhub_token_from_env",
     "strip_clawhub_endpoint_overrides",
     "normalize_github_token",
+    "overlay_w3_x_auth_token_env",
     "resolve_github_token_from_env",
+    "resolve_w3_x_auth_token",
     "sync_proxy_env_to_process_env",
     "WebConfig",
     "WebConfigService",

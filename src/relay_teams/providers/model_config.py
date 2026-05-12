@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from relay_teams.media import MediaModality
+from relay_teams.media.models import MediaModality
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 from relay_teams.validation import RequiredIdentifierStr
 

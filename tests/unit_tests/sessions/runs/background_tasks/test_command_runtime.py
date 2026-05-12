@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
+from os import pathsep
 from pathlib import Path
 import signal
-import os
 import subprocess
 
 import pytest
@@ -306,6 +307,97 @@ async def test_build_command_env_respects_case_variant_python_env_on_windows(
 
 
 @pytest.mark.asyncio
+async def test_build_command_env_applies_w3_auth_token_overlay_for_declared_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    powershell_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+
+    async def fake_overlay(
+        env: Mapping[str, str],
+        *,
+        declared_env: Mapping[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "X-Auth-Token" in declared_env:
+            result["X-Auth-Token"] = "runtime-token"
+        return result
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "resolve_existing_gh_path", lambda: None)
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(runtime_module, "overlay_w3_x_auth_token_env", fake_overlay)
+    monkeypatch.setattr(runtime_module.os, "environ", {"PATH": r"C:\Windows\System32"})
+
+    env = await build_command_env(
+        {"X-Auth-Token": "placeholder", "WEB_TOKEN": "keep"},
+        runtime=powershell_runtime,
+        command="Write-Output ok",
+    )
+
+    assert env["X-Auth-Token"] == "runtime-token"
+    assert env["WEB_TOKEN"] == "keep"
+
+
+@pytest.mark.asyncio
+async def test_build_command_env_does_not_overlay_inherited_w3_auth_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    powershell_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+    observed_declared_env: list[Mapping[str, object] | None] = []
+
+    async def fake_overlay(
+        env: Mapping[str, str],
+        *,
+        declared_env: Mapping[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        observed_declared_env.append(declared_env)
+        result = dict(env)
+        if declared_env is not None and "X_AUTH_TOKEN" in declared_env:
+            result["X_AUTH_TOKEN"] = "runtime-token"
+        return result
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "resolve_existing_gh_path", lambda: None)
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(runtime_module, "overlay_w3_x_auth_token_env", fake_overlay)
+    monkeypatch.setattr(
+        runtime_module.os,
+        "environ",
+        {"PATH": r"C:\Windows\System32", "X_AUTH_TOKEN": "ambient-token"},
+    )
+
+    env = await build_command_env(
+        runtime=powershell_runtime,
+        command="Write-Output ok",
+    )
+
+    assert observed_declared_env == [{}]
+    assert env["X_AUTH_TOKEN"] == "ambient-token"
+
+
+@pytest.mark.asyncio
 async def test_build_command_env_prepends_existing_gh_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -337,7 +429,7 @@ async def test_build_command_env_prepends_existing_gh_path(
         command="gh auth status",
     )
 
-    assert env["PATH"].split(os.pathsep)[0] == str(gh.parent)
+    assert env["PATH"].split(pathsep)[0] == str(gh.parent)
 
 
 @pytest.mark.asyncio
@@ -381,7 +473,7 @@ async def test_build_command_env_prepends_existing_clawhub_path(
         command="clawhub --version",
     )
 
-    assert env["PATH"].split(os.pathsep)[0] == str(clawhub.parent)
+    assert env["PATH"].split(pathsep)[0] == str(clawhub.parent)
 
 
 @pytest.mark.asyncio

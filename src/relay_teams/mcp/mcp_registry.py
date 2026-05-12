@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 import logging
@@ -21,10 +22,15 @@ from pydantic_ai.mcp import (
 )
 
 from relay_teams.env.proxy_env import extract_proxy_env_vars, load_proxy_env_config
-from relay_teams.env.runtime_env import load_merged_env_vars
+from relay_teams.env.w3_auth_token_env import (
+    env_declares_w3_x_auth_token,
+    is_w3_x_auth_token_env_name,
+    resolve_w3_x_auth_token,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_models import McpServerSpec, McpToolInfo, McpToolSchema
 from relay_teams.net.clients import create_async_http_client
+from relay_teams.runtime_env import load_merged_env_vars
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
@@ -168,6 +174,8 @@ class McpRegistry:
         self._discovery_env_fingerprint = discovery_env_fingerprint
         self._toolsets: dict[str, MCPServer] = {}
         self._runtime_failed_names: set[str] = set()
+        self._w3_x_auth_token: str | None = None
+        self._w3_x_auth_token_lock: asyncio.Lock | None = None
 
     def discovery_fingerprint_context(self) -> dict[str, JsonValue]:
         proxy_env_payload: dict[str, JsonValue] = {
@@ -192,6 +200,45 @@ class McpRegistry:
                     continue
                 toolsets.append(self._get_or_create_toolset(name))
             return tuple(toolsets)
+
+    async def prepare_w3_auth_env(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> None:
+        resolved_names = self.resolve_server_names(
+            names,
+            strict=strict,
+            consumer=consumer,
+        )
+        token_server_names = tuple(
+            name
+            for name in resolved_names
+            if _server_config_declares_w3_auth_env(self.get_spec(name).server_config)
+        )
+        if not token_server_names:
+            return
+        lock = self._w3_x_auth_token_lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._w3_x_auth_token_lock = lock
+        async with lock:
+            previous_token = self._w3_x_auth_token
+            next_token = await resolve_w3_x_auth_token()
+            if next_token is None and previous_token is not None:
+                return
+            if next_token == previous_token:
+                return
+            self._w3_x_auth_token = next_token
+            for name in self._w3_auth_env_server_names():
+                self._toolsets.pop(name, None)
+                if next_token is not None:
+                    self.mark_server_runtime_available(name)
+
+    def runtime_w3_x_auth_token(self) -> str | None:
+        return self._w3_x_auth_token
 
     def validate_known(self, names: tuple[str, ...]) -> None:
         _ = self.resolve_server_names(names)
@@ -281,6 +328,9 @@ class McpRegistry:
             raise ValueError(f"Unknown MCP server: {name}")
         return spec
 
+    def get_w3_auth_env_spec(self, name: str) -> McpServerSpec:
+        return self.get_spec(name)
+
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
         return await self._list_tools(
             name,
@@ -369,6 +419,11 @@ class McpRegistry:
         stdio_default_timeout_seconds: float = _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS,
     ) -> tuple[_ListedMcpTool, ...]:
         try:
+            await self.prepare_w3_auth_env(
+                (name,),
+                strict=False,
+                consumer="mcp.registry.list_tool_objects",
+            )
             toolset = (
                 self._get_or_create_toolset(name)
                 if use_cached_toolset
@@ -401,7 +456,11 @@ class McpRegistry:
             spec = self.get_spec(name)
             if not spec.enabled:
                 raise ValueError(f"MCP server is disabled: {name}")
-            toolset = build_mcp_server(spec, proxy_env=self._proxy_env)
+            toolset = build_mcp_server(
+                spec,
+                proxy_env=self._proxy_env,
+                w3_x_auth_token=self._w3_x_auth_token,
+            )
             self._toolsets[name] = toolset
             return toolset
 
@@ -418,6 +477,14 @@ class McpRegistry:
             spec,
             proxy_env=self._proxy_env,
             stdio_default_timeout_seconds=stdio_default_timeout_seconds,
+            w3_x_auth_token=self._w3_x_auth_token,
+        )
+
+    def _w3_auth_env_server_names(self) -> tuple[str, ...]:
+        return tuple(
+            name
+            for name in self.list_enabled_names()
+            if _server_config_declares_w3_auth_env(self.get_spec(name).server_config)
         )
 
 
@@ -426,6 +493,7 @@ def build_mcp_server(
     *,
     proxy_env: Mapping[str, str] | None = None,
     stdio_default_timeout_seconds: float = _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS,
+    w3_x_auth_token: str | None = None,
 ) -> MCPServer:
     server_config = spec.server_config
     transport = _detect_transport(server_config)
@@ -434,7 +502,11 @@ def build_mcp_server(
         return MCPServerStdio(
             command=command,
             args=_string_list(server_config.get("args")),
-            env=_build_stdio_env(server_config, proxy_env=proxy_env),
+            env=_build_stdio_env(
+                server_config,
+                proxy_env=proxy_env,
+                w3_x_auth_token=w3_x_auth_token,
+            ),
             cwd=_optional_string(server_config.get("cwd")),
             tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=(
@@ -451,7 +523,10 @@ def build_mcp_server(
         return ProxyAwareMCPServerSSE(
             url=url,
             headers=_string_dict(server_config.get("headers")),
-            proxy_env=_build_remote_env(server_config, proxy_env=proxy_env),
+            proxy_env=_build_remote_env(
+                server_config,
+                proxy_env=proxy_env,
+            ),
             server_id=spec.name,
             tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=_optional_positive_float(server_config.get("timeout")) or 5.0,
@@ -464,7 +539,10 @@ def build_mcp_server(
         return ProxyAwareMCPServerStreamableHTTP(
             url=url,
             headers=_string_dict(server_config.get("headers")),
-            proxy_env=_build_remote_env(server_config, proxy_env=proxy_env),
+            proxy_env=_build_remote_env(
+                server_config,
+                proxy_env=proxy_env,
+            ),
             server_id=spec.name,
             tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=_optional_positive_float(server_config.get("timeout")) or 5.0,
@@ -475,10 +553,16 @@ def build_mcp_server(
     raise ValueError(f"Unsupported MCP transport: {transport}")
 
 
-def _detect_transport(server_config: Mapping[str, JsonValue]) -> str:
+def detect_mcp_transport(server_config: Mapping[str, JsonValue]) -> str:
     raw_transport = server_config.get("transport")
     if isinstance(raw_transport, str) and raw_transport.strip():
-        return raw_transport.strip()
+        normalized_transport = raw_transport.strip()
+        if normalized_transport == "local":
+            return "stdio"
+        if normalized_transport == "remote":
+            raw_url = server_config.get("url")
+            return "sse" if isinstance(raw_url, str) and "/sse" in raw_url else "http"
+        return normalized_transport
     raw_type = server_config.get("type")
     if isinstance(raw_type, str) and raw_type.strip():
         normalized_type = raw_type.strip()
@@ -494,6 +578,10 @@ def _detect_transport(server_config: Mapping[str, JsonValue]) -> str:
     if isinstance(raw_url, str) and raw_url.strip():
         return "sse" if "/sse" in raw_url else "http"
     raise ValueError("Unable to detect MCP transport")
+
+
+def _detect_transport(server_config: Mapping[str, JsonValue]) -> str:
+    return detect_mcp_transport(server_config)
 
 
 def _required_string(payload: Mapping[str, JsonValue], key: str) -> str:
@@ -531,6 +619,7 @@ def _build_stdio_env(
     server_config: Mapping[str, JsonValue],
     *,
     proxy_env: Mapping[str, str] | None,
+    w3_x_auth_token: str | None,
 ) -> dict[str, str]:
     explicit_env = _string_dict(server_config.get("env")) or {}
     reference_env = load_merged_env_vars()
@@ -548,6 +637,12 @@ def _build_stdio_env(
     inherited_env.update(app_proxy_env)
     inherited_env.update(explicit_proxy_env)
     inherited_env.update(expanded_explicit_env)
+    if w3_x_auth_token is not None:
+        inherited_env = _overlay_resolved_w3_x_auth_token_env(
+            inherited_env,
+            declared_env=expanded_explicit_env,
+            token=w3_x_auth_token,
+        )
     return inherited_env
 
 
@@ -568,6 +663,67 @@ def _build_remote_env(
     base_env.update(extract_proxy_env_vars(expanded_explicit_env))
     base_env.update(expanded_explicit_env)
     return base_env
+
+
+def overlay_mcp_server_config_w3_auth_env(
+    server_config: Mapping[str, JsonValue],
+    *,
+    w3_x_auth_token: str | None,
+) -> dict[str, JsonValue]:
+    result = {str(key): value for key, value in server_config.items()}
+    if w3_x_auth_token is None:
+        return result
+    try:
+        transport = _detect_transport(server_config)
+    except ValueError:
+        return result
+    if transport != "stdio":
+        return result
+    raw_env = server_config.get("env")
+    if not isinstance(raw_env, dict):
+        return result
+    next_env: dict[str, JsonValue] = {
+        str(key): value for key, value in raw_env.items() if isinstance(key, str)
+    }
+    if not env_declares_w3_x_auth_token(next_env):
+        return result
+    for key in tuple(next_env):
+        if is_w3_x_auth_token_env_name(key):
+            next_env[key] = w3_x_auth_token
+    result["env"] = next_env
+    return result
+
+
+def _server_config_declares_w3_auth_env(
+    server_config: Mapping[str, JsonValue],
+) -> bool:
+    try:
+        transport = _detect_transport(server_config)
+    except ValueError:
+        return False
+    if transport != "stdio":
+        return False
+    return env_declares_w3_x_auth_token(_string_dict(server_config.get("env")) or {})
+
+
+def _overlay_resolved_w3_x_auth_token_env(
+    env: Mapping[str, str],
+    *,
+    declared_env: Mapping[str, str],
+    token: str,
+) -> dict[str, str]:
+    result = dict(env)
+    keys_to_write = tuple(
+        key
+        for key in declared_env
+        if is_w3_x_auth_token_env_name(key) and key in result
+    )
+    for key in tuple(result):
+        if is_w3_x_auth_token_env_name(key):
+            result.pop(key)
+    for key in keys_to_write:
+        result[key] = token
+    return result
 
 
 def _resolve_mcp_runtime_proxy_env(

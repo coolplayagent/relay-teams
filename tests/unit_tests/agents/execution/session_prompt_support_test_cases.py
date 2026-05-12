@@ -12,6 +12,7 @@ import pytest
 from relay_teams.agents.execution.event_publishing import EventPublishingService
 from relay_teams.agents.execution import event_publishing as event_publishing_module
 from relay_teams.agents.execution import session_prompt as session_prompt_module
+from relay_teams.mcp.mcp_models import McpToolInfo
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.tools.runtime.persisted_state import (
     load_tool_call_state,
@@ -1044,6 +1045,293 @@ async def test_build_agent_iteration_context_does_not_override_proxy_env_when_ho
     assert (
         captured["llm_http_client_cache_scope"]
         == "run-1:session-1:task-1:inst-1:writer"
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_agent_iteration_context_refreshes_failed_w3_mcp_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _W3McpRegistry(McpRegistry):
+        def __init__(self) -> None:
+            super().__init__(
+                (
+                    McpServerSpec(
+                        name="w3",
+                        config={"mcpServers": {"w3": {"command": "npx"}}},
+                        server_config={
+                            "command": "npx",
+                            "env": {"X_AUTH_TOKEN": "placeholder"},
+                        },
+                        source=McpConfigScope.APP,
+                    ),
+                )
+            )
+            self.discovery_calls: list[str] = []
+
+        async def list_tools_for_discovery(self, name: str) -> tuple[McpToolInfo, ...]:
+            self.discovery_calls.append(name)
+            return ()
+
+    class _FakeDiscoveryService:
+        def __init__(self) -> None:
+            self.summary_calls: list[str] = []
+            self.ready_calls: list[tuple[str, tuple[McpToolInfo, ...]]] = []
+            self.failed_calls: list[tuple[str, Exception]] = []
+
+        def get_tools_summary(self, name: str) -> object:
+            self.summary_calls.append(name)
+            return type(
+                "_Summary",
+                (),
+                {"status": session_prompt_module.McpDiscoveryStatus.FAILED},
+            )()
+
+        def mark_ready(self, name: str, tools: tuple[McpToolInfo, ...]) -> None:
+            self.ready_calls.append((name, tools))
+
+        def mark_failed(self, name: str, exc: Exception) -> None:
+            self.failed_calls.append((name, exc))
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_config"] = ModelEndpointConfig(
+        model="glm-5.1",
+        base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+        api_key="test-key",
+    )
+    session.__dict__["_tool_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = cast(object, None)
+    mcp_registry = _W3McpRegistry()
+    session.__dict__["_mcp_registry"] = mcp_registry
+    discovery_service = _FakeDiscoveryService()
+    session.__dict__["_mcp_discovery_service"] = discovery_service
+    session.__dict__["_skill_registry"] = cast(object, None)
+    session.__dict__["_hook_service"] = _FakeRunEnvHookService({})
+
+    async def _prepare_prompt_context(**_kwargs: object) -> object:
+        return type(
+            "_PreparedPrompt",
+            (),
+            {"history": (), "system_prompt": "Prepared system prompt"},
+        )()
+
+    async def _build_model_settings(**_kwargs: object) -> object:
+        return object()
+
+    session.__dict__["_prepare_prompt_context"] = _prepare_prompt_context
+    session.__dict__["_build_model_settings"] = _build_model_settings
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        session_prompt_module,
+        "build_coordination_agent",
+        lambda **_kwargs: object(),
+    )
+
+    _ = await AgentLlmSession._build_agent_iteration_context(
+        session,
+        request=_build_request(),
+        conversation_id="conv-1",
+        system_prompt="System prompt",
+        reserve_user_prompt_tokens=False,
+        allowed_tools=(),
+        allowed_mcp_servers=("w3",),
+        allowed_skills=(),
+    )
+
+    assert mcp_registry.discovery_calls == ["w3"]
+    assert discovery_service.ready_calls == [("w3", ())]
+    assert discovery_service.failed_calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_w3_mcp_discovery_skips_without_discovery_service() -> (
+    None
+):
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_mcp_registry"] = McpRegistry(())
+    session.__dict__["_mcp_discovery_service"] = None
+
+    await AgentLlmSession._refresh_failed_w3_mcp_discovery_after_auth(
+        session,
+        ("w3",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_w3_mcp_discovery_skips_without_w3_runtime() -> None:
+    class _PlainRegistry:
+        pass
+
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_mcp_registry"] = _PlainRegistry()
+    session.__dict__["_mcp_discovery_service"] = object()
+
+    await AgentLlmSession._refresh_failed_w3_mcp_discovery_after_auth(
+        session,
+        ("w3",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_w3_mcp_discovery_skips_without_runtime_token() -> None:
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_mcp_registry"] = McpRegistry(())
+    session.__dict__["_mcp_discovery_service"] = object()
+
+    await AgentLlmSession._refresh_failed_w3_mcp_discovery_after_auth(
+        session,
+        ("w3",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_w3_mcp_discovery_skips_plain_servers() -> None:
+    class _TokenMcpRegistry(McpRegistry):
+        def runtime_w3_x_auth_token(self) -> str | None:
+            return "runtime-token"
+
+    class _FakeDiscoveryService:
+        def __init__(self) -> None:
+            self.summary_calls: list[str] = []
+
+        def get_tools_summary(self, name: str) -> object:
+            self.summary_calls.append(name)
+            return object()
+
+    registry = _TokenMcpRegistry(
+        (
+            McpServerSpec(
+                name="plain",
+                config={"mcpServers": {"plain": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    discovery_service = _FakeDiscoveryService()
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_mcp_registry"] = registry
+    session.__dict__["_mcp_discovery_service"] = discovery_service
+
+    await AgentLlmSession._refresh_failed_w3_mcp_discovery_after_auth(
+        session,
+        ("plain",),
+    )
+
+    assert discovery_service.summary_calls == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_failed_w3_mcp_discovery_marks_failed_on_refresh_error() -> None:
+    class _FailingW3McpRegistry(McpRegistry):
+        def __init__(self) -> None:
+            super().__init__(
+                (
+                    McpServerSpec(
+                        name="w3",
+                        config={"mcpServers": {"w3": {"command": "npx"}}},
+                        server_config={
+                            "command": "npx",
+                            "env": {"X_AUTH_TOKEN": "placeholder"},
+                        },
+                        source=McpConfigScope.APP,
+                    ),
+                )
+            )
+
+        def runtime_w3_x_auth_token(self) -> str | None:
+            return "runtime-token"
+
+        async def list_tools_for_discovery(self, name: str) -> tuple[McpToolInfo, ...]:
+            _ = name
+            raise RuntimeError("refresh failed")
+
+    class _FakeDiscoveryService:
+        def __init__(self) -> None:
+            self.ready_calls: list[tuple[str, tuple[McpToolInfo, ...]]] = []
+            self.failed_calls: list[tuple[str, Exception]] = []
+
+        def get_tools_summary(self, name: str) -> object:
+            _ = name
+            return type(
+                "_Summary",
+                (),
+                {"status": session_prompt_module.McpDiscoveryStatus.FAILED},
+            )()
+
+        def mark_ready(self, name: str, tools: tuple[McpToolInfo, ...]) -> None:
+            self.ready_calls.append((name, tools))
+
+        def mark_failed(self, name: str, exc: Exception) -> None:
+            self.failed_calls.append((name, exc))
+
+    discovery_service = _FakeDiscoveryService()
+    session = object.__new__(AgentLlmSession)
+    session.__dict__["_mcp_registry"] = _FailingW3McpRegistry()
+    session.__dict__["_mcp_discovery_service"] = discovery_service
+
+    await AgentLlmSession._refresh_failed_w3_mcp_discovery_after_auth(
+        session,
+        ("w3",),
+    )
+
+    assert discovery_service.ready_calls == []
+    assert len(discovery_service.failed_calls) == 1
+    failed_name, exc = discovery_service.failed_calls[0]
+    assert failed_name == "w3"
+    assert str(exc) == "refresh failed"
+
+
+def test_mcp_server_declares_w3_auth_env_handles_missing_or_plain_specs() -> None:
+    class _MissingSpecRegistry:
+        def get_w3_auth_env_spec(self, name: str) -> McpServerSpec:
+            _ = name
+            raise ValueError("missing")
+
+    plain_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="plain",
+                config={"mcpServers": {"plain": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={"command": "npx", "env": {"xAuthToken": "placeholder"}},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    assert (
+        session_prompt_module._mcp_server_declares_w3_auth_env(
+            _MissingSpecRegistry(),
+            "missing",
+        )
+        is False
+    )
+    assert (
+        session_prompt_module._mcp_server_declares_w3_auth_env(
+            plain_registry,
+            "plain",
+        )
+        is False
+    )
+    assert (
+        session_prompt_module._mcp_server_declares_w3_auth_env(
+            plain_registry,
+            "w3",
+        )
+        is True
     )
 
 

@@ -303,6 +303,40 @@ for raw_line in sys.stdin:
 _CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS = 20
 
 
+@pytest.mark.asyncio
+async def test_cli_runtime_env_applies_w3_auth_token_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_overlay(
+        env: dict[str, str],
+        *,
+        declared_env: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "X_AUTH_TOKEN" in declared_env:
+            result["X_AUTH_TOKEN"] = "runtime-token"
+        return result
+
+    monkeypatch.setattr(
+        cli_client_module,
+        "overlay_w3_x_auth_token_env",
+        fake_overlay,
+    )
+    transport = StdioTransportConfig(
+        command="agent",
+        env=(
+            ExternalAgentSecretBinding(name="X_AUTH_TOKEN", value=None),
+            ExternalAgentSecretBinding(name="WEB_TOKEN", value="keep"),
+        ),
+    )
+
+    env = await cli_client_module._runtime_env_async(transport)
+
+    assert env["X_AUTH_TOKEN"] == "runtime-token"
+    assert env["WEB_TOKEN"] == "keep"
+
+
 def _build_cli_agent(
     command: str,
     args: tuple[str, ...],

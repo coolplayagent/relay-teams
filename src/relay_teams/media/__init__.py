@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from relay_teams.media.asset_repository import MediaAssetRepository
-from relay_teams.media.asset_service import (
-    MediaAssetService,
-    infer_media_modality,
-)
 from relay_teams.media.models import (
     ContentPart,
     ContentPartAdapter,
@@ -25,6 +20,11 @@ from relay_teams.media.prompt_content import (
     normalize_user_prompt_content,
     user_prompt_content_key,
     user_prompt_content_to_text,
+)
+from relay_teams.media.asset_repository import MediaAssetRepository
+from relay_teams.media.asset_service import (
+    MediaAssetService,
+    infer_media_modality,
 )
 
 __all__ = [

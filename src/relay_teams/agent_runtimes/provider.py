@@ -56,7 +56,10 @@ from relay_teams.agent_runtimes.skill_bridge import SkillBridgeService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
-from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.mcp_registry import (
+    McpRegistry,
+    overlay_mcp_server_config_w3_auth_env,
+)
 from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
@@ -952,9 +955,15 @@ class AgentRuntimeSessionManager:
             send_notification=handle.transport.send_notification,
         )
         workspace = await self._resolve_workspace_async(request)
+        mcp_registry = self._get_mcp_registry()
+        await mcp_registry.prepare_w3_auth_env(
+            role.mcp_servers,
+            strict=False,
+            consumer="agent_runtimes.provider.role",
+        )
         mcp_servers = _build_mcp_servers_for_role(
             role=role,
-            mcp_registry=self._get_mcp_registry(),
+            mcp_registry=mcp_registry,
             host_server=handle.host_tool_bridge.stdio_server_payload(
                 config_dir=self._config_dir,
                 request=request,
@@ -1806,7 +1815,10 @@ def _build_mcp_servers_for_role(
                 "host tools."
             )
         spec = mcp_registry.get_spec(server_name)
-        payload = {str(key): value for key, value in spec.server_config.items()}
+        payload = overlay_mcp_server_config_w3_auth_env(
+            spec.server_config,
+            w3_x_auth_token=mcp_registry.runtime_w3_x_auth_token(),
+        )
         payload["id"] = server_name
         payload["name"] = server_name
         result.append(payload)

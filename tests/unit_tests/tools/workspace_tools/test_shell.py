@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from collections.abc import Mapping
+from os import pathsep
 from pathlib import Path
 import subprocess
 from typing import cast
@@ -520,7 +521,7 @@ async def test_spawn_shell_injects_github_token_and_bundled_path(
     assert env["GH_TOKEN"] == "ghp_secret"
     assert env["GITHUB_TOKEN"] == "ghp_secret"
     assert env["GH_PROMPT_DISABLED"] == "1"
-    assert str(gh.parent) == env["PATH"].split(os.pathsep)[0]
+    assert str(gh.parent) == env["PATH"].split(pathsep)[0]
 
 
 @pytest.mark.asyncio
@@ -641,7 +642,7 @@ async def test_spawn_shell_prepends_existing_clawhub_path(
 
     env = captured_kwargs.get("env")
     assert isinstance(env, dict)
-    assert env["PATH"].split(os.pathsep)[0] == str(clawhub.parent)
+    assert env["PATH"].split(pathsep)[0] == str(clawhub.parent)
 
 
 @pytest.mark.asyncio
@@ -813,6 +814,104 @@ async def test_build_shell_env_respects_case_variant_python_env_on_windows(
     assert env["pythonutf8"] == "0"
     assert "PYTHONIOENCODING" not in env
     assert "PYTHONUTF8" not in env
+
+
+@pytest.mark.asyncio
+async def test_build_shell_env_applies_w3_auth_token_overlay_for_declared_env(
+    monkeypatch,
+) -> None:
+    from relay_teams.tools.workspace_tools import shell_executor
+
+    async def fake_overlay(
+        env: Mapping[str, str],
+        *,
+        declared_env: Mapping[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "x-auth-token" in declared_env:
+            result["x-auth-token"] = "runtime-token"
+        return result
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_clawhub_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(shell_executor, "overlay_w3_x_auth_token_env", fake_overlay)
+    monkeypatch.setattr(shell_executor.os, "environ", {"PATH": "base"})
+
+    env = await shell_executor.build_shell_env(
+        {"x-auth-token": "placeholder", "AUTH_TOKEN": "keep"},
+        shell=shell,
+    )
+
+    assert env["x-auth-token"] == "runtime-token"
+    assert env["AUTH_TOKEN"] == "keep"
+
+
+@pytest.mark.asyncio
+async def test_build_shell_env_does_not_overlay_inherited_w3_auth_token(
+    monkeypatch,
+) -> None:
+    from relay_teams.tools.workspace_tools import shell_executor
+
+    observed_declared_env: list[Mapping[str, object] | None] = []
+
+    async def fake_overlay(
+        env: Mapping[str, str],
+        *,
+        declared_env: Mapping[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        observed_declared_env.append(declared_env)
+        result = dict(env)
+        if declared_env is not None and "X_AUTH_TOKEN" in declared_env:
+            result["X_AUTH_TOKEN"] = "runtime-token"
+        return result
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_clawhub_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(shell_executor, "overlay_w3_x_auth_token_env", fake_overlay)
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {"PATH": "base", "X_AUTH_TOKEN": "ambient-token"},
+    )
+
+    env = await shell_executor.build_shell_env(shell=shell)
+
+    assert observed_declared_env == [{}]
+    assert env["X_AUTH_TOKEN"] == "ambient-token"
 
 
 @pytest.mark.asyncio

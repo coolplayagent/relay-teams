@@ -15,8 +15,8 @@ def _reset_runtime_env_sync(
     monkeypatch: pytest.MonkeyPatch,
     keys: tuple[str, ...],
 ) -> None:
-    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
-    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    runtime_env.PROCESS_ENV_BASELINE.clear()
+    runtime_env.SYNCED_APP_ENV_KEYS.clear()
     for key in keys:
         monkeypatch.delenv(key, raising=False)
 

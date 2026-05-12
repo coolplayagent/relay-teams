@@ -25,7 +25,7 @@ from relay_teams.metrics import (
     MetricRecorder,
     MetricRegistry,
 )
-from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
+from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from relay_teams.mcp.mcp_registry import McpRegistry
 
 
@@ -481,6 +481,597 @@ def test_gateway_aware_mcp_registry_filters_unknowns_after_wildcard() -> None:
     assert resolved == ("filesystem", "zed-tools")
 
 
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_prepares_w3_env_on_base_registry() -> None:
+    class _TrackingMcpRegistry(McpRegistry):
+        def __init__(self) -> None:
+            super().__init__(
+                (
+                    McpServerSpec(
+                        name="filesystem",
+                        config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                        server_config={
+                            "command": "npx",
+                            "env": {"X_AUTH_TOKEN": "placeholder"},
+                        },
+                        source=McpConfigScope.APP,
+                    ),
+                )
+            )
+            self.prepare_calls: list[tuple[tuple[str, ...], bool, str | None]] = []
+
+        async def prepare_w3_auth_env(
+            self,
+            names: tuple[str, ...],
+            *,
+            strict: bool = True,
+            consumer: str | None = None,
+        ) -> None:
+            self.prepare_calls.append((names, strict, consumer))
+
+    relay = AcpMcpRelay()
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="zed-tools",
+                name="zed-tools",
+                transport="acp",
+                config={"transport": "acp", "id": "zed-tools"},
+            ),
+        ),
+    )
+    base_registry = _TrackingMcpRegistry()
+    registry = GatewayAwareMcpRegistry(
+        base_registry=base_registry,
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        await registry.prepare_w3_auth_env(
+            ("*",),
+            strict=False,
+            consumer="test.consumer",
+        )
+
+    assert base_registry.prepare_calls == [(("filesystem",), False, "test.consumer")]
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_prepares_w3_env_for_session_stdio_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    built_tokens: list[str | None] = []
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        built_tokens.append(w3_x_auth_token)
+        return _FakeToolset((), tool_prefix=spec.name)
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="w3-session",
+                name="w3-session",
+                transport="stdio",
+                config={
+                    "command": "npx",
+                    "env": {"xAuthToken": "placeholder"},
+                },
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    relay.prepare_current_session_w3_auth_token(("w3-session",), token="ignored")
+    assert relay.current_session_w3_auth_tokens() == ()
+    assert acp_mcp_relay_module._gateway_server_declares_w3_auth_env(None) is False
+
+    with relay.session_scope("gws_123"):
+        await registry.prepare_w3_auth_env(("w3-session",), consumer="test.consumer")
+        assert registry.runtime_w3_x_auth_token() == "runtime-token"
+        toolsets = registry.get_toolsets(("w3-session",))
+
+    assert len(toolsets) == 1
+    assert built_tokens == ["runtime-token"]
+    assert registry.runtime_w3_x_auth_token() is None
+
+    relay.bind_session_servers("gws_123", ())
+    with relay.session_scope("gws_123"):
+        assert registry.runtime_w3_x_auth_token() is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_prepares_w3_env_for_session_local_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    built_tokens: list[str | None] = []
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        built_tokens.append(w3_x_auth_token)
+        return _FakeToolset((), tool_prefix=spec.name)
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    local_spec = GatewayMcpServerSpec(
+        server_id="local-session",
+        name="local-session",
+        transport="local",
+        config={
+            "type": "local",
+            "command": "npx",
+            "env": {"X_AUTH_TOKEN": "placeholder"},
+        },
+    )
+    relay.bind_session_servers("gws_123", (local_spec,))
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        await registry.prepare_w3_auth_env(
+            ("local-session",),
+            consumer="test.consumer",
+        )
+        assert registry.get_toolsets(("local-session",))
+
+    assert built_tokens == ["runtime-token"]
+    assert acp_mcp_relay_module._gateway_server_declares_w3_auth_env(local_spec) is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_prepares_shadowed_session_w3_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _TrackingMcpRegistry(McpRegistry):
+        def __init__(self) -> None:
+            super().__init__(
+                (
+                    McpServerSpec(
+                        name="shared",
+                        config={"mcpServers": {"shared": {"command": "npx"}}},
+                        server_config={
+                            "command": "npx",
+                            "env": {"AUTH_TOKEN": "base-placeholder"},
+                        },
+                        source=McpConfigScope.APP,
+                    ),
+                )
+            )
+            self.prepare_calls: list[tuple[tuple[str, ...], bool, str | None]] = []
+
+        async def prepare_w3_auth_env(
+            self,
+            names: tuple[str, ...],
+            *,
+            strict: bool = True,
+            consumer: str | None = None,
+        ) -> None:
+            self.prepare_calls.append((names, strict, consumer))
+
+    relay = AcpMcpRelay()
+    built_tokens: list[str | None] = []
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        built_tokens.append(w3_x_auth_token)
+        return _FakeToolset((), tool_prefix=spec.name)
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="shared",
+                name="shared",
+                transport="stdio",
+                config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "session-placeholder"},
+                },
+            ),
+        ),
+    )
+    base_registry = _TrackingMcpRegistry()
+    registry = GatewayAwareMcpRegistry(
+        base_registry=base_registry,
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        spec = registry.get_w3_auth_env_spec("shared")
+        raw_env = spec.server_config["env"]
+        assert isinstance(raw_env, dict)
+        assert acp_mcp_relay_module.env_declares_w3_x_auth_token(
+            raw_env,
+        )
+        await registry.prepare_w3_auth_env(("shared",), consumer="test.consumer")
+        assert registry.get_toolsets(("shared",))
+
+    assert base_registry.prepare_calls == []
+    assert built_tokens == ["runtime-token"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_preserves_and_reenables_session_w3_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    resolved_tokens: list[str | None] = ["runtime-token", None]
+    built_tokens: list[str | None] = []
+
+    async def fake_resolve_w3_x_auth_token() -> str | None:
+        return resolved_tokens.pop(0)
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        built_tokens.append(w3_x_auth_token)
+        if w3_x_auth_token is None:
+            raise RuntimeError("startup failed")
+        return _FakeToolset((), tool_prefix=spec.name)
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="w3-session",
+                name="w3-session",
+                transport="stdio",
+                config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        assert registry.get_toolsets(("w3-session",)) == ()
+        await registry.prepare_w3_auth_env(("w3-session",), consumer="test.consumer")
+        toolsets = registry.get_toolsets(("w3-session",))
+        assert registry.runtime_w3_x_auth_token() == "runtime-token"
+        await registry.prepare_w3_auth_env(("w3-session",), consumer="test.consumer")
+        preserved_toolsets = registry.get_toolsets(("w3-session",))
+        assert registry.runtime_w3_x_auth_token() == "runtime-token"
+
+    assert len(toolsets) == 1
+    assert preserved_toolsets == toolsets
+    assert built_tokens == [None, "runtime-token"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_discovers_session_stdio_with_w3_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    built_tokens: list[str | None] = []
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        built_tokens.append(w3_x_auth_token)
+        return _FakeToolset(
+            (
+                _FakeListedTool(
+                    name="echo",
+                    description="Echo",
+                    input_schema={"type": "object"},
+                ),
+            ),
+            tool_prefix=spec.name,
+        )
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="w3-session",
+                name="w3-session",
+                transport="stdio",
+                config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        await registry.prepare_w3_auth_env(("w3-session",), consumer="test.consumer")
+        tools = await registry.list_tools_for_discovery("w3-session")
+
+    assert built_tokens == ["runtime-token"]
+    assert tools == (
+        McpToolInfo(
+            name="w3-session_echo",
+            description="Echo",
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_discovery_delegates_without_session() -> None:
+    class _TrackingMcpRegistry(McpRegistry):
+        def __init__(self) -> None:
+            super().__init__(())
+            self.calls: list[str] = []
+
+        async def list_tools_for_discovery(
+            self,
+            name: str,
+        ) -> tuple[McpToolInfo, ...]:
+            self.calls.append(name)
+            return (McpToolInfo(name="base_echo", description="Echo"),)
+
+    base_registry = _TrackingMcpRegistry()
+    registry = GatewayAwareMcpRegistry(
+        base_registry=base_registry,
+        relay=AcpMcpRelay(),
+    )
+
+    tools = await registry.list_tools_for_discovery("base")
+
+    assert tools == (McpToolInfo(name="base_echo", description="Echo"),)
+    assert base_registry.calls == ["base"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_discovery_returns_empty_for_inactive_acp() -> (
+    None
+):
+    relay = AcpMcpRelay()
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="zed-tools",
+                name="zed-tools",
+                transport="acp",
+                config={"transport": "acp", "id": "zed-tools"},
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        tools = await registry.list_tools_for_discovery("zed-tools")
+
+    assert tools == ()
+    assert (
+        acp_mcp_relay_module._gateway_server_declares_w3_auth_env(
+            GatewayMcpServerSpec(
+                server_id="zed-tools",
+                name="zed-tools",
+                transport="acp",
+                config={"transport": "acp", "env": {"X_AUTH_TOKEN": "placeholder"}},
+            )
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_discovery_disables_failed_stdio_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+    calls = 0
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        _ = spec, w3_x_auth_token
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("startup failed")
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="w3-session",
+                name="w3-session",
+                transport="stdio",
+                config={"command": "npx"},
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        with pytest.raises(RuntimeError, match="startup failed"):
+            await registry.list_tools_for_discovery("w3-session")
+        tools = await registry.list_tools_for_discovery("w3-session")
+
+    assert tools == ()
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_aware_mcp_registry_discovery_disables_failed_tool_listing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    relay = AcpMcpRelay()
+
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FailingListToolset:
+        _ = spec, w3_x_auth_token
+        return _FailingListToolset(
+            (),
+            error=RuntimeError("listing failed"),
+            tool_prefix=spec.name,
+        )
+
+    monkeypatch.setattr(
+        acp_mcp_relay_module,
+        "build_mcp_server",
+        fake_build_mcp_server,
+    )
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="w3-session",
+                name="w3-session",
+                transport="stdio",
+                config={"command": "npx"},
+            ),
+        ),
+    )
+    registry = GatewayAwareMcpRegistry(
+        base_registry=McpRegistry(()),
+        relay=relay,
+    )
+
+    with relay.session_scope("gws_123"):
+        with pytest.raises(RuntimeError, match="listing failed"):
+            await registry.list_tools_for_discovery("w3-session")
+        tools = await registry.list_tools_for_discovery("w3-session")
+
+    assert tools == ()
+
+
+def test_acp_mcp_relay_prunes_session_w3_tokens_when_servers_rebind() -> None:
+    relay = AcpMcpRelay()
+
+    with relay.session_scope("other-session"):
+        relay.prepare_current_session_w3_auth_token(("other",), token="other-token")
+    with relay.session_scope("gws_123"):
+        relay.prepare_current_session_w3_auth_token(("kept",), token="kept-token")
+        relay.prepare_current_session_w3_auth_token(("removed",), token="old-token")
+
+    relay.bind_session_servers(
+        "gws_123",
+        (
+            GatewayMcpServerSpec(
+                server_id="kept",
+                name="kept",
+                transport="stdio",
+                config={"command": "npx"},
+            ),
+        ),
+    )
+
+    with relay.session_scope("gws_123"):
+        assert relay.current_session_w3_auth_tokens() == ("kept-token",)
+        relay.prepare_current_session_w3_auth_token(("kept",), token=None)
+        assert relay.current_session_w3_auth_tokens() == ()
+    with relay.session_scope("other-session"):
+        assert relay.current_session_w3_auth_tokens() == ("other-token",)
+
+
 def test_gateway_aware_mcp_registry_validates_exact_wildcard_only() -> None:
     registry = GatewayAwareMcpRegistry(
         base_registry=McpRegistry(()),
@@ -709,6 +1300,21 @@ class _FakeToolset:
         return self._tools
 
 
+class _FailingListToolset(_FakeToolset):
+    def __init__(
+        self,
+        tools: tuple[_FakeListedTool, ...],
+        *,
+        error: RuntimeError,
+        tool_prefix: str | None = None,
+    ) -> None:
+        super().__init__(tools, tool_prefix=tool_prefix)
+        self._error = error
+
+    async def list_tools(self) -> tuple[_FakeListedTool, ...]:
+        raise self._error
+
+
 @pytest.mark.asyncio
 async def test_gateway_aware_mcp_registry_exposes_session_scoped_stdio_servers(
     monkeypatch: pytest.MonkeyPatch,
@@ -716,7 +1322,13 @@ async def test_gateway_aware_mcp_registry_exposes_session_scoped_stdio_servers(
     relay = AcpMcpRelay()
     built_specs: list[McpServerSpec] = []
 
-    def fake_build_mcp_server(spec: McpServerSpec) -> _FakeToolset:
+    def fake_build_mcp_server(
+        spec: McpServerSpec,
+        *,
+        w3_x_auth_token: str | None = None,
+        **_kwargs: object,
+    ) -> _FakeToolset:
+        _ = w3_x_auth_token
         built_specs.append(spec)
         return _FakeToolset(
             (

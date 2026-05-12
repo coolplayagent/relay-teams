@@ -6,6 +6,7 @@ from collections.abc import AsyncGenerator
 from enum import Enum
 import importlib.util
 import os
+from os import pathsep
 import platform
 from pathlib import Path
 import shlex
@@ -25,6 +26,7 @@ from relay_teams.env import (
 from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.github_config_service import GitHubConfigService
+from relay_teams.env.w3_auth_token_env import overlay_w3_x_auth_token_env
 from relay_teams.paths import get_app_config_dir
 from relay_teams.net.github_cli import resolve_existing_gh_path
 from relay_teams.tools.workspace_tools.shell_policy import (
@@ -601,7 +603,7 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
-    return os.pathsep.join(path_parts)
+    return pathsep.join(path_parts)
 
 
 async def build_shell_env(
@@ -626,6 +628,7 @@ async def build_shell_env(
     gh_path = await _resolve_gh_path()
     if gh_path is not None:
         shell_env["PATH"] = _prepend_to_path(shell_env.get("PATH"), gh_path.parent)
+    shell_env = await overlay_w3_x_auth_token_env(shell_env, declared_env=env or {})
     return _sanitize_shell_env(shell_env, shell=resolved_shell)
 
 

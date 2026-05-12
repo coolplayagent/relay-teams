@@ -223,12 +223,12 @@ def test_load_registry_preserves_process_proxy_for_mcp_runtime(
     monkeypatch.setenv("HTTPS_PROXY", "http://process-proxy.internal:8443")
     monkeypatch.setenv("NO_PROXY", "localhost,.internal")
     monkeypatch.setitem(
-        runtime_env._PROCESS_ENV_BASELINE,
+        runtime_env.PROCESS_ENV_BASELINE,
         "HTTPS_PROXY",
         "http://process-proxy.internal:8443",
     )
     monkeypatch.setitem(
-        runtime_env._PROCESS_ENV_BASELINE,
+        runtime_env.PROCESS_ENV_BASELINE,
         "NO_PROXY",
         "localhost,.internal",
     )
