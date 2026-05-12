@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import logging
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
@@ -25,6 +26,11 @@ from relay_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from relay_teams.gateway.session_ingress_service import GatewaySessionBusyError
+from relay_teams.gateway.user_questions import (
+    UserQuestionAnswerStatus,
+    format_user_question_event,
+    parse_user_question_event,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
@@ -67,7 +73,8 @@ class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
         self,
         trigger_id: str,
-    ) -> FeishuTriggerRuntimeConfig | None: ...
+    ) -> FeishuTriggerRuntimeConfig | None:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuClientLike(Protocol):
@@ -77,7 +84,8 @@ class FeishuClientLike(Protocol):
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError  # pragma: no cover
 
     async def create_message_reaction(
         self,
@@ -85,7 +93,8 @@ class FeishuClientLike(Protocol):
         message_id: str,
         reaction_type: str,
         environment: FeishuEnvironment | None = None,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError  # pragma: no cover
 
     async def send_text_message(
         self,
@@ -93,7 +102,8 @@ class FeishuClientLike(Protocol):
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError  # pragma: no cover
 
     async def resolve_user_name(
         self,
@@ -101,7 +111,8 @@ class FeishuClientLike(Protocol):
         open_id: str,
         chat_id: str | None = None,
         environment: FeishuEnvironment | None = None,
-    ) -> str | None: ...
+    ) -> str | None:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuMessagePoolService:
@@ -244,6 +255,86 @@ class FeishuMessagePoolService:
             trigger_name=runtime_config.trigger_name,
             event_id=record.event_id,
             duplicate=False,
+        )
+
+    def answer_pending_user_question(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> UserQuestionAnswerStatus:
+        try:
+            return _run_answer_check(
+                lambda: self._inbound_runtime.answer_pending_user_question_async(
+                    runtime_config=runtime_config,
+                    message=normalized,
+                )
+            )
+        except (GatewaySessionBusyError, RuntimeError, KeyError, ValueError) as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.message_pool.user_question_answer_failed",
+                message="Failed to answer pending Feishu user question",
+                payload={
+                    "trigger_id": runtime_config.trigger_id,
+                    "chat_id": normalized.chat_id,
+                    "message_id": normalized.message_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+            return UserQuestionAnswerStatus.NOT_PENDING
+
+    def has_message_record(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> bool:
+        try:
+            _ = self._message_pool_repo.get_by_message_key(
+                trigger_id=runtime_config.trigger_id,
+                tenant_key=normalized.tenant_key,
+                message_key=_message_key(normalized),
+            )
+        except KeyError:
+            return False
+        return True
+
+    def record_consumed_user_question_answer(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+        reason: str,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc)
+        self._message_pool_repo.create_or_get(
+            FeishuMessagePoolRecord(
+                message_pool_id=f"fmp_{uuid4().hex[:16]}",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                tenant_key=normalized.tenant_key,
+                chat_id=normalized.chat_id,
+                chat_type=normalized.chat_type,
+                event_id=normalized.event_id,
+                message_key=_message_key(normalized),
+                message_id=normalized.message_id,
+                command_name=reason,
+                sender_name=normalized.sender_name,
+                intent_text=normalized.trigger_text,
+                payload=normalized.payload,
+                metadata=normalized.metadata,
+                processing_status=FeishuMessageProcessingStatus.COMPLETED,
+                reaction_status=FeishuMessageDeliveryStatus.SKIPPED,
+                ack_status=FeishuMessageDeliveryStatus.SKIPPED,
+                final_reply_status=FeishuMessageDeliveryStatus.SKIPPED,
+                next_attempt_at=now,
+                created_at=now,
+                updated_at=now,
+                completed_at=now,
+            )
         )
 
     def get_chat_summary(
@@ -461,6 +552,30 @@ class FeishuMessagePoolService:
                         sender_name=enriched.sender_name,
                         metadata=enriched.metadata,
                     )
+                answer_status = (
+                    await self._inbound_runtime.answer_pending_user_question_async(
+                        runtime_config=runtime_config,
+                        message=enriched,
+                    )
+                )
+                if answer_status in {
+                    UserQuestionAnswerStatus.ANSWERED,
+                    UserQuestionAnswerStatus.INVALID_REPLY,
+                }:
+                    completed_at = datetime.now(tz=timezone.utc)
+                    self._message_pool_repo.update(
+                        claimed.message_pool_id,
+                        processing_status=FeishuMessageProcessingStatus.COMPLETED,
+                        final_reply_status=FeishuMessageDeliveryStatus.SKIPPED,
+                        final_reply_text=(
+                            "Answer received."
+                            if answer_status == UserQuestionAnswerStatus.ANSWERED
+                            else "Invalid answer ignored."
+                        ),
+                        completed_at=completed_at,
+                        last_error=None,
+                    )
+                    continue
                 session_id, run_id = await self._inbound_runtime.start_run_async(
                     runtime_config=runtime_config,
                     message=enriched,
@@ -516,6 +631,10 @@ class FeishuMessagePoolService:
                 if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
                     progress = (
                         await self._notify_recovery_pause(record, runtime) or progress
+                    )
+                if runtime.phase == RunRuntimePhase.AWAITING_MANUAL_ACTION:
+                    progress = (
+                        await self._notify_user_question_request(record) or progress
                     )
                 continue
             if runtime.status not in {
@@ -747,6 +866,59 @@ class FeishuMessagePoolService:
         self._pause_notice_keys.add(dedupe_key)
         return True
 
+    async def _notify_user_question_request(
+        self,
+        record: FeishuMessagePoolRecord,
+    ) -> bool:
+        question_event_id: int | None = None
+        text = ""
+        for (
+            event_id,
+            candidate_question_id,
+            candidate_text,
+        ) in await _user_question_events_async(
+            run_id=str(record.run_id or ""),
+            event_log=self._event_log,
+        ):
+            if await self._inbound_runtime.is_user_question_requested_async(
+                run_id=str(record.run_id or ""),
+                question_id=candidate_question_id,
+            ):
+                question_event_id = event_id
+                text = candidate_text
+                break
+        if question_event_id is None or not text:
+            return False
+        dedupe_key = f"{record.run_id}:{question_event_id}"
+        if dedupe_key in self._pause_notice_keys:
+            return False
+        runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
+            record.trigger_id
+        )
+        if runtime_config is None or self._feishu_client is None:
+            return False
+        try:
+            await self._send_terminal_reply(
+                record=record,
+                text=text,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="feishu.message_pool.user_question_notice_failed",
+                message="Failed to send Feishu user question notice",
+                payload={
+                    "message_pool_id": record.message_pool_id,
+                    "run_id": record.run_id,
+                    "error": str(exc),
+                },
+            )
+            return False
+        self._pause_notice_keys.add(dedupe_key)
+        return True
+
     async def _send_queue_reply(
         self,
         *,
@@ -922,6 +1094,21 @@ def _message_key(message: FeishuNormalizedMessage) -> str:
     return message.event_id
 
 
+def _run_answer_check(
+    coroutine_factory: Callable[
+        [],
+        Coroutine[object, object, UserQuestionAnswerStatus],
+    ],
+) -> UserQuestionAnswerStatus:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coroutine_factory())
+    raise RuntimeError(
+        "Cannot synchronously answer a Feishu user question inside an active event loop"
+    )
+
+
 def _build_ack_text(queue_depth: int) -> str:
     if queue_depth <= 0:
         return "收到，正在处理。"
@@ -1072,3 +1259,61 @@ def _latest_pause_event(
     except ValueError:
         return None, None
     return None, None
+
+
+def _user_question_events(
+    *,
+    run_id: str,
+    event_log: EventLog,
+) -> tuple[tuple[int, str, str], ...]:
+    events: list[tuple[int, str, str]] = []
+    try:
+        for event in reversed(event_log.list_by_trace_with_ids(run_id)):
+            if (
+                str(event.get("event_type") or "")
+                != RunEventType.USER_QUESTION_REQUESTED.value
+            ):
+                continue
+            event_id = event.get("id")
+            if not isinstance(event_id, int):
+                continue
+            payload_json = str(event.get("payload_json") or "{}")
+            parsed = parse_user_question_event(payload_json)
+            if parsed is None:
+                continue
+            question_id, _questions = parsed
+            text = format_user_question_event(payload_json)
+            if text:
+                events.append((event_id, question_id, text))
+    except ValueError:
+        return ()
+    return tuple(events)
+
+
+async def _user_question_events_async(
+    *,
+    run_id: str,
+    event_log: EventLog,
+) -> tuple[tuple[int, str, str], ...]:
+    events: list[tuple[int, str, str]] = []
+    try:
+        for event in reversed(await event_log.list_by_trace_with_ids_async(run_id)):
+            if (
+                str(event.get("event_type") or "")
+                != RunEventType.USER_QUESTION_REQUESTED.value
+            ):
+                continue
+            event_id = event.get("id")
+            if not isinstance(event_id, int):
+                continue
+            payload_json = str(event.get("payload_json") or "{}")
+            parsed = parse_user_question_event(payload_json)
+            if parsed is None:
+                continue
+            question_id, _questions = parsed
+            text = format_user_question_event(payload_json)
+            if text:
+                events.append((event_id, question_id, text))
+    except ValueError:
+        return ()
+    return tuple(events)

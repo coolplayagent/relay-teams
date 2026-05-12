@@ -46,6 +46,7 @@ from relay_teams.gateway.im.command_service import (
     ImSessionCommandService,
     _FeishuQueueLookup,
 )
+from relay_teams.gateway.user_questions import UserQuestionAnswerStatus
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
     GatewaySessionIngressResult,
@@ -54,6 +55,9 @@ from relay_teams.gateway.session_ingress_service import (
 )
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
+)
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
@@ -1336,6 +1340,375 @@ async def test_discord_service_watcher_and_future_edges(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_discord_watcher_sends_user_question_notice(tmp_path: Path) -> None:
+    fake_im_tool = _FakeImToolService()
+    run_service = _FakeRunService(
+        (
+            _FakeRunEvent(
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload_json=json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [
+                                    {"label": "Ship"},
+                                    {"label": "Wait"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+            _FakeRunEvent(
+                event_type=RunEventType.RUN_PAUSED,
+                payload_json=json.dumps({"error_message": "waiting for input"}),
+            ),
+            _FakeRunEvent(event_type=RunEventType.RUN_COMPLETED, payload_json="{}"),
+        )
+    )
+    run_service.user_questions = [_user_question_record(run_id="run-question")]
+    service = _build_service(
+        tmp_path,
+        run_service=run_service,
+        im_tool_service=fake_im_tool,
+    )
+
+    await service._await_terminal_and_reply(
+        account_id="bot-1",
+        gateway_session_id="gws-1",
+        run_id="run-question",
+        channel_id="channel-1",
+        reply_to_message_id="message-1",
+    )
+
+    assert "Pick a target" in fake_im_tool.sent_texts[0].text
+    assert fake_im_tool.sent_texts[1].text == "Completed."
+    assert len(fake_im_tool.sent_texts) == 2
+
+
+@pytest.mark.asyncio
+async def test_discord_watcher_uses_live_stream_after_question_pause_without_event_id(
+    tmp_path: Path,
+) -> None:
+    class NoEventIdRunService(_FakeRunService):
+        def __init__(self) -> None:
+            super().__init__(())
+            self.offsets: list[int] = []
+
+        def stream_run_events(
+            self,
+            run_id: str,
+            after_event_id: int = 0,
+        ) -> AsyncIterator[_FakeRunEvent]:
+            _ = run_id
+            self.offsets.append(after_event_id)
+            return self._events_for_offset(after_event_id)
+
+        async def _events_for_offset(
+            self,
+            after_event_id: int,
+        ) -> AsyncIterator[_FakeRunEvent]:
+            if after_event_id == 0:
+                yield _FakeRunEvent(
+                    event_type=RunEventType.USER_QUESTION_REQUESTED,
+                    payload_json=json.dumps(
+                        {
+                            "question_id": "question-1",
+                            "questions": [
+                                {
+                                    "question": "Pick one",
+                                    "options": [{"label": "Ship"}],
+                                }
+                            ],
+                        }
+                    ),
+                )
+                yield _FakeRunEvent(
+                    event_type=RunEventType.RUN_PAUSED,
+                    payload_json=json.dumps({"error_message": "waiting"}),
+                )
+                return
+            yield _FakeRunEvent(
+                event_type=RunEventType.RUN_COMPLETED,
+                payload_json="{}",
+            )
+
+    fake_im_tool = _FakeImToolService()
+    run_service = NoEventIdRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-question")]
+    service = _build_service(
+        tmp_path,
+        run_service=run_service,
+        im_tool_service=fake_im_tool,
+    )
+
+    await service._await_terminal_and_reply(
+        account_id="bot-1",
+        gateway_session_id="gws-1",
+        run_id="run-question",
+        channel_id="channel-1",
+        reply_to_message_id="message-1",
+    )
+
+    assert run_service.offsets == [0, -1]
+    assert "Pick one" in fake_im_tool.sent_texts[0].text
+    assert fake_im_tool.sent_texts[1].text == "Completed."
+
+
+@pytest.mark.asyncio
+async def test_discord_watcher_sends_later_pause_after_user_question_pause(
+    tmp_path: Path,
+) -> None:
+    fake_im_tool = _FakeImToolService()
+    run_service = _FakeRunService(
+        (
+            _FakeRunEvent(
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload_json=json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [
+                                    {"label": "Ship"},
+                                    {"label": "Wait"},
+                                ],
+                            }
+                        ],
+                    }
+                ),
+            ),
+            _FakeRunEvent(
+                event_type=RunEventType.RUN_PAUSED,
+                payload_json=json.dumps({"error_message": "waiting for input"}),
+            ),
+            _FakeRunEvent(
+                event_type=RunEventType.RUN_PAUSED,
+                payload_json=json.dumps({"error_message": "needs recovery"}),
+            ),
+            _FakeRunEvent(event_type=RunEventType.RUN_COMPLETED, payload_json="{}"),
+        )
+    )
+    run_service.user_questions = [_user_question_record(run_id="run-question")]
+    service = _build_service(
+        tmp_path,
+        run_service=run_service,
+        im_tool_service=fake_im_tool,
+    )
+
+    await service._await_terminal_and_reply(
+        account_id="bot-1",
+        gateway_session_id="gws-1",
+        run_id="run-question",
+        channel_id="channel-1",
+        reply_to_message_id="message-1",
+    )
+
+    assert "Pick a target" in fake_im_tool.sent_texts[0].text
+    assert (
+        fake_im_tool.sent_texts[1].text
+        == "Run paused: needs recovery\nSend resume to continue."
+    )
+    assert fake_im_tool.sent_texts[2].text == "Completed."
+
+
+@pytest.mark.asyncio
+async def test_discord_inbound_answers_pending_user_question(tmp_path: Path) -> None:
+    run_service = _FakeRunService(())
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-active",
+            "session_id": "session-1",
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [
+                {
+                    "question": "Pick a target",
+                    "options": [{"label": "Ship"}, {"label": "Wait"}],
+                }
+            ],
+            "status": "requested",
+            "answers": [],
+            "created_at": "2026-05-12T00:00:00+00:00",
+            "updated_at": "2026-05-12T00:00:00+00:00",
+            "resolved_at": None,
+        }
+    ]
+    fake_im_tool = _FakeImToolService()
+    command_service = _FakeImCommandService(
+        ImSessionCommandResult(text="command response")
+    )
+    repository = DiscordAccountRepository(tmp_path / "discord.db")
+    await repository.upsert_account(_discord_account())
+    ingress_service = _FakeIngressService(
+        run_id=None,
+        active_run_id="run-active",
+    )
+    service = _build_service(
+        tmp_path,
+        repository=repository,
+        run_service=run_service,
+        im_tool_service=fake_im_tool,
+        im_command_service=command_service,
+        session_ingress_service=ingress_service,
+    )
+    watcher_calls: list[dict[str, object]] = []
+    service._start_run_watcher = lambda **kwargs: watcher_calls.append(kwargs)
+
+    await service.handle_inbound_message(
+        account_id="bot-1",
+        message=DiscordInboundMessage(
+            message_id="answer-1",
+            channel_id="dm-channel-1",
+            author_id="user-1",
+            author_name="Alex",
+            content="Ship",
+            is_dm=True,
+        ),
+    )
+
+    assert run_service.created_intents == []
+    assert run_service.answered_questions[0][0] == "run-active"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert run_service.answered_questions[0][2].answers[0].selections[0].label == "Ship"
+    assert fake_im_tool.sent_texts[0].text == "Answer received. Continuing."
+    assert command_service.calls == []
+    assert watcher_calls == []
+    consumed = await service._inbound_queue_repo.get_by_message_key(
+        account_id="bot-1",
+        channel_id="dm-channel-1",
+        message_key="mid:answer-1",
+    )
+    assert consumed.status == DiscordInboundQueueStatus.COMPLETED
+    assert consumed.run_id is None
+
+    ingress_service._active_run_id = None
+    await service.handle_inbound_message(
+        account_id="bot-1",
+        message=DiscordInboundMessage(
+            message_id="answer-1",
+            channel_id="dm-channel-1",
+            author_id="user-1",
+            author_name="Alex",
+            content="/help",
+            is_dm=True,
+        ),
+    )
+
+    assert len(run_service.answered_questions) == 1
+    assert len(fake_im_tool.sent_texts) == 1
+    assert command_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_discord_question_answer_failure_returns_not_pending(
+    tmp_path: Path,
+) -> None:
+    run_service = _FakeRunService(())
+    run_service.user_questions = [_user_question_record(run_id="run-active")]
+    run_service.answer_error = RuntimeError("answer failed")
+    repository = DiscordAccountRepository(tmp_path / "discord.db")
+    service = _build_service(
+        tmp_path,
+        repository=repository,
+        run_service=run_service,
+    )
+
+    status = await service._try_answer_user_question(
+        run_id="run-active",
+        text="Ship",
+    )
+
+    assert status == UserQuestionAnswerStatus.NOT_PENDING
+
+
+@pytest.mark.asyncio
+async def test_discord_guild_reply_answers_pending_question_without_mention(
+    tmp_path: Path,
+) -> None:
+    run_service = _FakeRunService(())
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-active",
+            "session_id": "session-1",
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [
+                {
+                    "question": "Pick a target",
+                    "options": [{"label": "Ship"}, {"label": "Wait"}],
+                }
+            ],
+            "status": "requested",
+            "answers": [],
+            "created_at": "2026-05-12T00:00:00+00:00",
+            "updated_at": "2026-05-12T00:00:00+00:00",
+            "resolved_at": None,
+        }
+    ]
+    fake_im_tool = _FakeImToolService()
+    command_service = _FakeImCommandService(
+        ImSessionCommandResult(text="command response")
+    )
+    repository = DiscordAccountRepository(tmp_path / "discord.db")
+    await repository.upsert_account(_discord_account())
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    _ = fake_gateway_sessions.resolve_or_create_session(
+        channel_type=GatewayChannelType.DISCORD,
+        external_session_id="discord:bot-1:guild:guild-1:channel:channel-1",
+        workspace_id="workspace-1",
+        peer_user_id="user-1",
+        peer_chat_id="channel-1",
+        capabilities={"chat_type": "guild"},
+        channel_state={"channel_id": "channel-1"},
+    )
+    service = _build_service(
+        tmp_path,
+        repository=repository,
+        gateway_session_service=fake_gateway_sessions,
+        run_service=run_service,
+        im_tool_service=fake_im_tool,
+        im_command_service=command_service,
+        session_ingress_service=_FakeIngressService(
+            run_id=None,
+            active_run_id="run-active",
+        ),
+    )
+    watcher_calls: list[dict[str, object]] = []
+    service._start_run_watcher = lambda **kwargs: watcher_calls.append(kwargs)
+
+    await service.handle_inbound_message(
+        account_id="bot-1",
+        message=DiscordInboundMessage(
+            message_id="answer-guild-1",
+            channel_id="channel-1",
+            guild_id="guild-1",
+            author_id="user-1",
+            author_name="Alex",
+            content="Ship",
+            is_dm=False,
+            mentions_bot=False,
+        ),
+    )
+
+    assert run_service.answered_questions[0][0] == "run-active"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert run_service.answered_questions[0][2].answers[0].selections[0].label == "Ship"
+    assert fake_im_tool.sent_texts[0].text == "Answer received. Continuing."
+    assert command_service.calls == []
+    assert watcher_calls == []
+
+
+@pytest.mark.asyncio
 async def test_discord_reply_watcher_completes_queue_after_pause(
     tmp_path: Path,
 ) -> None:
@@ -1830,6 +2203,20 @@ class _FakeGatewaySessionService:
         self._records[record.gateway_session_id] = record
         return record
 
+    def get_by_external_session(
+        self,
+        *,
+        channel_type: GatewayChannelType,
+        external_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        for record in self._records.values():
+            if (
+                record.channel_type == channel_type
+                and record.external_session_id == external_session_id
+            ):
+                return record
+        return None
+
     def bind_active_run(
         self,
         gateway_session_id: str,
@@ -1926,6 +2313,34 @@ class _FakeRunEvent:
     def __init__(self, *, event_type: RunEventType, payload_json: str) -> None:
         self.event_type = event_type
         self.payload_json = payload_json
+        self.event_id: int | None = None
+
+
+def _user_question_record(
+    *,
+    question_id: str = "question-1",
+    run_id: str = "run-active",
+) -> dict[str, JsonValue]:
+    return {
+        "question_id": question_id,
+        "run_id": run_id,
+        "session_id": "session-1",
+        "task_id": "task-1",
+        "instance_id": "instance-1",
+        "role_id": "role-1",
+        "tool_name": "ask_question",
+        "questions": [
+            {
+                "question": "Pick a target",
+                "options": [{"label": "Ship"}, {"label": "Wait"}],
+            }
+        ],
+        "status": "requested",
+        "answers": [],
+        "created_at": "2026-05-12T00:00:00+00:00",
+        "updated_at": "2026-05-12T00:00:00+00:00",
+        "resolved_at": None,
+    }
 
 
 class _FakeRunService:
@@ -1933,6 +2348,11 @@ class _FakeRunService:
         self._events = events
         self.created_intents: list[IntentInput] = []
         self.started_run_ids: list[str] = []
+        self.user_questions: list[dict[str, JsonValue]] = []
+        self.answered_questions: list[
+            tuple[str, str, UserQuestionAnswerSubmission]
+        ] = []
+        self.answer_error: Exception | None = None
 
     @property
     def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
@@ -1941,9 +2361,13 @@ class _FakeRunService:
         except RuntimeError:
             return None
 
-    def stream_run_events(self, run_id: str) -> AsyncIterator[_FakeRunEvent]:
+    def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+    ) -> AsyncIterator[_FakeRunEvent]:
         _ = run_id
-        return self._iter_events()
+        return self._iter_events(after_event_id=after_event_id)
 
     async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
         self.created_intents.append(intent)
@@ -1952,8 +2376,34 @@ class _FakeRunService:
     async def ensure_run_started_async(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
 
-    async def _iter_events(self) -> AsyncIterator[_FakeRunEvent]:
-        for event in self._events:
+    async def list_user_questions_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        _ = run_id
+        return self.user_questions
+
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        if self.answer_error is not None:
+            raise self.answer_error
+        self.answered_questions.append((run_id, question_id, answers))
+        return {"run_id": run_id, "question_id": question_id}
+
+    async def _iter_events(
+        self,
+        *,
+        after_event_id: int,
+    ) -> AsyncIterator[_FakeRunEvent]:
+        for index, event in enumerate(self._events, start=1):
+            if index <= after_event_id:
+                continue
+            event.event_id = index
             yield event
 
 
@@ -2005,6 +2455,7 @@ class _FakeImToolService:
 class _FakeImCommandService:
     def __init__(self, result: ImSessionCommandResult | None = None) -> None:
         self._result = result
+        self.calls: list[dict[str, str]] = []
 
     def handle_discord_command(
         self,
@@ -2013,7 +2464,13 @@ class _FakeImCommandService:
         gateway_session_id: str,
         text: str,
     ) -> ImSessionCommandResult | None:
-        _ = (session_id, gateway_session_id, text)
+        self.calls.append(
+            {
+                "session_id": session_id,
+                "gateway_session_id": gateway_session_id,
+                "text": text,
+            }
+        )
         return self._result
 
 

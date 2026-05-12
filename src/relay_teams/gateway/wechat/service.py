@@ -21,13 +21,20 @@ import qrcode
 import qrcode.image.svg
 import httpx
 
-from relay_teams.gateway.gateway_models import GatewayChannelType
+from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.validation import require_force_delete
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
     GatewaySessionIngressRequest,
     GatewaySessionIngressService,
+)
+from relay_teams.gateway.user_questions import (
+    UserQuestionAnswerStatus,
+    answer_pending_user_question_status,
+    format_user_question_request,
+    is_user_question_requested,
+    parse_user_question_event,
 )
 from relay_teams.gateway.wechat.inbound_queue_repository import (
     WeChatInboundQueueRepository,
@@ -580,6 +587,43 @@ class WeChatGatewayService:
                 "last_inbound_at": now.isoformat(),
             },
         )
+        if self._has_inbound_message_record(
+            account_id=account.account_id,
+            message=message,
+            peer_user_id=peer_user_id,
+        ):
+            return
+        active_run_id = self._active_run_id(gateway_session.internal_session_id)
+        if active_run_id is not None:
+            answer_status = self._try_answer_user_question(
+                run_id=active_run_id,
+                text=text,
+            )
+            if answer_status != UserQuestionAnswerStatus.NOT_PENDING:
+                if not self._record_answer_message_consumed(
+                    account_id=account.account_id,
+                    message=message,
+                    gateway_session=gateway_session,
+                    peer_user_id=peer_user_id,
+                    text=text,
+                ):
+                    return
+                if answer_status == UserQuestionAnswerStatus.ANSWERED:
+                    answer_text = "已收到回答，正在继续处理。"
+                    event_name = "wechat.user_question.answer"
+                else:
+                    answer_text = "请按问题数量逐行回答后再发送。"
+                    event_name = "wechat.user_question.invalid_answer"
+                self._send_intermediate_text(
+                    account_id=account.account_id,
+                    gateway_session_id=gateway_session.gateway_session_id,
+                    peer_user_id=peer_user_id,
+                    context_token=message.context_token,
+                    text=answer_text,
+                    event_name=event_name,
+                    failure_message="Failed to send WeChat user question answer acknowledgement",
+                )
+                return
         command_result = self._im_session_command_service.handle_wechat_command(
             session_id=gateway_session.internal_session_id,
             gateway_session_id=gateway_session.gateway_session_id,
@@ -642,6 +686,52 @@ class WeChatGatewayService:
             event_name="wechat.receipt",
             failure_message="Failed to send WeChat receipt",
         )
+
+    def _has_inbound_message_record(
+        self,
+        *,
+        account_id: str,
+        message: WeChatInboundMessage,
+        peer_user_id: str,
+    ) -> bool:
+        try:
+            _ = self._inbound_queue_repo.get_by_message_key(
+                account_id=account_id,
+                peer_user_id=peer_user_id,
+                message_key=self._message_key(message),
+            )
+        except KeyError:
+            return False
+        return True
+
+    def _record_answer_message_consumed(
+        self,
+        *,
+        account_id: str,
+        message: WeChatInboundMessage,
+        gateway_session: GatewaySessionRecord,
+        peer_user_id: str,
+        text: str,
+    ) -> bool:
+        now = datetime.now(tz=timezone.utc)
+        _record, created = self._inbound_queue_repo.create_or_get(
+            WeChatInboundQueueRecord(
+                inbound_queue_id=f"wq_{uuid4().hex[:16]}",
+                account_id=account_id,
+                message_key=self._message_key(message),
+                gateway_session_id=gateway_session.gateway_session_id,
+                session_id=gateway_session.internal_session_id,
+                peer_user_id=peer_user_id,
+                context_token=message.context_token,
+                text=text,
+                status=WeChatInboundQueueStatus.COMPLETED,
+                run_id=None,
+                created_at=now,
+                updated_at=now,
+                completed_at=now,
+            )
+        )
+        return created
 
     def _start_run_watcher(
         self,
@@ -712,8 +802,77 @@ class WeChatGatewayService:
         context_token: str | None,
     ) -> None:
         try:
-            async for event in self._run_service.stream_run_events(run_id):
-                if event.event_type == RunEventType.RUN_PAUSED:
+            after_event_id = 0
+            while True:
+                skipped_question_pause = False
+                skip_next_pause_after_user_question = False
+                async for event in self._run_service.stream_run_events(
+                    run_id,
+                    after_event_id=after_event_id,
+                ):
+                    if event.event_type == RunEventType.USER_QUESTION_REQUESTED:
+                        parsed = parse_user_question_event(event.payload_json)
+                        if parsed is None:
+                            continue
+                        question_id, questions = parsed
+                        is_requested = await asyncio.to_thread(
+                            is_user_question_requested,
+                            run_service=self._run_service,
+                            run_id=run_id,
+                            question_id=question_id,
+                        )
+                        if not is_requested:
+                            skip_next_pause_after_user_question = True
+                            continue
+                        text = format_user_question_request(
+                            question_id=question_id,
+                            questions=questions,
+                        )
+                        await self._im_tool_service.send_text_to_wechat_peer(
+                            account_id=account_id,
+                            peer_user_id=peer_user_id,
+                            text=text,
+                            context_token=context_token,
+                        )
+                        self._record_pause_notice(
+                            account_id=account_id,
+                            occurred_at=datetime.now(tz=timezone.utc),
+                        )
+                        skip_next_pause_after_user_question = True
+                        continue
+                    if event.event_type == RunEventType.RUN_PAUSED:
+                        if skip_next_pause_after_user_question:
+                            if event.event_id is not None:
+                                after_event_id = event.event_id
+                            else:
+                                after_event_id = -1
+                            skipped_question_pause = True
+                            break
+                        account = self._repository.get_account(account_id)
+                        token = self._secret_store.get_bot_token(
+                            self._config_dir, account_id
+                        )
+                        if token is None:
+                            raise RuntimeError(
+                                f"WeChat reply failed because bot token is missing for {account_id}."
+                            )
+                        text = self._paused_text(event)
+                        await self._send_typing_async(
+                            account, token, peer_user_id, context_token, 2
+                        )
+                        await self._im_tool_service.send_text_to_wechat_peer(
+                            account_id=account_id,
+                            peer_user_id=peer_user_id,
+                            text=text,
+                            context_token=context_token,
+                        )
+                        self._record_pause_notice(
+                            account_id=account_id,
+                            occurred_at=datetime.now(tz=timezone.utc),
+                        )
+                        return
+                    if event.event_type not in _TERMINAL_EVENT_TYPES:
+                        continue
                     account = self._repository.get_account(account_id)
                     token = self._secret_store.get_bot_token(
                         self._config_dir, account_id
@@ -722,9 +881,21 @@ class WeChatGatewayService:
                         raise RuntimeError(
                             f"WeChat reply failed because bot token is missing for {account_id}."
                         )
-                    text = self._paused_text(event)
+                    text = self._terminal_text(event)
                     await self._send_typing_async(
                         account, token, peer_user_id, context_token, 2
+                    )
+                    log_event(
+                        LOGGER,
+                        logging.INFO,
+                        event="wechat.reply.attempted",
+                        message="Attempting to send WeChat reply",
+                        payload={
+                            "account_id": account_id,
+                            "gateway_session_id": gateway_session_id,
+                            "run_id": run_id,
+                            "peer_user_id": peer_user_id,
+                        },
                     )
                     await self._im_tool_service.send_text_to_wechat_peer(
                         account_id=account_id,
@@ -732,54 +903,21 @@ class WeChatGatewayService:
                         text=text,
                         context_token=context_token,
                     )
-                    self._record_pause_notice(
+                    now = datetime.now(tz=timezone.utc)
+                    self._record_reply_success(
                         account_id=account_id,
-                        occurred_at=datetime.now(tz=timezone.utc),
+                        gateway_session_id=gateway_session_id,
+                        run_id=run_id,
+                        peer_user_id=peer_user_id,
+                        context_token=context_token,
+                        occurred_at=now,
                     )
                     return
-                if event.event_type not in _TERMINAL_EVENT_TYPES:
+                if skipped_question_pause:
                     continue
-                account = self._repository.get_account(account_id)
-                token = self._secret_store.get_bot_token(self._config_dir, account_id)
-                if token is None:
-                    raise RuntimeError(
-                        f"WeChat reply failed because bot token is missing for {account_id}."
-                    )
-                text = self._terminal_text(event)
-                await self._send_typing_async(
-                    account, token, peer_user_id, context_token, 2
+                raise RuntimeError(
+                    f"WeChat reply watcher ended before a stop event for {run_id}."
                 )
-                log_event(
-                    LOGGER,
-                    logging.INFO,
-                    event="wechat.reply.attempted",
-                    message="Attempting to send WeChat reply",
-                    payload={
-                        "account_id": account_id,
-                        "gateway_session_id": gateway_session_id,
-                        "run_id": run_id,
-                        "peer_user_id": peer_user_id,
-                    },
-                )
-                await self._im_tool_service.send_text_to_wechat_peer(
-                    account_id=account_id,
-                    peer_user_id=peer_user_id,
-                    text=text,
-                    context_token=context_token,
-                )
-                now = datetime.now(tz=timezone.utc)
-                self._record_reply_success(
-                    account_id=account_id,
-                    gateway_session_id=gateway_session_id,
-                    run_id=run_id,
-                    peer_user_id=peer_user_id,
-                    context_token=context_token,
-                    occurred_at=now,
-                )
-                return
-            raise RuntimeError(
-                f"WeChat reply watcher ended before a stop event for {run_id}."
-            )
         except Exception as exc:
             self._record_reply_failure(
                 account_id=account_id,
@@ -1318,6 +1456,29 @@ class WeChatGatewayService:
         if isinstance(run_id, str) and run_id.strip():
             return run_id.strip()
         return None
+
+    def _try_answer_user_question(
+        self,
+        *,
+        run_id: str,
+        text: str,
+    ) -> UserQuestionAnswerStatus:
+        try:
+            return answer_pending_user_question_status(
+                run_service=self._run_service,
+                run_id=run_id,
+                text=text,
+            )
+        except (KeyError, RuntimeError, ValueError, AttributeError) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="wechat.user_question.answer_failed",
+                message="Failed to answer pending WeChat user question",
+                payload={"run_id": run_id, "error": str(exc)},
+                exc_info=exc,
+            )
+            return UserQuestionAnswerStatus.NOT_PENDING
 
     def _build_receipt_text(self, record: WeChatInboundQueueRecord) -> str:
         if record.status == WeChatInboundQueueStatus.FAILED:

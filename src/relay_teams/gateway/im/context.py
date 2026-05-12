@@ -21,7 +21,9 @@ from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessio
 from relay_teams.sessions.session_models import ProjectKind, SessionRecord
 from relay_teams.tools.registry.registry import ToolResolutionContext
 
-IM_IMPLICIT_TOOLS: tuple[str, ...] = ("im_send",)
+IM_SEND_IMPLICIT_TOOLS: tuple[str, ...] = ("im_send",)
+IM_IMPLICIT_TOOLS: tuple[str, ...] = ("im_send", "ask_question")
+XIAOLUBAN_IM_IMPLICIT_TOOLS: tuple[str, ...] = ("ask_question",)
 
 
 class _SessionLookup(Protocol):
@@ -209,6 +211,18 @@ def resolve_discord_chat_context(
     )
 
 
+def is_xiaoluban_im_session(
+    *,
+    gateway_session_lookup: _GatewaySessionLookup,
+    session_id: str,
+) -> bool:
+    gateway_session = gateway_session_lookup.get_by_internal_session_id(session_id)
+    return (
+        gateway_session is not None
+        and gateway_session.channel_type == GatewayChannelType.XIAOLUBAN
+    )
+
+
 class ImToolContextResolver:
     def __init__(
         self,
@@ -238,7 +252,20 @@ class ImToolContextResolver:
             session_id=session_id,
         )
         if chat_context is None:
+            if self._gateway_session_lookup is None:
+                return ()
+            if is_xiaoluban_im_session(
+                gateway_session_lookup=self._gateway_session_lookup,
+                session_id=session_id,
+            ):
+                return XIAOLUBAN_IM_IMPLICIT_TOOLS
             return ()
+        try:
+            session = self._session_repo.get(session_id)
+        except KeyError:
+            return IM_IMPLICIT_TOOLS
+        if _uses_automation_delivery_binding(session):
+            return IM_SEND_IMPLICIT_TOOLS
         return IM_IMPLICIT_TOOLS
 
 
@@ -274,6 +301,15 @@ def _resolve_from_session(
         chat_type=chat_type,
         reply_to_message_id=message_id,
         prefer_reply=(not prefer_direct_send and message_id is not None),
+    )
+
+
+def _uses_automation_delivery_binding(session: SessionRecord) -> bool:
+    metadata = session.metadata
+    return (
+        session.project_kind == ProjectKind.AUTOMATION
+        and str(metadata.get(FEISHU_METADATA_PLATFORM_KEY, "")).strip()
+        != FEISHU_PLATFORM
     )
 
 

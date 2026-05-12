@@ -14,7 +14,7 @@ from threading import Lock
 from typing import Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
@@ -44,6 +44,13 @@ from relay_teams.gateway.discord.secret_store import (
 from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.im.command_service import ImSessionCommandResult
+from relay_teams.gateway.user_questions import (
+    UserQuestionAnswerStatus,
+    answer_pending_user_question_status_async,
+    format_user_question_request,
+    is_user_question_requested_async,
+    parse_user_question_event,
+)
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
     GatewaySessionIngressRequest,
@@ -55,6 +62,9 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RuntimePromptConversationContext,
+)
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
 )
 from relay_teams.sessions.runs.terminal_payload import (
     extract_terminal_error,
@@ -86,13 +96,33 @@ class _RunEventSource(Protocol):
     async def ensure_run_started_async(self, run_id: str) -> None:
         raise NotImplementedError  # pragma: no cover
 
-    def stream_run_events(self, run_id: str) -> AsyncIterator["_RunEventRecord"]:
+    def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+    ) -> AsyncIterator["_RunEventRecord"]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def list_user_questions_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
         raise NotImplementedError  # pragma: no cover
 
 
 class _RunEventRecord(Protocol):
     event_type: RunEventType
     payload_json: str
+    event_id: int | None
 
 
 class _ImSessionCommandService(Protocol):
@@ -364,16 +394,69 @@ class DiscordGatewayService:
         if account.status != DiscordAccountStatus.ENABLED:
             return
         text = self._accepted_text(account=account, message=message)
+        pending_answer_only = False
+        if text is None:
+            text = self._unmentioned_question_answer_text(
+                account=account,
+                message=message,
+            )
+            pending_answer_only = text is not None
         if text is None:
             return
         now = datetime.now(tz=timezone.utc)
+        if pending_answer_only:
+            gateway_session = await asyncio.to_thread(
+                self._find_gateway_session,
+                account,
+                message,
+            )
+            if gateway_session is None:
+                return
+        else:
+            gateway_session = await asyncio.to_thread(
+                self._resolve_gateway_session,
+                account,
+                message,
+                now,
+            )
         self._set_status(account.account_id, last_inbound_at=now, last_event_at=now)
-        gateway_session = await asyncio.to_thread(
-            self._resolve_gateway_session,
-            account,
-            message,
-            now,
-        )
+        if await self._has_inbound_message_record(
+            account_id=account.account_id,
+            message=message,
+        ):
+            return
+        active_run_id = await self._active_run_id(gateway_session.internal_session_id)
+        if active_run_id is not None:
+            answer_status = await self._try_answer_user_question(
+                run_id=active_run_id,
+                text=text,
+            )
+            if answer_status != UserQuestionAnswerStatus.NOT_PENDING:
+                if not await self._record_answer_message_consumed(
+                    account_id=account.account_id,
+                    message=message,
+                    gateway_session=gateway_session,
+                    text=text,
+                ):
+                    return
+                if answer_status == UserQuestionAnswerStatus.ANSWERED:
+                    answer_text = "Answer received. Continuing."
+                    event_name = "discord.user_question.answer"
+                else:
+                    answer_text = "Reply with one non-empty line for each question."
+                    event_name = "discord.user_question.invalid_answer"
+                await self._send_intermediate_text(
+                    account_id=account.account_id,
+                    gateway_session_id=gateway_session.gateway_session_id,
+                    channel_id=self._reply_channel_id(message),
+                    reply_to_message_id=message.message_id,
+                    text=answer_text,
+                    event_name=event_name,
+                    failure_message="Failed to send Discord user question answer acknowledgement",
+                )
+                return
+        if pending_answer_only:
+            return
         command_result = await asyncio.to_thread(
             self._im_session_command_service.handle_discord_command,
             session_id=gateway_session.internal_session_id,
@@ -432,6 +515,53 @@ class DiscordGatewayService:
             failure_message="Failed to send Discord receipt",
         )
 
+    async def _has_inbound_message_record(
+        self,
+        *,
+        account_id: str,
+        message: DiscordInboundMessage,
+    ) -> bool:
+        try:
+            _ = await self._inbound_queue_repo.get_by_message_key(
+                account_id=account_id,
+                channel_id=self._reply_channel_id(message),
+                message_key=f"mid:{message.message_id}",
+            )
+        except KeyError:
+            return False
+        return True
+
+    async def _record_answer_message_consumed(
+        self,
+        *,
+        account_id: str,
+        message: DiscordInboundMessage,
+        gateway_session: GatewaySessionRecord,
+        text: str,
+    ) -> bool:
+        now = datetime.now(tz=timezone.utc)
+        _record, created = await self._inbound_queue_repo.create_or_get(
+            DiscordInboundQueueRecord(
+                inbound_queue_id=f"dq_{uuid4().hex[:16]}",
+                account_id=account_id,
+                message_key=f"mid:{message.message_id}",
+                gateway_session_id=gateway_session.gateway_session_id,
+                session_id=gateway_session.internal_session_id,
+                peer_user_id=message.author_id,
+                channel_id=self._reply_channel_id(message),
+                guild_id=message.guild_id,
+                thread_id=message.thread_id,
+                reply_to_message_id=message.message_id,
+                text=text,
+                status=DiscordInboundQueueStatus.COMPLETED,
+                run_id=None,
+                created_at=now,
+                updated_at=now,
+                completed_at=now,
+            )
+        )
+        return created
+
     def _resolve_gateway_session(
         self,
         account: DiscordAccountRecord,
@@ -471,6 +601,19 @@ class DiscordGatewayService:
                 "reply_to_message_id": message.message_id,
                 "last_inbound_at": now.isoformat(),
             },
+        )
+
+    def _find_gateway_session(
+        self,
+        account: DiscordAccountRecord,
+        message: DiscordInboundMessage,
+    ) -> GatewaySessionRecord | None:
+        return self._gateway_session_service.get_by_external_session(
+            channel_type=GatewayChannelType.DISCORD,
+            external_session_id=self._external_session_id(
+                account_id=account.account_id,
+                message=message,
+            ),
         )
 
     async def _drain_inbound_queue(self) -> None:
@@ -708,41 +851,86 @@ class DiscordGatewayService:
         reply_to_message_id: str | None,
     ) -> None:
         try:
-            async for event in self._run_service.stream_run_events(run_id):
-                if event.event_type == RunEventType.RUN_PAUSED:
-                    text = self._paused_text(event)
+            after_event_id = 0
+            while True:
+                skipped_question_pause = False
+                skip_next_pause_after_user_question = False
+                async for event in self._run_service.stream_run_events(
+                    run_id,
+                    after_event_id=after_event_id,
+                ):
+                    if event.event_type == RunEventType.USER_QUESTION_REQUESTED:
+                        parsed = parse_user_question_event(event.payload_json)
+                        if parsed is None:
+                            continue
+                        question_id, questions = parsed
+                        is_requested = await is_user_question_requested_async(
+                            run_service=self._run_service,
+                            run_id=run_id,
+                            question_id=question_id,
+                        )
+                        if not is_requested:
+                            skip_next_pause_after_user_question = True
+                            continue
+                        text = format_user_question_request(
+                            question_id=question_id,
+                            questions=questions,
+                        )
+                        await self._im_tool_service.send_text_to_discord_channel(
+                            account_id=account_id,
+                            channel_id=channel_id,
+                            text=text,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                        self._record_pause_notice(
+                            account_id=account_id,
+                            occurred_at=datetime.now(tz=timezone.utc),
+                        )
+                        skip_next_pause_after_user_question = True
+                        continue
+                    if event.event_type == RunEventType.RUN_PAUSED:
+                        if skip_next_pause_after_user_question:
+                            if event.event_id is not None:
+                                after_event_id = event.event_id
+                            else:
+                                after_event_id = -1
+                            skipped_question_pause = True
+                            break
+                        text = self._paused_text(event)
+                        await self._im_tool_service.send_text_to_discord_channel(
+                            account_id=account_id,
+                            channel_id=channel_id,
+                            text=text,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                        self._record_pause_notice(
+                            account_id=account_id,
+                            occurred_at=datetime.now(tz=timezone.utc),
+                        )
+                        continue
+                    if event.event_type not in _TERMINAL_EVENT_TYPES:
+                        continue
+                    text = self._terminal_text(event)
                     await self._im_tool_service.send_text_to_discord_channel(
                         account_id=account_id,
                         channel_id=channel_id,
                         text=text,
                         reply_to_message_id=reply_to_message_id,
                     )
-                    self._record_pause_notice(
+                    self._record_reply_success(
                         account_id=account_id,
+                        gateway_session_id=gateway_session_id,
+                        run_id=run_id,
+                        channel_id=channel_id,
+                        reply_to_message_id=reply_to_message_id,
                         occurred_at=datetime.now(tz=timezone.utc),
                     )
+                    return
+                if skipped_question_pause:
                     continue
-                if event.event_type not in _TERMINAL_EVENT_TYPES:
-                    continue
-                text = self._terminal_text(event)
-                await self._im_tool_service.send_text_to_discord_channel(
-                    account_id=account_id,
-                    channel_id=channel_id,
-                    text=text,
-                    reply_to_message_id=reply_to_message_id,
+                raise RuntimeError(
+                    f"Discord reply watcher ended before a stop event for {run_id}."
                 )
-                self._record_reply_success(
-                    account_id=account_id,
-                    gateway_session_id=gateway_session_id,
-                    run_id=run_id,
-                    channel_id=channel_id,
-                    reply_to_message_id=reply_to_message_id,
-                    occurred_at=datetime.now(tz=timezone.utc),
-                )
-                return
-            raise RuntimeError(
-                f"Discord reply watcher ended before a stop event for {run_id}."
-            )
         except Exception as exc:
             await self._record_reply_failure(
                 account_id=account_id,
@@ -1034,6 +1222,29 @@ class DiscordGatewayService:
             return "Received. Processing now."
         return f"Received. Queued behind {queue_depth} message(s) in this session."
 
+    async def _try_answer_user_question(
+        self,
+        *,
+        run_id: str,
+        text: str,
+    ) -> UserQuestionAnswerStatus:
+        try:
+            return await answer_pending_user_question_status_async(
+                run_service=self._run_service,
+                run_id=run_id,
+                text=text,
+            )
+        except (KeyError, RuntimeError, ValueError, AttributeError) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="discord.user_question.answer_failed",
+                message="Failed to answer pending Discord user question",
+                payload={"run_id": run_id, "error": str(exc)},
+                exc_info=exc,
+            )
+            return UserQuestionAnswerStatus.NOT_PENDING
+
     async def _queue_depth(self, record: DiscordInboundQueueRecord) -> int:
         ahead_count = await self._inbound_queue_repo.count_non_terminal_ahead(
             record.inbound_queue_id
@@ -1189,6 +1400,21 @@ class DiscordGatewayService:
         ):
             return text
         return None
+
+    @staticmethod
+    def _unmentioned_question_answer_text(
+        *,
+        account: DiscordAccountRecord,
+        message: DiscordInboundMessage,
+    ) -> str | None:
+        if message.author_is_bot:
+            return None
+        if account.bot_user_id is not None and message.author_id == account.bot_user_id:
+            return None
+        if message.is_dm or message.mentions_bot:
+            return None
+        text = message.content.strip()
+        return text or None
 
     @staticmethod
     def _reply_channel_id(message: DiscordInboundMessage) -> str:

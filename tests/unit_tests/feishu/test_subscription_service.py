@@ -27,6 +27,7 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.gateway.feishu.subscription_service import (
     FeishuSubscriptionService,
+    P2ImMessageReceiveV1,
     WsClientLike,
     _FeishuWsController,
     _FeishuWsHub,
@@ -90,6 +91,27 @@ class _FakeHandler:
             trigger_id="trg_test",
             ignored=True,
             reason="test",
+        )
+
+
+class _RecordingHandler:
+    def __init__(self) -> None:
+        self.raw_bodies: list[str] = []
+
+    def handle_sdk_event(
+        self,
+        *,
+        trigger_id: str,
+        event: P2ImMessageReceiveV1,
+        raw_body: str,
+        headers: dict[str, str],
+        remote_addr: str | None,
+    ) -> TriggerProcessingResult:
+        _ = (trigger_id, event, headers, remote_addr)
+        self.raw_bodies.append(raw_body)
+        return TriggerProcessingResult(
+            status="processed",
+            trigger_id="trg_test",
         )
 
 
@@ -505,6 +527,34 @@ def test_feishu_ws_controller_http_client_uses_runtime_net_proxy_loader(
         assert controller._create_feishu_http_client() is fake_http_client
     finally:
         asyncio.run(fake_http_client.aclose())
+
+
+@pytest.mark.asyncio
+async def test_feishu_ws_controller_processes_sdk_events_in_receive_order() -> None:
+    handler = _RecordingHandler()
+    controller = _FeishuWsController(
+        runtime_config=_build_runtime(
+            trigger_id="trg_a",
+            name="bot_a",
+            app_id="cli_demo",
+            app_name="bot-a",
+            app_secret="secret-demo",
+        ),
+        event_handler=handler,
+    )
+
+    controller._enqueue_sdk_event(
+        event=cast(P2ImMessageReceiveV1, object()),
+        raw_body="first",
+    )
+    controller._enqueue_sdk_event(
+        event=cast(P2ImMessageReceiveV1, object()),
+        raw_body="second",
+    )
+    await controller._handler_queue.join()
+    await controller._stop_handler_worker()
+
+    assert handler.raw_bodies == ["first", "second"]
 
 
 def test_import_lark_ws_client_module_suppresses_known_deprecations(

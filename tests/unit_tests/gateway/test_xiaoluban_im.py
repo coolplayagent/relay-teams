@@ -17,6 +17,7 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressService,
     GatewaySessionIngressStatus,
 )
+from relay_teams.gateway.user_questions import UserQuestionAnswerStatus
 from relay_teams.gateway.xiaoluban import (
     format_xiaoluban_notification_text,
     XiaolubanAccountCreateInput,
@@ -34,6 +35,9 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
+)
 from relay_teams.sessions.session_models import SessionRecord
 
 
@@ -167,6 +171,226 @@ async def test_handle_im_inbound_starts_run_and_replies_terminal_output(
         "uidself",
     )
     assert service.should_suppress_xiaoluban_terminal_notification("run-1") is True
+
+
+@pytest.mark.asyncio
+async def test_im_reply_drain_sends_terminal_after_user_question_notice(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    run_service = _FakeRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-1")]
+    fake_event_log = _FakeEventLog(
+        rows=(
+            {
+                "id": 1,
+                "event_type": RunEventType.USER_QUESTION_REQUESTED.value,
+                "payload_json": json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [{"label": "Ship"}, {"label": "Wait"}],
+                            }
+                        ],
+                    }
+                ),
+            },
+            {
+                "id": 2,
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "payload_json": json.dumps({"output": "done after answer"}),
+            },
+        )
+    )
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+        event_log=fake_event_log,
+        run_service=run_service,
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="inspect this repo",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+
+    await service._drain_im_replies_async()
+    assert "Pick a target" in fake_client.sent_messages[-1][0]
+    await service._drain_im_replies_async()
+    assert fake_client.sent_messages[-1] == (
+        _formatted_xiaoluban_text(
+            session_id="session-1",
+            body="done after answer",
+            status="completed",
+        ),
+        "uidself",
+    )
+
+
+@pytest.mark.asyncio
+async def test_im_reply_drain_retries_user_question_notice_after_send_failure(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient(fail_send_when_contains="Pick a target")
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    run_service = _FakeRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-1")]
+    fake_event_log = _FakeEventLog(
+        rows=(
+            {
+                "id": 1,
+                "event_type": RunEventType.USER_QUESTION_REQUESTED.value,
+                "payload_json": json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [{"label": "Ship"}, {"label": "Wait"}],
+                            }
+                        ],
+                    }
+                ),
+            },
+        )
+    )
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+        event_log=fake_event_log,
+        run_service=run_service,
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="inspect this repo",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+    sent_count = len(fake_client.sent_messages)
+
+    await service._drain_im_replies_async()
+    assert len(fake_client.sent_messages) == sent_count
+    assert service._im_question_notice_keys == set()
+
+    fake_client.clear_send_failure()
+    await service._drain_im_replies_async()
+
+    assert "Pick a target" in fake_client.sent_messages[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_im_reply_drain_skips_answered_user_question_notice(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    run_service = _FakeRunService()
+    answered_record = _user_question_record(run_id="run-1")
+    answered_record["status"] = "answered"
+    run_service.user_questions = [answered_record]
+    fake_event_log = _FakeEventLog(
+        rows=(
+            {
+                "id": 1,
+                "event_type": RunEventType.USER_QUESTION_REQUESTED.value,
+                "payload_json": json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [{"label": "Ship"}, {"label": "Wait"}],
+                            }
+                        ],
+                    }
+                ),
+            },
+            {
+                "id": 2,
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "payload_json": json.dumps({"output": "done after answer"}),
+            },
+        )
+    )
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+        event_log=fake_event_log,
+        run_service=run_service,
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="inspect this repo",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+
+    await service._drain_im_replies_async()
+
+    assert fake_client.sent_messages[-1] == (
+        _formatted_xiaoluban_text(
+            session_id="session-1",
+            body="done after answer",
+            status="completed",
+        ),
+        "uidself",
+    )
+    assert "Pick a target" not in fake_client.sent_messages[-1][0]
 
 
 @pytest.mark.asyncio
@@ -319,6 +543,286 @@ async def test_handle_im_inbound_busy_session_replies_without_second_run(
 
 
 @pytest.mark.asyncio
+async def test_handle_im_inbound_answer_registers_reply_polling(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService(active_run_id="run-active")
+    run_service = _FakeRunService()
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-active",
+            "session_id": "session-1",
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [
+                {
+                    "question": "Pick a target",
+                    "options": [{"label": "Ship"}, {"label": "Wait"}],
+                }
+            ],
+            "status": "requested",
+            "answers": [],
+            "created_at": "2026-05-12T00:00:00+00:00",
+            "updated_at": "2026-05-12T00:00:00+00:00",
+            "resolved_at": None,
+        }
+    ]
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+    service._run_service = cast(SessionRunService, run_service)
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="Ship",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+
+    assert run_service.answered_questions[0][0] == "run-active"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert "run-active" in service._pending_im_replies
+    assert "已收到回答" in fake_client.sent_messages[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_handle_im_inbound_answer_without_ingress_uses_pending_question(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    run_service = _FakeRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-detached")]
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=None,
+    )
+    service._run_service = cast(SessionRunService, run_service)
+    _ = fake_gateway_sessions.resolve_or_create_session(
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=(
+            f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+        ),
+        workspace_id="im-workspace",
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="Ship",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert run_service.answered_questions[0][0] == "run-detached"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert "run-detached" in service._pending_im_replies
+    assert fake_client.sent_messages[-1][1] == "uidself"
+
+
+@pytest.mark.asyncio
+async def test_handle_im_inbound_invalid_answer_sends_retry_notice(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService(active_run_id="run-active")
+    run_service = _FakeRunService()
+    question = _user_question_record(run_id="run-active")
+    question["questions"] = [
+        {
+            "question": "Pick a target",
+            "options": [{"label": "Ship"}, {"label": "Wait"}],
+        },
+        {
+            "question": "Pick a release",
+            "options": [{"label": "Now"}, {"label": "Later"}],
+        },
+    ]
+    run_service.user_questions = [question]
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+    service._run_service = cast(SessionRunService, run_service)
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="Ship",
+            receiver="uidself",
+            sender="uidself",
+            session_id="session-1",
+        ),
+    )
+
+    assert run_service.answered_questions == []
+    assert len(fake_client.sent_messages) == 1
+
+
+def test_xiaoluban_find_im_gateway_session_without_gateway_service(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path)
+
+    assert service._find_im_gateway_session("missing") is None
+
+
+def test_xiaoluban_question_answer_failure_returns_not_pending(tmp_path: Path) -> None:
+    run_service = _FakeRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-active")]
+    run_service.answer_error = RuntimeError("answer failed")
+    service = _build_service(tmp_path, run_service=run_service)
+
+    status = service._try_answer_user_question(
+        run_id="run-active",
+        text="Ship",
+    )
+
+    assert status == UserQuestionAnswerStatus.NOT_PENDING
+
+
+@pytest.mark.asyncio
+async def test_xiaoluban_session_question_answer_failure_returns_not_pending(
+    tmp_path: Path,
+) -> None:
+    run_service = _FakeRunService()
+    run_service.user_questions = [_user_question_record(run_id="run-active")]
+    run_service.answer_error = RuntimeError("answer failed")
+    service = _build_service(tmp_path, run_service=run_service)
+
+    status, run_id = await service._try_answer_user_question_for_session_async(
+        session_id="session-1",
+        text="Ship",
+    )
+
+    assert status == UserQuestionAnswerStatus.NOT_PENDING
+    assert run_id is None
+
+
+def test_xiaoluban_user_question_text_filters_non_pending_events(
+    tmp_path: Path,
+) -> None:
+    run_service = _FakeRunService()
+    answered = _user_question_record(question_id="answered-question", run_id="run-1")
+    answered["status"] = "answered"
+    run_service.user_questions = [
+        answered,
+        _user_question_record(question_id="question-1", run_id="run-1"),
+    ]
+    event_log = _FakeEventLog(
+        rows=(
+            {"id": 1, "event_type": "bad-event", "payload_json": "{}"},
+            {
+                "id": 2,
+                "event_type": RunEventType.USER_QUESTION_REQUESTED.value,
+                "payload_json": json.dumps(
+                    {
+                        "question_id": "answered-question",
+                        "questions": [
+                            {
+                                "question": "Already answered",
+                                "options": [{"label": "Ship"}],
+                            }
+                        ],
+                    }
+                ),
+            },
+            {
+                "id": 3,
+                "event_type": RunEventType.USER_QUESTION_REQUESTED.value,
+                "payload_json": json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick a target",
+                                "options": [{"label": "Ship"}],
+                            }
+                        ],
+                    }
+                ),
+            },
+        )
+    )
+    service = _build_service(
+        tmp_path,
+        event_log=event_log,
+        run_service=run_service,
+    )
+
+    key, text = service._user_question_text_for_run("run-1")
+
+    assert key == "run-1:3"
+    assert "Pick a target" in text
+
+
+@pytest.mark.asyncio
+async def test_handle_im_inbound_answers_pending_question_before_command(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService(active_run_id="run-active")
+    run_service = _FakeRunService()
+    question = _user_question_record(run_id="run-active")
+    question["questions"] = [
+        {
+            "question": "Pick a command",
+            "options": [{"label": "/resume"}, {"label": "/help"}],
+        }
+    ]
+    run_service.user_questions = [question]
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+    service._run_service = cast(SessionRunService, run_service)
+    _ = fake_gateway_sessions.resolve_or_create_session(
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=(
+            f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+        ),
+        workspace_id="im-workspace",
+    )
+
+    await service.handle_im_inbound_async(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert run_service.answered_questions[0][0] == "run-active"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert fake_ingress.requests == []
+    assert "会话列表" not in fake_client.sent_messages[-1][0]
+    assert "已收到回答" in fake_client.sent_messages[-1][0]
+
+
+@pytest.mark.asyncio
 async def test_handle_im_inbound_rejected_submit_replies_busy(
     tmp_path: Path,
 ) -> None:
@@ -360,6 +864,7 @@ def _build_service(
     gateway_session_service: _FakeGatewaySessionService | None = None,
     session_ingress_service: _FakeIngressService | None = None,
     event_log: _FakeEventLog | None = None,
+    run_service: _FakeRunService | None = None,
     get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
 ) -> XiaolubanGatewayService:
     return XiaolubanGatewayService(
@@ -372,7 +877,7 @@ def _build_service(
             GatewaySessionService | None,
             gateway_session_service,
         ),
-        run_service=None,
+        run_service=cast(SessionRunService | None, run_service),
         event_log=cast(EventLog | None, event_log),
         session_ingress_service=cast(
             GatewaySessionIngressService | None,
@@ -387,7 +892,7 @@ def _build_ready_im_service(
     *,
     client: _FakeXiaolubanClient,
     gateway_session_service: _FakeGatewaySessionService,
-    session_ingress_service: _FakeIngressService,
+    session_ingress_service: _FakeIngressService | None,
 ) -> tuple[XiaolubanGatewayService, XiaolubanAccountRecord]:
     service = _build_service(
         tmp_path,
@@ -421,6 +926,33 @@ def _formatted_xiaoluban_text(
         status=status,
         body=body,
     )
+
+
+def _user_question_record(
+    *,
+    question_id: str = "question-1",
+    run_id: str = "run-active",
+) -> dict[str, JsonValue]:
+    return {
+        "question_id": question_id,
+        "run_id": run_id,
+        "session_id": "session-1",
+        "task_id": "task-1",
+        "instance_id": "instance-1",
+        "role_id": "role-1",
+        "tool_name": "ask_question",
+        "questions": [
+            {
+                "question": "Pick a target",
+                "options": [{"label": "Ship"}, {"label": "Wait"}],
+            }
+        ],
+        "status": "requested",
+        "answers": [],
+        "created_at": "2026-05-12T00:00:00+00:00",
+        "updated_at": "2026-05-12T00:00:00+00:00",
+        "resolved_at": None,
+    }
 
 
 class _FakeSecretStore:
@@ -486,6 +1018,9 @@ class _FakeXiaolubanClient:
             raise RuntimeError("simulated xiaoluban send failure")
         self.sent_messages.append((text, receiver_uid))
         return _FakeSendResponse()
+
+    def clear_send_failure(self) -> None:
+        self._fail_send_when_contains = None
 
 
 class _FakeSendResponse:
@@ -1940,6 +2475,11 @@ class _FakeRunService:
     def __init__(self) -> None:
         self.create_run_calls = 0
         self.ensure_started_calls = 0
+        self.user_questions: list[dict[str, JsonValue]] = []
+        self.answered_questions: list[
+            tuple[str, str, UserQuestionAnswerSubmission]
+        ] = []
+        self.answer_error: Exception | None = None
 
     def create_run(self, intent: IntentInput) -> tuple[str, str]:
         _ = intent
@@ -1949,6 +2489,51 @@ class _FakeRunService:
     def ensure_run_started(self, run_id: str) -> None:
         _ = run_id
         self.ensure_started_calls += 1
+
+    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        _ = run_id
+        return self.user_questions
+
+    async def list_user_questions_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        return self.list_user_questions(run_id)
+
+    async def list_user_questions_by_session_async(
+        self,
+        session_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        return [
+            record
+            for record in self.user_questions
+            if record.get("session_id") == session_id
+        ]
+
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        return self.answer_user_question(
+            run_id=run_id,
+            question_id=question_id,
+            answers=answers,
+        )
+
+    def answer_user_question(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        if self.answer_error is not None:
+            raise self.answer_error
+        self.answered_questions.append((run_id, question_id, answers))
+        return {"run_id": run_id, "question_id": question_id}
 
 
 class _FakeRunServiceWithDetached(_FakeRunService):
@@ -1967,12 +2552,16 @@ class _FakeEventLog:
         self,
         event_type: str | None = None,
         payload: dict[str, str] | None = None,
+        rows: tuple[dict[str, JsonValue], ...] | None = None,
     ) -> None:
         self._event_type = event_type
         self._payload = payload
+        self._rows = rows
 
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         _ = trace_id
+        if self._rows is not None:
+            return self._rows
         if self._event_type is None:
             return (
                 {

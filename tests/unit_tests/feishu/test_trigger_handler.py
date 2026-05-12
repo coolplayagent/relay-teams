@@ -27,6 +27,7 @@ from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.im.command_service import ImSessionCommandService
 from relay_teams.gateway.im.service import ImToolService
+from relay_teams.gateway.user_questions import UserQuestionAnswerStatus
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
@@ -233,6 +234,10 @@ class _FakeImToolService:
 class _FakeMessagePoolService:
     def __init__(self) -> None:
         self.enqueued: list[FeishuNormalizedMessage] = []
+        self.answered: list[FeishuNormalizedMessage] = []
+        self.consumed_answers: list[tuple[FeishuNormalizedMessage, str]] = []
+        self.known_messages: set[str] = set()
+        self.answer_result = UserQuestionAnswerStatus.NOT_PENDING
         self.chat_summary = FeishuChatQueueSummary(
             trigger_id="trg_feishu",
             tenant_key="tenant-1",
@@ -264,6 +269,36 @@ class _FakeMessagePoolService:
             trigger_name="feishu_main",
             event_id=normalized.event_id,
         )
+
+    def answer_pending_user_question(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> UserQuestionAnswerStatus:
+        _ = runtime_config
+        self.answered.append(normalized)
+        return self.answer_result
+
+    def has_message_record(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> bool:
+        _ = runtime_config
+        return normalized.message_id in self.known_messages
+
+    def record_consumed_user_question_answer(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+        reason: str,
+    ) -> None:
+        _ = runtime_config
+        self.known_messages.add(normalized.message_id)
+        self.consumed_answers.append((normalized, reason))
 
     def get_chat_summary(
         self,
@@ -465,6 +500,103 @@ def test_group_command_requires_mention_under_mention_only(tmp_path: Path) -> No
 
     assert result.status == "ignored"
     assert result.reason == "mention_required"
+    assert message_pool_service.enqueued == []
+    assert feishu_client.sent_messages == []
+    assert feishu_client.reply_messages == []
+
+
+def test_pending_question_answer_bypasses_group_mention_requirement(
+    tmp_path: Path,
+) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    message_pool_service.answer_result = UserQuestionAnswerStatus.ANSWERED
+    raw_body = _build_event(
+        message_id="om_answer_group",
+        chat_id="oc_group_answer",
+        event_id="evt-answer-group",
+        text="Ship",
+        chat_type="group",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=_build_sdk_event(raw_body),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "answered"
+    assert result.reason == "user_question_answer"
+    assert message_pool_service.enqueued == []
+    assert len(message_pool_service.answered) == 1
+    assert message_pool_service.consumed_answers[0][1] == "user_question_answer"
+    assert message_pool_service.answered[0].trigger_text == "Ship"
+    assert feishu_client.sent_messages == []
+    assert len(feishu_client.reply_messages) == 1
+    assert feishu_client.reply_messages[0][0] == "om_answer_group"
+    assert "已收到回答" in feishu_client.reply_messages[0][1]
+
+
+def test_pending_question_answer_bypasses_command_handling(tmp_path: Path) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    message_pool_service.answer_result = UserQuestionAnswerStatus.ANSWERED
+    raw_body = _build_event(
+        message_id="om_answer_help",
+        chat_id="oc_cmd",
+        event_id="evt-answer-help",
+        text="help",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=_build_sdk_event(raw_body),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.status == "answered"
+    assert message_pool_service.enqueued == []
+    assert len(message_pool_service.answered) == 1
+    assert len(feishu_client.sent_messages) == 1
+    assert "help" not in feishu_client.sent_messages[0][1]
+    assert "已收到回答" in feishu_client.sent_messages[0][1]
+
+
+def test_duplicate_answer_event_is_consumed_before_command_handling(
+    tmp_path: Path,
+) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(
+            tmp_path=tmp_path,
+            runtime_config=_build_runtime(trigger_rule="all_messages"),
+        )
+    )
+    message_pool_service.known_messages.add("om_answer_help")
+    message_pool_service.answer_result = UserQuestionAnswerStatus.ANSWERED
+    raw_body = _build_event(
+        message_id="om_answer_help",
+        chat_id="oc_cmd",
+        event_id="evt-answer-help-redelivery",
+        text="help",
+        chat_type="p2p",
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=_build_sdk_event(raw_body),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+
+    assert result.duplicate is True
+    assert message_pool_service.answered == []
     assert message_pool_service.enqueued == []
     assert feishu_client.sent_messages == []
     assert feishu_client.reply_messages == []

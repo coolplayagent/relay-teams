@@ -437,12 +437,17 @@ class _FeishuWsController:
         self._event_handler = event_handler
         self._client: WsClientLike | None = None
         self._task: asyncio.Task[None] | None = None
+        self._handler_queue: asyncio.Queue[tuple[P2ImMessageReceiveV1, str]] = (
+            asyncio.Queue()
+        )
+        self._handler_task: asyncio.Task[None] | None = None
         self._stop_requested = False
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
         self._stop_requested = False
+        self._start_handler_worker()
         self._task = asyncio.create_task(
             self._run(),
             name=f"feishu-sdk-subscription-{self._runtime_config.trigger_id}",
@@ -456,6 +461,7 @@ class _FeishuWsController:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        await self._stop_handler_worker()
         self._task = None
 
     def is_running(self) -> bool:
@@ -527,14 +533,7 @@ class _FeishuWsController:
             json_obj = json_module.json_obj
 
             raw_body = json_obj.marshal(event) or "{}"
-            result = self._event_handler.handle_sdk_event(
-                trigger_id=self._runtime_config.trigger_id,
-                event=event,
-                raw_body=raw_body,
-                headers={},
-                remote_addr=None,
-            )
-            _log_processing_result(result)
+            self._enqueue_sdk_event(event=event, raw_body=raw_body)
 
         dispatcher = (
             event_dispatcher_handler.builder(
@@ -550,6 +549,70 @@ class _FeishuWsController:
             log_level=lark.LogLevel.INFO,
             event_handler=dispatcher,
         )
+
+    def _start_handler_worker(self) -> None:
+        if self._handler_task is not None and not self._handler_task.done():
+            return
+        self._handler_task = asyncio.create_task(
+            self._process_handler_queue(),
+            name=f"feishu-sdk-handler-{self._runtime_config.trigger_id}",
+        )
+
+    async def _stop_handler_worker(self) -> None:
+        handler_task = self._handler_task
+        if handler_task is None:
+            return
+        handler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await handler_task
+        self._handler_task = None
+
+    def _enqueue_sdk_event(
+        self,
+        *,
+        event: P2ImMessageReceiveV1,
+        raw_body: str,
+    ) -> None:
+        self._start_handler_worker()
+        self._handler_queue.put_nowait((event, raw_body))
+
+    async def _process_handler_queue(self) -> None:
+        while True:
+            event, raw_body = await self._handler_queue.get()
+            try:
+                await asyncio.to_thread(
+                    self._handle_sdk_event_in_worker,
+                    event=event,
+                    raw_body=raw_body,
+                )
+            except Exception as exc:
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="feishu.subscription.event_handler_failed",
+                    message="Feishu SDK event handler failed",
+                    payload={
+                        "trigger_id": self._runtime_config.trigger_id,
+                        "error": str(exc),
+                    },
+                )
+            finally:
+                self._handler_queue.task_done()
+
+    def _handle_sdk_event_in_worker(
+        self,
+        *,
+        event: P2ImMessageReceiveV1,
+        raw_body: str,
+    ) -> None:
+        result = self._event_handler.handle_sdk_event(
+            trigger_id=self._runtime_config.trigger_id,
+            event=event,
+            raw_body=raw_body,
+            headers={},
+            remote_addr=None,
+        )
+        _log_processing_result(result)
 
     async def _connect_client(self, client: WsClientLike) -> None:
         ws_client_module = import_lark_ws_client_module()

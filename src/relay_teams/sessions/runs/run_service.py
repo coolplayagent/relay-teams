@@ -2498,6 +2498,13 @@ class SessionRunService:
     ) -> list[dict[str, JsonValue]]:
         return await self._interaction_service.list_user_questions_async(run_id)
 
+    async def list_user_questions_by_session_async(
+        self, session_id: str
+    ) -> list[dict[str, JsonValue]]:
+        return await self._interaction_service.list_user_questions_by_session_async(
+            session_id
+        )
+
     def answer_user_question(
         self,
         *,
