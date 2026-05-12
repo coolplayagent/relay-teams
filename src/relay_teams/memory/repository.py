@@ -16,6 +16,11 @@ from relay_teams.memory.memory_defaults import (
     PERSISTENT_DECAY_FACTOR,
 )
 from relay_teams.memory.models import (
+    MemoryEvolutionDraft,
+    MemoryEvolutionDraftQuery,
+    MemoryEvolutionDraftQueryResult,
+    MemoryEvolutionStatus,
+    MemoryEvolutionTarget,
     MemoryContent,
     MemoryEntry,
     MemoryEntryKind,
@@ -94,6 +99,30 @@ CREATE INDEX IF NOT EXISTS idx_memory_entries_expires
     """\
 CREATE INDEX IF NOT EXISTS idx_memory_entries_source_ref
     ON memory_entries(source_ref)""",
+    """\
+CREATE TABLE IF NOT EXISTS memory_evolution_drafts (
+    draft_id               TEXT PRIMARY KEY,
+    workspace_id           TEXT NOT NULL,
+    target                 TEXT NOT NULL,
+    status                 TEXT NOT NULL,
+    source_memory_ids_json TEXT NOT NULL,
+    skill_id               TEXT NOT NULL,
+    runtime_name           TEXT NOT NULL,
+    description            TEXT NOT NULL DEFAULT '',
+    instructions           TEXT NOT NULL,
+    applied_skill_ref      TEXT,
+    rejection_reason       TEXT NOT NULL DEFAULT '',
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL,
+    applied_at             TEXT,
+    rejected_at            TEXT
+)""",
+    """\
+CREATE INDEX IF NOT EXISTS idx_memory_evolution_drafts_workspace_status
+    ON memory_evolution_drafts(workspace_id, status, updated_at DESC)""",
+    """\
+CREATE INDEX IF NOT EXISTS idx_memory_evolution_drafts_workspace_target
+    ON memory_evolution_drafts(workspace_id, target, updated_at DESC)""",
 ]
 
 
@@ -168,6 +197,35 @@ def _memory_source_from_db(value: object) -> MemorySourceKind:
 def _row_to_summary(row: sqlite3.Row) -> MemoryEntrySummary:
     entry = _row_to_entry(row)
     return _entry_to_summary(entry)
+
+
+def _row_to_evolution_draft(row: sqlite3.Row) -> MemoryEvolutionDraft:
+    source_memory_ids_raw: object = json.loads(str(row["source_memory_ids_json"]))
+    if isinstance(source_memory_ids_raw, list):
+        source_memory_ids = tuple(
+            str(memory_id).strip()
+            for memory_id in source_memory_ids_raw
+            if str(memory_id).strip()
+        )
+    else:
+        source_memory_ids = ()
+    return MemoryEvolutionDraft(
+        draft_id=str(row["draft_id"]),
+        workspace_id=str(row["workspace_id"]),
+        source_memory_ids=source_memory_ids,
+        target=MemoryEvolutionTarget(str(row["target"])),
+        status=MemoryEvolutionStatus(str(row["status"])),
+        skill_id=str(row["skill_id"]),
+        runtime_name=str(row["runtime_name"]),
+        description=str(row["description"]),
+        instructions=str(row["instructions"]),
+        applied_skill_ref=_nullable_str(row["applied_skill_ref"]),
+        rejection_reason=str(row["rejection_reason"]),
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
+        applied_at=_parse_dt_or_none(row["applied_at"]),
+        rejected_at=_parse_dt_or_none(row["rejected_at"]),
+    )
 
 
 class MemoryBankRepository(SharedSqliteRepository):
@@ -390,6 +448,102 @@ class MemoryBankRepository(SharedSqliteRepository):
             self._entry_to_params(entry),
         )
         await cursor.close()
+
+    # ------------------------------------------------------------------
+    # Evolution drafts
+    # ------------------------------------------------------------------
+
+    async def create_evolution_draft_async(
+        self, *, draft: MemoryEvolutionDraft
+    ) -> MemoryEvolutionDraft:
+        async def op(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """INSERT INTO memory_evolution_drafts(
+                    draft_id, workspace_id, target, status, source_memory_ids_json,
+                    skill_id, runtime_name, description, instructions,
+                    applied_skill_ref, rejection_reason, created_at, updated_at,
+                    applied_at, rejected_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                self._evolution_draft_to_params(draft),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_memory_evolution_draft_async",
+            operation=op,
+        )
+        return draft
+
+    async def get_evolution_draft_async(
+        self, draft_id: str
+    ) -> MemoryEvolutionDraft | None:
+        async def op(conn: aiosqlite.Connection) -> MemoryEvolutionDraft | None:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM memory_evolution_drafts WHERE draft_id=?",
+                (draft_id,),
+            )
+            if row is None:
+                return None
+            return _row_to_evolution_draft(row)
+
+        return await self._run_async_read(op)
+
+    async def list_evolution_drafts_async(
+        self, query: MemoryEvolutionDraftQuery
+    ) -> MemoryEvolutionDraftQueryResult:
+        clauses: list[str] = ["workspace_id = ?"]
+        params: list[object] = [query.workspace_id]
+        if query.target is not None:
+            clauses.append("target = ?")
+            params.append(query.target.value)
+        if query.status is not None:
+            clauses.append("status = ?")
+            params.append(query.status.value)
+        where_sql = "WHERE " + " AND ".join(clauses)
+
+        async def op(conn: aiosqlite.Connection) -> MemoryEvolutionDraftQueryResult:
+            count_row = await async_fetchone(
+                conn,
+                f"SELECT COUNT(*) as cnt FROM memory_evolution_drafts {where_sql}",
+                tuple(params),
+            )
+            total_count = int(count_row["cnt"]) if count_row is not None else 0
+            rows = await async_fetchall(
+                conn,
+                f"SELECT * FROM memory_evolution_drafts {where_sql} "
+                f"ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                tuple(params) + (query.limit, query.offset),
+            )
+            return MemoryEvolutionDraftQueryResult(
+                items=tuple(_row_to_evolution_draft(row) for row in rows),
+                total_count=total_count,
+                offset=query.offset,
+                limit=query.limit,
+            )
+
+        return await self._run_async_read(op)
+
+    async def update_evolution_draft_async(
+        self, *, draft: MemoryEvolutionDraft
+    ) -> MemoryEvolutionDraft:
+        async def op(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """UPDATE memory_evolution_drafts SET
+                    workspace_id=?, target=?, status=?, source_memory_ids_json=?,
+                    skill_id=?, runtime_name=?, description=?, instructions=?,
+                    applied_skill_ref=?, rejection_reason=?, created_at=?,
+                    updated_at=?, applied_at=?, rejected_at=?
+                WHERE draft_id=?""",
+                (*self._evolution_draft_to_params(draft)[1:], draft.draft_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_memory_evolution_draft_async",
+            operation=op,
+        )
+        return draft
 
     # ------------------------------------------------------------------
     # Read
@@ -713,9 +867,36 @@ class MemoryBankRepository(SharedSqliteRepository):
             meta_json,
         )
 
+    @staticmethod
+    def _evolution_draft_to_params(
+        draft: MemoryEvolutionDraft,
+    ) -> tuple[object, ...]:
+        source_ids_json = json.dumps(draft.source_memory_ids, separators=(",", ":"))
+        return (
+            draft.draft_id,
+            draft.workspace_id,
+            draft.target.value,
+            draft.status.value,
+            source_ids_json,
+            draft.skill_id,
+            draft.runtime_name,
+            draft.description,
+            draft.instructions,
+            draft.applied_skill_ref,
+            draft.rejection_reason,
+            draft.created_at.isoformat(),
+            draft.updated_at.isoformat(),
+            draft.applied_at.isoformat() if draft.applied_at else None,
+            draft.rejected_at.isoformat() if draft.rejected_at else None,
+        )
+
 
 def generate_memory_id() -> str:
     return f"{MEMORY_ID_PREFIX}{uuid.uuid4().hex[:24]}"
+
+
+def generate_memory_evolution_draft_id() -> str:
+    return f"mem-evo-{uuid.uuid4().hex[:24]}"
 
 
 def _parse_dt_or_default(value: object) -> datetime:

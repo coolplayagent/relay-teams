@@ -68,6 +68,38 @@ export async function getMemory(workspaceId, memoryId, options = {}) {
     );
 }
 
+export async function createMemoryEvolutionDraft(workspaceId, payload, options = {}) {
+    const safeWorkspaceId = String(workspaceId || '').trim();
+    return requestJson(
+        `/api/workspaces/${safeWorkspaceId}/memories/evolutions`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ...payload,
+                workspace_id: safeWorkspaceId,
+            }),
+            signal: options.signal,
+        },
+        'Failed to create memory evolution draft',
+    );
+}
+
+export async function applyMemoryEvolutionDraft(workspaceId, draftId, payload = {}, options = {}) {
+    const safeWorkspaceId = String(workspaceId || '').trim();
+    const safeDraftId = String(draftId || '').trim();
+    return requestJson(
+        `/api/workspaces/${safeWorkspaceId}/memories/evolutions/${safeDraftId}:apply`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: options.signal,
+        },
+        'Failed to apply memory evolution draft',
+    );
+}
+
 export function invalidateMemoryCache() {
     invalidateManagedRequests('memories:');
 }

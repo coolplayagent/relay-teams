@@ -2992,7 +2992,7 @@ Object.assign(TRANSLATIONS['en-US'], {
     'feature.memory.arch.capture_sources': 'Task results, manual notes, condensation',
     'feature.memory.arch.consolidation': 'consolidate',
     'feature.memory.arch.reuse': 'Reuse',
-    'feature.memory.arch.reuse_targets': 'Search and prompt injection',
+    'feature.memory.arch.reuse_targets': 'Search, prompt injection, and skills',
     'feature.memory.arch.working.title': 'Working',
     'feature.memory.arch.working.scope': 'Run and task scope',
     'feature.memory.arch.working.ttl': '4h TTL',
@@ -3005,6 +3005,14 @@ Object.assign(TRANSLATIONS['en-US'], {
     'feature.memory.arch.persistent.scope': 'Workspace scope',
     'feature.memory.arch.persistent.ttl': 'no TTL',
     'feature.memory.arch.persistent.copy': 'Long-lived project facts, decisions, and preferences.',
+    'feature.memory.evolution.skill_id': 'Skill ID',
+    'feature.memory.evolution.runtime_name': 'Runtime name',
+    'feature.memory.evolution.create_skill': 'Draft skill',
+    'feature.memory.evolution.create_sop': 'Draft SOP',
+    'feature.memory.evolution.apply': 'Apply',
+    'feature.memory.evolution.created': 'Draft created.',
+    'feature.memory.evolution.applied': 'Draft applied.',
+    'feature.memory.evolution.draft_status': '{draft} is {status}',
 });
 
 Object.assign(TRANSLATIONS['zh-CN'], {
@@ -3392,7 +3400,7 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'feature.memory.arch.capture_sources': '任务结果、手动记录、上下文压缩',
     'feature.memory.arch.consolidation': '沉淀',
     'feature.memory.arch.reuse': '复用',
-    'feature.memory.arch.reuse_targets': '搜索与提示词注入',
+    'feature.memory.arch.reuse_targets': '搜索、提示词注入与技能',
     'feature.memory.arch.working.title': '工作记忆',
     'feature.memory.arch.working.scope': '运行 / 任务范围',
     'feature.memory.arch.working.ttl': '4 小时 TTL',
@@ -3405,6 +3413,14 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'feature.memory.arch.persistent.scope': '工作区范围',
     'feature.memory.arch.persistent.ttl': '无默认过期',
     'feature.memory.arch.persistent.copy': '长期项目事实、决策和偏好。',
+    'feature.memory.evolution.skill_id': '技能 ID',
+    'feature.memory.evolution.runtime_name': '运行时名称',
+    'feature.memory.evolution.create_skill': '生成技能草稿',
+    'feature.memory.evolution.create_sop': '生成 SOP',
+    'feature.memory.evolution.apply': '应用',
+    'feature.memory.evolution.created': '草稿已生成。',
+    'feature.memory.evolution.applied': '草稿已应用。',
+    'feature.memory.evolution.draft_status': '{draft} 当前为 {status}',
 });
 
 Object.assign(TRANSLATIONS['en-US'], {

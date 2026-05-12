@@ -22,6 +22,8 @@ export {
 } from './sessions.js';
 
 export {
+    applyMemoryEvolutionDraft,
+    createMemoryEvolutionDraft,
     fetchMemories,
     getMemory,
     invalidateMemoryCache,

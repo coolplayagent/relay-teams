@@ -4056,7 +4056,7 @@ Router: `src/relay_teams/interfaces/server/routers/guardrails_router.py`
 
 ## Memory Bank APIs
 
-Structured Memory Bank entries with three tiers (`working`, `medium_term`, `persistent`), three scopes (`workspace`, `session`, `role`), typed content, tags, confidence, consolidation, and search. The legacy role-memory endpoints were removed; subagent panels and the global Memory page read from these endpoints.
+Structured Memory Bank entries with three tiers (`working`, `medium_term`, `persistent`), three scopes (`workspace`, `session`, `role`), typed content, tags, confidence, consolidation, search, and governed promotion into skill drafts. The legacy role-memory endpoints were removed; subagent panels and the global Memory page read from these endpoints.
 
 ### `GET /memories`
 
@@ -4133,6 +4133,64 @@ Request: `CreateMemoryEntryRequest`
 - `expires_at`: optional ISO 8601 expiry timestamp.
 
 Response: `MemoryEntry` (full entry with generated `id`, `version`, timestamps).
+
+### `POST /workspaces/{workspace_id}/memories/evolutions`
+
+Creates a reviewable Memory Bank evolution draft. This does not mutate the
+runtime skill directory.
+
+Request: `CreateMemoryEvolutionDraftRequest`
+- `workspace_id`: path-derived.
+- `source_memory_ids[]`: active Memory Bank entry IDs in the same workspace.
+- `target`: `skill` or `sop_skill`, default `sop_skill`.
+- `skill_id`: target app-scoped skill directory ID.
+- `runtime_name`: runtime skill name written into `SKILL.md`.
+- `description`: optional skill description override.
+- `objective`: optional rendering guidance for the draft body.
+
+Response: `MemoryEvolutionDraft`. Returns `400` for missing, inactive, or
+cross-workspace source memory entries.
+
+### `GET /workspaces/{workspace_id}/memories/evolutions`
+
+Lists Memory Bank evolution drafts for one workspace.
+
+Query fields:
+- `target`: optional `skill` or `sop_skill`.
+- `status`: optional `draft`, `applied`, `rejected`, or `superseded`.
+- `limit`: page size `1..100`, default `20`.
+- `offset`: default `0`.
+
+Response: `MemoryEvolutionDraftQueryResult`.
+
+### `GET /workspaces/{workspace_id}/memories/evolutions/{draft_id}`
+
+Returns one Memory Bank evolution draft. Returns `404` when the draft does not
+exist or belongs to another workspace.
+
+### `POST /workspaces/{workspace_id}/memories/evolutions/{draft_id}:apply`
+
+Applies a draft by writing the proposed skill through the app-scoped ClawHub
+skill service and reloading the runtime skill registry.
+
+Request: `ApplyMemoryEvolutionDraftRequest`
+- `skill_id`: optional final skill directory override.
+- `runtime_name`: optional final runtime skill name override.
+- `description`: optional final description override.
+- `instructions`: optional final `SKILL.md` body override.
+
+Response: `MemoryEvolutionDraft` with `status=applied` and `applied_skill_ref`.
+Returns `409` when the draft is no longer in `draft` status.
+
+### `POST /workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject`
+
+Rejects a draft without mutating skills.
+
+Request: `RejectMemoryEvolutionDraftRequest`
+- `reason`: optional rejection reason.
+
+Response: `MemoryEvolutionDraft` with `status=rejected`. Returns `409` when the
+draft is no longer in `draft` status.
 
 ### `GET /workspaces/{workspace_id}/memories/{memory_id}`
 

@@ -407,3 +407,105 @@ class MemorySearchResult(BaseModel):
 
     items: tuple[MemorySearchHit, ...]
     total_count: int
+
+
+# ---------------------------------------------------------------------------
+# Evolution models
+# ---------------------------------------------------------------------------
+
+
+class MemoryEvolutionTarget(str, Enum):
+    SKILL = "skill"
+    SOP_SKILL = "sop_skill"
+
+
+class MemoryEvolutionStatus(str, Enum):
+    DRAFT = "draft"
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+class CreateMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    source_memory_ids: tuple[str, ...] = Field(min_length=1, max_length=50)
+    target: MemoryEvolutionTarget = MemoryEvolutionTarget.SOP_SKILL
+    skill_id: str = Field(min_length=1, max_length=128)
+    runtime_name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    objective: str = ""
+
+    @field_validator("source_memory_ids")
+    @classmethod
+    def _validate_source_memory_ids(
+        cls, source_memory_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for memory_id in source_memory_ids:
+            normalized = memory_id.strip()
+            if not normalized:
+                message = "source_memory_ids must contain non-empty values"
+                raise ValueError(message)
+            if normalized in seen:
+                message = f"Duplicate source memory id: {normalized}"
+                raise ValueError(message)
+            seen.add(normalized)
+            cleaned.append(normalized)
+        return tuple(cleaned)
+
+
+class ApplyMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str | None = Field(default=None, min_length=1, max_length=128)
+    runtime_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = None
+    instructions: str | None = None
+
+
+class RejectMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = ""
+
+
+class MemoryEvolutionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
+    source_memory_ids: tuple[str, ...] = Field(min_length=1)
+    target: MemoryEvolutionTarget
+    status: MemoryEvolutionStatus = MemoryEvolutionStatus.DRAFT
+    skill_id: str = Field(min_length=1)
+    runtime_name: str = Field(min_length=1)
+    description: str = ""
+    instructions: str = Field(min_length=1)
+    applied_skill_ref: str | None = None
+    rejection_reason: str = ""
+    created_at: datetime
+    updated_at: datetime
+    applied_at: datetime | None = None
+    rejected_at: datetime | None = None
+
+
+class MemoryEvolutionDraftQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    target: MemoryEvolutionTarget | None = None
+    status: MemoryEvolutionStatus | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class MemoryEvolutionDraftQueryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[MemoryEvolutionDraft, ...]
+    total_count: int = Field(ge=0)
+    offset: int
+    limit: int

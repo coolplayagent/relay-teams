@@ -17,6 +17,8 @@ export {
     markSessionTerminalRunViewed,
     updateSessionTopology,
     fetchAgentMessages,
+    applyMemoryEvolutionDraft,
+    createMemoryEvolutionDraft,
     fetchMemories,
     getMemory,
     invalidateMemoryCache,

@@ -51,6 +51,39 @@ class _FakeRequestJson:
         body: dict[str, object] | None,
     ) -> dict[str, object]:
         self.calls.append((base_url, method, path, body))
+        if "/memories/evolutions" in path:
+            if method == "GET" and path.endswith("/evolutions"):
+                return {
+                    "items": [
+                        {
+                            "draft_id": "mem-evo-001",
+                            "status": "draft",
+                            "target": "sop_skill",
+                            "runtime_name": "review-loop-sop",
+                            "skill_id": "review-loop-sop",
+                        }
+                    ],
+                    "total_count": 1,
+                    "offset": 0,
+                    "limit": 20,
+                }
+            status = "applied" if path.endswith(":apply") else "draft"
+            if path.endswith(":reject"):
+                status = "rejected"
+            return {
+                "draft_id": "mem-evo-001",
+                "workspace_id": "ws-1",
+                "source_memory_ids": ["mem-001"],
+                "target": "sop_skill",
+                "status": status,
+                "skill_id": "review-loop-sop",
+                "runtime_name": "review-loop-sop",
+                "description": "Review loop SOP",
+                "instructions": "# review-loop-sop",
+                "applied_skill_ref": "review-loop-sop" if status == "applied" else None,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
         if method == "DELETE":
             return {"ok": True}
         if path.endswith("/consolidate"):
@@ -141,7 +174,15 @@ class TestCommandRegistration:
         result = runner.invoke(cli_app.app, ["memories", "--help"])
         assert result.exit_code == 0
         output = result.output.lower()
-        for cmd in ("list", "get", "create", "delete", "search", "consolidate"):
+        for cmd in (
+            "list",
+            "get",
+            "create",
+            "delete",
+            "search",
+            "consolidate",
+            "evolve",
+        ):
             assert cmd in output
 
     def test_memories_registered_in_main_app(self) -> None:
@@ -443,6 +484,92 @@ class TestConsolidateCommand:
         assert "2 entries created" in r.output
         assert "3 source entries examined" in r.output
         assert fake_req.calls[0][1] == "POST"
+
+
+# ---------------------------------------------------------------------------
+# evolve command
+# ---------------------------------------------------------------------------
+
+
+class TestEvolveCommand:
+    def test_evolve_create_output(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "create",
+                "--workspace-id",
+                "ws-1",
+                "--memory-id",
+                "mem-001",
+                "--skill-id",
+                "review-loop-sop",
+                "--runtime-name",
+                "review-loop-sop",
+            ],
+        )
+        assert r.exit_code == 0
+        assert "Created memory evolution draft" in r.output
+        _, method, path, body = fake_req.calls[0]
+        assert method == "POST"
+        assert path == "/api/workspaces/ws-1/memories/evolutions"
+        assert isinstance(body, dict)
+        assert body["source_memory_ids"] == ["mem-001"]
+
+    def test_evolve_list_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            ["evolve", "list", "--workspace-id", "ws-1", "--format", "json"],
+        )
+        assert r.exit_code == 0
+        data = json.loads(r.output)
+        assert data["total_count"] == 1
+
+    def test_evolve_apply_output(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "apply",
+                "--workspace-id",
+                "ws-1",
+                "--draft-id",
+                "mem-evo-001",
+            ],
+        )
+        assert r.exit_code == 0
+        assert "Applied memory evolution draft" in r.output
+        assert fake_req.calls[0][2].endswith("mem-evo-001:apply")
+
+    def test_evolve_reject_output(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        r = _CR().invoke(
+            app_obj,
+            [
+                "evolve",
+                "reject",
+                "--workspace-id",
+                "ws-1",
+                "--draft-id",
+                "mem-evo-001",
+                "--reason",
+                "duplicate",
+            ],
+        )
+        assert r.exit_code == 0
+        assert "Rejected memory evolution draft" in r.output
+        assert fake_req.calls[0][2].endswith("mem-evo-001:reject")
 
 
 # ---------------------------------------------------------------------------

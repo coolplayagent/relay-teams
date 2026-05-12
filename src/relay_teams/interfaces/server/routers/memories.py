@@ -3,23 +3,35 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Response
 
-from relay_teams.interfaces.server.deps import get_memory_bank_service
+from relay_teams.interfaces.server.deps import (
+    get_memory_bank_service,
+    get_memory_evolution_service,
+)
 from relay_teams.memory.models import (
+    ApplyMemoryEvolutionDraftRequest,
     CreateMemoryEntryRequest,
+    CreateMemoryEvolutionDraftRequest,
     GlobalMemorySearchRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
     MemoryEntry,
     MemoryEntryKind,
     MemoryEntryStatus,
+    MemoryEvolutionDraft,
+    MemoryEvolutionDraftQuery,
+    MemoryEvolutionDraftQueryResult,
+    MemoryEvolutionStatus,
+    MemoryEvolutionTarget,
     MemoryQuery,
     MemoryQueryResult,
     MemoryScope,
     MemorySearchRequest,
     MemorySearchResult,
     MemoryTier,
+    RejectMemoryEvolutionDraftRequest,
     UpdateMemoryEntryRequest,
 )
+from relay_teams.memory.evolution_service import MemoryEvolutionService
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.validation import RequiredIdentifierStr
 
@@ -120,6 +132,101 @@ async def create_memory(
 ) -> MemoryEntry:
     patched = body.model_copy(update={"workspace_id": workspace_id})
     return await service.create_entry_async(patched)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/memories/evolutions",
+    response_model=MemoryEvolutionDraft,
+    status_code=201,
+)
+async def create_memory_evolution_draft(
+    workspace_id: RequiredIdentifierStr = Path(),
+    body: CreateMemoryEvolutionDraftRequest = Body(...),
+    service: MemoryEvolutionService = Depends(get_memory_evolution_service),
+) -> MemoryEvolutionDraft:
+    patched = body.model_copy(update={"workspace_id": workspace_id})
+    try:
+        return await service.create_draft_async(patched)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/workspaces/{workspace_id}/memories/evolutions",
+    response_model=MemoryEvolutionDraftQueryResult,
+)
+async def list_memory_evolution_drafts(
+    workspace_id: RequiredIdentifierStr = Path(),
+    target: MemoryEvolutionTarget | None = Query(default=None),
+    status: MemoryEvolutionStatus | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: MemoryEvolutionService = Depends(get_memory_evolution_service),
+) -> MemoryEvolutionDraftQueryResult:
+    return await service.list_drafts_async(
+        MemoryEvolutionDraftQuery(
+            workspace_id=workspace_id,
+            target=target,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/memories/evolutions/{draft_id}",
+    response_model=MemoryEvolutionDraft,
+)
+async def get_memory_evolution_draft(
+    workspace_id: RequiredIdentifierStr = Path(),
+    draft_id: RequiredIdentifierStr = Path(),
+    service: MemoryEvolutionService = Depends(get_memory_evolution_service),
+) -> MemoryEvolutionDraft:
+    draft = await service.get_draft_async(workspace_id, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory evolution draft not found")
+    return draft
+
+
+@router.post(
+    "/workspaces/{workspace_id}/memories/evolutions/{draft_id}:apply",
+    response_model=MemoryEvolutionDraft,
+)
+async def apply_memory_evolution_draft(
+    workspace_id: RequiredIdentifierStr = Path(),
+    draft_id: RequiredIdentifierStr = Path(),
+    body: ApplyMemoryEvolutionDraftRequest | None = Body(default=None),
+    service: MemoryEvolutionService = Depends(get_memory_evolution_service),
+) -> MemoryEvolutionDraft:
+    payload = body or ApplyMemoryEvolutionDraftRequest()
+    try:
+        draft = await service.apply_draft_async(workspace_id, draft_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory evolution draft not found")
+    return draft
+
+
+@router.post(
+    "/workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject",
+    response_model=MemoryEvolutionDraft,
+)
+async def reject_memory_evolution_draft(
+    workspace_id: RequiredIdentifierStr = Path(),
+    draft_id: RequiredIdentifierStr = Path(),
+    body: RejectMemoryEvolutionDraftRequest | None = Body(default=None),
+    service: MemoryEvolutionService = Depends(get_memory_evolution_service),
+) -> MemoryEvolutionDraft:
+    payload = body or RejectMemoryEvolutionDraftRequest()
+    try:
+        draft = await service.reject_draft_async(workspace_id, draft_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory evolution draft not found")
+    return draft
 
 
 @router.get(

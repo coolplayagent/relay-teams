@@ -3,6 +3,8 @@
  * Global Memory Bank browser.
  */
 import {
+    applyMemoryEvolutionDraft,
+    createMemoryEvolutionDraft,
     fetchMemories,
     fetchWorkspaces,
     getMemory,
@@ -42,6 +44,10 @@ function createInitialMemoryState() {
         selectedId: '',
         selectedEntry: null,
         selectedLoadingId: '',
+        evolutionDraft: null,
+        evolutionBusy: false,
+        evolutionMessage: '',
+        evolutionError: '',
         loading: false,
         errorMessage: '',
     };
@@ -230,6 +236,10 @@ async function loadSelectedMemory(memoryId, token = memoryRequestToken) {
         selectedEntry: memoryState.selectedEntry?.id === memoryId
             ? memoryState.selectedEntry
             : null,
+        evolutionDraft: null,
+        evolutionBusy: false,
+        evolutionMessage: '',
+        evolutionError: '',
     };
     renderMemoryContent();
     try {
@@ -412,6 +422,7 @@ function renderMemoryContent() {
         </section>
     `;
     bindMemoryRows();
+    bindMemoryEvolutionControls();
 }
 
 function renderMemoryArchitectureMap() {
@@ -570,8 +581,157 @@ function renderMemoryDetail() {
             <div class="memory-detail-tags">
                 ${tags.map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}
             </div>
+            ${renderMemoryEvolutionPanel(entry || summary, content)}
         </article>
     `;
+}
+
+function renderMemoryEvolutionPanel(entry, content) {
+    const workspaceId = String(entry?.workspace_id || '').trim();
+    const memoryId = String(entry?.id || memoryState.selectedId || '').trim();
+    if (!workspaceId || !memoryId) {
+        return '';
+    }
+    const defaults = buildEvolutionDefaults(memoryId, content);
+    const draft = memoryState.evolutionDraft;
+    const draftStatus = String(draft?.status || '').trim();
+    const canApply = draftStatus === 'draft';
+    return `
+        <section class="memory-evolution-panel" data-memory-evolution-panel>
+            <div class="memory-evolution-fields">
+                <label>
+                    <span>${escapeHtml(t('feature.memory.evolution.skill_id'))}</span>
+                    <input type="text" value="${escapeAttribute(defaults.skillId)}" data-memory-evolution-skill-id>
+                </label>
+                <label>
+                    <span>${escapeHtml(t('feature.memory.evolution.runtime_name'))}</span>
+                    <input type="text" value="${escapeAttribute(defaults.runtimeName)}" data-memory-evolution-runtime-name>
+                </label>
+            </div>
+            <div class="memory-evolution-actions">
+                <button class="secondary-btn" type="button" data-memory-evolve-target="skill" ${memoryState.evolutionBusy ? 'disabled' : ''}>
+                    ${escapeHtml(t('feature.memory.evolution.create_skill'))}
+                </button>
+                <button class="secondary-btn" type="button" data-memory-evolve-target="sop_skill" ${memoryState.evolutionBusy ? 'disabled' : ''}>
+                    ${escapeHtml(t('feature.memory.evolution.create_sop'))}
+                </button>
+                ${canApply ? `
+                    <button class="primary-btn" type="button" data-memory-evolution-apply ${memoryState.evolutionBusy ? 'disabled' : ''}>
+                        ${escapeHtml(t('feature.memory.evolution.apply'))}
+                    </button>
+                ` : ''}
+            </div>
+            ${draft ? `
+                <div class="memory-evolution-status">
+                    ${escapeHtml(formatMessage('feature.memory.evolution.draft_status', {
+                        draft: draft.draft_id || '-',
+                        status: formatEnumLabel(draft.status),
+                    }))}
+                </div>
+            ` : ''}
+            ${memoryState.evolutionMessage ? `<div class="memory-evolution-status">${escapeHtml(memoryState.evolutionMessage)}</div>` : ''}
+            ${memoryState.evolutionError ? `<div class="memory-evolution-status is-error">${escapeHtml(memoryState.evolutionError)}</div>` : ''}
+        </section>
+    `;
+}
+
+function bindMemoryEvolutionControls() {
+    const panel = els.projectViewContent.querySelector('[data-memory-evolution-panel]');
+    if (!panel || typeof panel.querySelectorAll !== 'function') {
+        return;
+    }
+    for (const button of panel.querySelectorAll('[data-memory-evolve-target]')) {
+        button.addEventListener('click', () => {
+            const target = String(button.getAttribute('data-memory-evolve-target') || '').trim();
+            void createSelectedMemoryEvolutionDraft(target);
+        });
+    }
+    if (typeof panel.querySelector === 'function') {
+        panel.querySelector('[data-memory-evolution-apply]')?.addEventListener('click', () => {
+            void applySelectedMemoryEvolutionDraft();
+        });
+    }
+}
+
+async function createSelectedMemoryEvolutionDraft(target) {
+    const entry = memoryState.selectedEntry;
+    const workspaceId = String(entry?.workspace_id || '').trim();
+    const memoryId = String(entry?.id || '').trim();
+    if (!workspaceId || !memoryId) {
+        return;
+    }
+    const controls = els.projectViewContent.querySelector('[data-memory-evolution-panel]');
+    const defaults = buildEvolutionDefaults(memoryId, entry.content || {});
+    const skillId = String(controls?.querySelector('[data-memory-evolution-skill-id]')?.value || defaults.skillId).trim();
+    const runtimeName = String(controls?.querySelector('[data-memory-evolution-runtime-name]')?.value || defaults.runtimeName).trim();
+    memoryState = {
+        ...memoryState,
+        evolutionBusy: true,
+        evolutionMessage: '',
+        evolutionError: '',
+    };
+    renderMemoryContent();
+    try {
+        const draft = await createMemoryEvolutionDraft(workspaceId, {
+            source_memory_ids: [memoryId],
+            target,
+            skill_id: skillId,
+            runtime_name: runtimeName,
+            description: entry.content?.title || '',
+            objective: entry.content?.body || '',
+        });
+        memoryState = {
+            ...memoryState,
+            evolutionDraft: draft,
+            evolutionBusy: false,
+            evolutionMessage: t('feature.memory.evolution.created'),
+            evolutionError: '',
+        };
+        renderMemoryContent();
+    } catch (error) {
+        memoryState = {
+            ...memoryState,
+            evolutionBusy: false,
+            evolutionError: String(error?.message || error || ''),
+        };
+        renderMemoryContent();
+        sysLog(`Failed to create memory evolution draft: ${error?.message || error}`, 'log-error');
+    }
+}
+
+async function applySelectedMemoryEvolutionDraft() {
+    const draft = memoryState.evolutionDraft;
+    const workspaceId = String(draft?.workspace_id || '').trim();
+    const draftId = String(draft?.draft_id || '').trim();
+    if (!workspaceId || !draftId) {
+        return;
+    }
+    memoryState = {
+        ...memoryState,
+        evolutionBusy: true,
+        evolutionMessage: '',
+        evolutionError: '',
+    };
+    renderMemoryContent();
+    try {
+        const applied = await applyMemoryEvolutionDraft(workspaceId, draftId, {});
+        memoryState = {
+            ...memoryState,
+            evolutionDraft: applied,
+            evolutionBusy: false,
+            evolutionMessage: t('feature.memory.evolution.applied'),
+            evolutionError: '',
+        };
+        renderMemoryContent();
+    } catch (error) {
+        memoryState = {
+            ...memoryState,
+            evolutionBusy: false,
+            evolutionError: String(error?.message || error || ''),
+        };
+        renderMemoryContent();
+        sysLog(`Failed to apply memory evolution draft: ${error?.message || error}`, 'log-error');
+    }
 }
 
 function renderDetailItem(label, value) {
@@ -581,6 +741,23 @@ function renderDetailItem(label, value) {
             <dd>${escapeHtml(value || '-')}</dd>
         </div>
     `;
+}
+
+function buildEvolutionDefaults(memoryId, content) {
+    const title = String(content?.title || memoryId || 'memory').trim();
+    const slug = slugify(title) || slugify(memoryId) || 'memory-skill';
+    return {
+        skillId: slug.slice(0, 96),
+        runtimeName: slug.slice(0, 96),
+    };
+}
+
+function slugify(value) {
+    return String(value || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .replace(/-{2,}/g, '-');
 }
 
 function formatWorkspaceLabel(workspace) {

@@ -111,6 +111,7 @@ from relay_teams.gateway.discord import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
+from relay_teams.memory.evolution_service import MemoryEvolutionService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -1210,6 +1211,10 @@ class ServerContainer:
             config_dir=app_config_dir,
             on_skill_mutated=self._reload_skills_config,
         )
+        self.memory_evolution_service: MemoryEvolutionService = MemoryEvolutionService(
+            repository=self.memory_bank_repo,
+            skill_service=self.clawhub_skill_service,
+        )
         self._async_closeables: tuple[AsyncCloseableRepository, ...] = (
             self.task_repo,
             self.artifact_repo,
@@ -1622,6 +1627,10 @@ class ServerContainer:
         self.clawhub_skill_service = ClawHubSkillService(
             config_dir=self.runtime.paths.config_dir,
             on_skill_mutated=self._reload_skills_config,
+        )
+        self.memory_evolution_service = MemoryEvolutionService(
+            repository=self.memory_bank_repo,
+            skill_service=self.clawhub_skill_service,
         )
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()
