@@ -916,6 +916,20 @@ Notes:
 - `feishu` delivery is best-effort and only applies when the session/run has Feishu chat context.
 - Feishu credentials are resolved from the Feishu gateway account bound to that session, not from `notifications.json`.
 
+### `GET /system/configs/general`
+
+Returns saved General settings that apply to future runs started from the web UI.
+
+Fields:
+- `shell_safety_policy_enabled`
+
+### `PUT /system/configs/general`
+
+Replaces saved General settings.
+
+Fields:
+- `shell_safety_policy_enabled`
+
 ### `GET /system/configs/orchestration`
 
 Returns global orchestration settings.
@@ -1553,10 +1567,11 @@ Request:
     }
   ],
   "run_kind": "conversation",
-  "generation_config": null,
-  "execution_mode": "ai",
-  "yolo": false,
-  "target_role_id": "Architect",
+    "generation_config": null,
+    "execution_mode": "ai",
+    "yolo": false,
+    "shell_safety_policy_enabled": true,
+    "target_role_id": "Architect",
   "thinking": {
     "enabled": false,
     "effort": null
@@ -1598,6 +1613,11 @@ Notes:
 - `yolo` is optional.
 - `yolo: false` preserves the existing tool approval flow.
 - `yolo: true` skips human tool approval for that run, including resumed recoverable runs, but tool-local validation still applies.
+- `shell_safety_policy_enabled` is optional.
+- When omitted, the backend uses the saved value from `GET /system/configs/general`.
+- When no General setting has been saved yet, the effective default remains `true`.
+- `shell_safety_policy_enabled: true` preserves the current local shell pre-execution safety policy.
+- `shell_safety_policy_enabled: false` disables only the shell-local deny layer and directory-change restrictions; normal tool authorization, approval, timeout, and audit behavior still apply.
 - `thinking` is optional.
 - `thinking.enabled` enables model thinking streams for providers that emit thinking parts.
 - `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
@@ -3455,8 +3475,10 @@ Recommended Feishu gateway contract:
 - `target_config.normal_root_role_id` is optional for normal mode
 - `target_config.orchestration_preset_id` is required for orchestration mode
 - `target_config.yolo = true` by default for Feishu-triggered runs
+- `target_config.shell_safety_policy_enabled = true` by default for Feishu-triggered runs
 - `target_config.thinking.enabled` and `target_config.thinking.effort` control per-bot run thinking settings
 - Set `target_config.yolo = false` only when you want Feishu-triggered runs to keep the normal tool approval flow
+- Set `target_config.shell_safety_policy_enabled = false` only when you want Feishu-triggered runs to skip the local shell safety policy and rely on the normal approval/runtime path instead
 - `secret_config.app_secret` is required on create
 - `secret_config.verification_token` is optional
 - `secret_config.encrypt_key` is optional
@@ -3477,6 +3499,7 @@ Feishu-specific request shape:
     "session_mode": "normal",
     "normal_root_role_id": "MainAgent",
     "yolo": true,
+    "shell_safety_policy_enabled": true,
     "thinking": {
       "enabled": false,
       "effort": "medium"
@@ -3625,6 +3648,7 @@ Each record includes:
 - `normal_root_role_id`
 - `orchestration_preset_id`
 - `yolo`
+- `shell_safety_policy_enabled`
 - `thinking`
 - `secret_status.bot_token_configured`
 - runtime status fields: `running`, `last_error`, `last_event_at`, `last_inbound_at`, `last_outbound_at`
@@ -3649,6 +3673,7 @@ Request fields:
 - `normal_root_role_id`
 - `orchestration_preset_id`
 - `yolo`
+- `shell_safety_policy_enabled`
 - `thinking`
 
 Rules:
@@ -3673,6 +3698,7 @@ Mutable fields:
 - `normal_root_role_id`
 - `orchestration_preset_id`
 - `yolo`
+- `shell_safety_policy_enabled`
 - `thinking`
 
 Notes:

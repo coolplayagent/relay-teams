@@ -301,6 +301,7 @@ class AcpGatewayServer:
         mcp_relay: AcpMcpRelay | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
         metric_recorder: MetricRecorder | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._gateway_session_service = gateway_session_service
         self._session_service = session_service
@@ -312,6 +313,9 @@ class AcpGatewayServer:
         self._zed_compat_mode = False
         self._mcp_relay = mcp_relay or AcpMcpRelay(metric_recorder=metric_recorder)
         self._session_ingress_service = session_ingress_service
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
 
     def set_notify(self, notify: AcpNotifier) -> None:
         self._notify = notify
@@ -632,6 +636,9 @@ class AcpGatewayServer:
             session_id=record.internal_session_id,
             input=prompt_input,
             yolo=True,
+            shell_safety_policy_enabled=await asyncio.to_thread(
+                self._get_shell_safety_policy_enabled
+            ),
         )
         with self._mcp_relay.session_scope(gateway_session_id):
             try:

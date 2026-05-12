@@ -136,6 +136,9 @@ class FeishuInboundRuntime:
             input=content_parts_from_text(self._build_run_intent_text(message=message)),
             execution_mode=ExecutionMode.AI,
             yolo=runtime_config.target.yolo,
+            shell_safety_policy_enabled=(
+                runtime_config.target.shell_safety_policy_enabled
+            ),
             thinking=runtime_config.target.thinking,
             conversation_context=self._build_conversation_context(message=message),
         )

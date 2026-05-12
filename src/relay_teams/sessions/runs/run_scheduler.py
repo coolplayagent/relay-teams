@@ -68,7 +68,7 @@ class RunScheduler:
         append_followup_to_coordinator: Callable[
             [str, str, bool, InjectionSource], bool
         ],
-        update_run_yolo: Callable[[str, str, bool], None],
+        update_run_runtime_policy: Callable[[str, str, bool, bool | None], None],
         remember_active_run: Callable[[str, str], None],
         runtime_for_run: Callable[[str], RunRuntimeRecord | None],
         worker: Callable[
@@ -104,7 +104,7 @@ class RunScheduler:
         self._assert_auto_attach_allowed = assert_auto_attach_allowed
         self._merge_intent = merge_intent
         self._append_followup_to_coordinator = append_followup_to_coordinator
-        self._update_run_yolo = update_run_yolo
+        self._update_run_runtime_policy = update_run_runtime_policy
         self._remember_active_run = remember_active_run
         self._runtime_for_run = runtime_for_run
         self._worker = worker
@@ -228,7 +228,12 @@ class RunScheduler:
                 active_run_id in self._running_run_ids
                 or self._injection_manager.is_active(active_run_id)
             ):
-                self._update_run_yolo(active_run_id, session_id, intent.yolo)
+                self._update_run_runtime_policy(
+                    active_run_id,
+                    session_id,
+                    intent.yolo,
+                    None,
+                )
                 self._append_followup_to_coordinator(
                     active_run_id,
                     intent.intent,
@@ -260,7 +265,12 @@ class RunScheduler:
                     False,
                     InjectionSource.USER,
                 )
-                self._update_run_yolo(active_run_id, session_id, intent.yolo)
+                self._update_run_runtime_policy(
+                    active_run_id,
+                    session_id,
+                    intent.yolo,
+                    None,
+                )
                 self._resume_requested_runs.add(active_run_id)
                 with bind_trace_context(
                     trace_id=active_run_id,

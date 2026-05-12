@@ -515,6 +515,9 @@ def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
         mcp_relay=mcp_relay,
         session_ingress_service=container.session_ingress_service,
         metric_recorder=metric_recorder,
+        get_shell_safety_policy_enabled=lambda: (
+            container.general_config_service.get_config().shell_safety_policy_enabled
+        ),
     )
     runtime = AcpStdioRuntime(
         server=server,

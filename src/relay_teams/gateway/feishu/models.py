@@ -91,6 +91,7 @@ class FeishuTriggerTargetConfig(BaseModel):
     normal_root_role_id: OptionalIdentifierStr = None
     orchestration_preset_id: OptionalIdentifierStr = None
     yolo: bool = True
+    shell_safety_policy_enabled: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
 
     @model_validator(mode="after")

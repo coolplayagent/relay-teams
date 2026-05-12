@@ -10,8 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from relay_teams.general import GeneralConfigService
 from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
-from relay_teams.interfaces.server.deps import get_run_service, get_skill_registry
+from relay_teams.interfaces.server.deps import (
+    get_general_config_service,
+    get_run_service,
+    get_skill_registry,
+)
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import (
@@ -170,6 +175,7 @@ class CreateRunRequest(BaseModel):
     generation_config: MediaGenerationConfig | None = Field(default=None)
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
+    shell_safety_policy_enabled: bool | None = None
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
     skills: tuple[str, ...] | None = None
@@ -292,6 +298,9 @@ async def create_run(
     req: CreateRunRequest,
     service: Annotated[SessionRunService, Depends(get_run_service)],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
+    general_config_service: Annotated[
+        GeneralConfigService, Depends(get_general_config_service)
+    ],
 ) -> CreateRunResponse:
     started = time.perf_counter()
     try:
@@ -338,6 +347,12 @@ async def create_run(
                 strict=True,
                 consumer="interfaces.server.routers.runs.create_run",
             )
+        shell_safety_policy_enabled = req.shell_safety_policy_enabled
+        shell_safety_policy_override_provided = shell_safety_policy_enabled is not None
+        if shell_safety_policy_enabled is None:
+            shell_safety_policy_enabled = await asyncio.to_thread(
+                lambda: general_config_service.get_config().shell_safety_policy_enabled
+            )
         intent_input = IntentInput(
             session_id=req.session_id,
             input=normalized_input,
@@ -346,6 +361,8 @@ async def create_run(
             generation_config=req.generation_config,
             execution_mode=req.execution_mode,
             yolo=req.yolo,
+            shell_safety_policy_enabled=shell_safety_policy_enabled,
+            shell_safety_policy_override_provided=shell_safety_policy_override_provided,
             thinking=req.thinking,
             target_role_id=req.target_role_id,
             skills=resolved_skills,
@@ -364,6 +381,7 @@ async def create_run(
                 payload={
                     "execution_mode": req.execution_mode.value,
                     "yolo": req.yolo,
+                    "shell_safety_policy_enabled": shell_safety_policy_enabled,
                 },
             )
         return CreateRunResponse(

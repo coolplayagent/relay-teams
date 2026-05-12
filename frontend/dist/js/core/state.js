@@ -31,6 +31,7 @@ export const state = {
     sessionAgents: [],
     sessionTasks: [],
     yolo: true,
+    shellSafetyPolicyEnabled: true,
     thinking: {
         enabled: false,
         effort: 'medium',

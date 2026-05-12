@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from io import BytesIO
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
@@ -385,6 +385,41 @@ async def test_session_prompt_streams_updates_and_usage(
         "tool_call_update",
         "agent_message_chunk",
     ]
+
+
+@pytest.mark.asyncio
+async def test_session_prompt_uses_general_shell_policy(tmp_path: Path) -> None:
+    server, _session_service, run_service, _notifications = _build_server(
+        tmp_path,
+        get_shell_safety_policy_enabled=lambda: False,
+    )
+    run_service.events_by_run["run-1"] = (
+        _event("session-1", "run-1", RunEventType.RUN_COMPLETED, {}),
+    )
+    created = await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": {"cwd": str(tmp_path)},
+        }
+    )
+    created_result = _require_result_object(created)
+
+    await server.handle_jsonrpc_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": _require_str(created_result, "sessionId"),
+                "prompt": [{"type": "text", "text": "run curl"}],
+            },
+        }
+    )
+
+    assert len(run_service.create_calls) == 1
+    assert run_service.create_calls[0].shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio
@@ -2144,6 +2179,7 @@ def _build_server(
     workspace_service: FakeWorkspaceService | None = None,
     default_normal_root_role_id: str | None = None,
     metric_recorder: MetricRecorder | None = None,
+    get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
 ) -> tuple[
     AcpGatewayServer,
     FakeSessionService,
@@ -2181,6 +2217,7 @@ def _build_server(
         media_asset_service=cast(MediaAssetService, object()),
         notify=notify,
         metric_recorder=metric_recorder,
+        get_shell_safety_policy_enabled=get_shell_safety_policy_enabled,
     )
     server.set_mcp_relay_outbound(send_request=send_request, send_notification=notify)
     return server, session_service, run_service, notifications

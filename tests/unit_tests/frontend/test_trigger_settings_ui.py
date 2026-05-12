@@ -132,6 +132,8 @@ document.getElementById("feishu-thinking-effort-input").value = "high";
 document.getElementById("feishu-thinking-effort-input").onchange();
 document.getElementById("feishu-trigger-yolo-input").value = "false";
 document.getElementById("feishu-trigger-yolo-input").onchange();
+document.getElementById("feishu-trigger-shell-safety-policy-input").value = "false";
+document.getElementById("feishu-trigger-shell-safety-policy-input").onchange();
 
 await document.getElementById("save-trigger-btn").onclick();
 
@@ -169,6 +171,7 @@ console.log(JSON.stringify({
         "session_mode": "orchestration",
         "orchestration_preset_id": "default",
         "yolo": False,
+        "shell_safety_policy_enabled": False,
         "thinking": {"enabled": True, "effort": "high"},
     }
     assert create_payload["secret_config"] == {
@@ -312,6 +315,7 @@ console.log(JSON.stringify({
         "session_mode": "normal",
         "normal_root_role_id": "SpecCoder",
         "yolo": True,
+        "shell_safety_policy_enabled": True,
         "thinking": {"enabled": False, "effort": None},
     }
     assert payload["enableCalls"] == []
@@ -858,6 +862,7 @@ function createElements() {{
         "feishu-normal-root-role-id-input",
         "feishu-orchestration-preset-id-input",
         "feishu-trigger-yolo-input",
+        "feishu-trigger-shell-safety-policy-input",
         "feishu-trigger-thinking-enabled-input",
         "wechat-workspace-id-input",
         "wechat-session-mode-input",

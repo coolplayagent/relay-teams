@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from relay_teams.automation.automation_bound_session_queue_repository import (
@@ -120,6 +120,7 @@ class AutomationBoundSessionQueueService:
         feishu_client: FeishuClientLike,
         project_repository: AutomationProjectLookup,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._session_lookup = session_lookup
@@ -130,6 +131,9 @@ class AutomationBoundSessionQueueService:
         self._feishu_client = feishu_client
         self._project_repository = project_repository
         self._session_ingress_service = session_ingress_service
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
 
     async def materialize_execution(
         self,
@@ -418,6 +422,7 @@ class AutomationBoundSessionQueueService:
             input=content_parts_from_text(prompt),
             execution_mode=run_config.execution_mode,
             yolo=run_config.yolo,
+            shell_safety_policy_enabled=self._get_shell_safety_policy_enabled(),
             thinking=run_config.thinking,
             conversation_context=RuntimePromptConversationContext(
                 source_provider=FEISHU_PLATFORM,

@@ -529,9 +529,30 @@ def _parent_intent() -> IntentInput:
     return IntentInput(
         session_id="session-1",
         execution_mode=ExecutionMode.AI,
+        shell_safety_policy_enabled=False,
         thinking=RunThinkingConfig(enabled=True, effort="medium"),
         session_mode=SessionMode.NORMAL,
     )
+
+
+def test_background_task_service_subagent_intent_inherits_shell_policy() -> None:
+    intent_repo = _FakeRunIntentRepo(_parent_intent())
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=cast(BackgroundTaskRepository, object()),
+        run_intent_repo=intent_repo,
+    )
+
+    service._upsert_subagent_intent(
+        parent_run_id="run-1",
+        subagent_run_id="run-subagent-1",
+        session_id="session-1",
+        subagent_role_id="Crafter",
+        prompt="Inspect the failing tests.",
+    )
+
+    subagent_intent = intent_repo.get("run-subagent-1")
+    assert subagent_intent.shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio

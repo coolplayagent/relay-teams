@@ -391,6 +391,8 @@ function createFeishuTriggerDraft(trigger = null) {
             normal_root_role_id: String(targetConfig?.normal_root_role_id || firstRoleId).trim(),
             orchestration_preset_id: String(targetConfig?.orchestration_preset_id || '').trim(),
             yolo: targetConfig?.yolo !== false,
+            shell_safety_policy_enabled:
+                targetConfig?.shell_safety_policy_enabled !== false,
             thinking: {
                 enabled: targetConfig?.thinking?.enabled === true,
                 effort: String(targetConfig?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
@@ -419,6 +421,7 @@ function createDiscordAccountDraft(account = null) {
         allowed_channel_ids: normalizeDiscordAllowedChannelsForDisplay(account),
         allow_channel_messages: account?.allow_channel_messages === true,
         yolo: account?.yolo !== false,
+        shell_safety_policy_enabled: account?.shell_safety_policy_enabled !== false,
         thinking: {
             enabled: thinking?.enabled === true,
             effort: String(thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
@@ -614,6 +617,10 @@ function syncFeishuDraftFromEditor() {
             normal_root_role_id: sessionMode === 'normal' ? readEditorValue('feishu-normal-root-role-id-input') : '',
             orchestration_preset_id: sessionMode === 'orchestration' ? readEditorValue('feishu-orchestration-preset-id-input') : '',
             yolo: readEditorChecked('feishu-trigger-yolo-input', resolveYolo(draft.target_config)),
+            shell_safety_policy_enabled: readEditorChecked(
+                'feishu-trigger-shell-safety-policy-input',
+                draft.target_config?.shell_safety_policy_enabled !== false,
+            ),
             thinking: {
                 enabled: thinkingEnabled,
                 effort: thinkingEnabled
@@ -669,6 +676,8 @@ function buildFeishuTriggerPayload(draft, { requireSecret = false } = {}) {
             workspace_id: workspaceId,
             session_mode: nextSessionMode,
             yolo: resolveYolo(draft?.target_config),
+            shell_safety_policy_enabled:
+                draft?.target_config?.shell_safety_policy_enabled !== false,
             thinking: {
                 enabled: resolveThinkingEnabled(draft?.target_config),
                 effort: resolveThinkingEnabled(draft?.target_config) ? resolveThinkingEffort(draft?.target_config) : null,
@@ -783,6 +792,15 @@ function renderFeishuEditor() {
                                             </span>
                                         </label>
                                     </div>
+                                    <div class="gateway-setting-panel">
+                                        <label class="gateway-setting-toggle-row" for="feishu-trigger-shell-safety-policy-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.shell_safety_policy_enabled'))}</span>
+                                            <input id="feishu-trigger-shell-safety-policy-input" type="checkbox"${draft.target_config?.shell_safety_policy_enabled !== false ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                        </label>
+                                    </div>
                                     <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="feishu-thinking-panel">
                                         <label class="gateway-setting-toggle-row" for="feishu-trigger-thinking-enabled-input">
                                             <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.thinking_enabled'))}</span>
@@ -828,6 +846,7 @@ function bindFeishuEditorInputs() {
         'feishu-orchestration-preset-id-input',
         'feishu-thinking-effort-input',
         'feishu-trigger-yolo-input',
+        'feishu-trigger-shell-safety-policy-input',
     ].forEach(id => {
         const element = lookupDocumentElement(id);
         if (!element) {
@@ -1018,6 +1037,15 @@ function renderDiscordEditor() {
                                             </span>
                                         </label>
                                     </div>
+                                    <div class="gateway-setting-panel">
+                                        <label class="gateway-setting-toggle-row" for="discord-shell-safety-policy-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.shell_safety_policy_enabled'))}</span>
+                                            <input id="discord-shell-safety-policy-input" type="checkbox"${draft.shell_safety_policy_enabled !== false ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                        </label>
+                                    </div>
                                     <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="discord-thinking-panel">
                                         <label class="gateway-setting-toggle-row" for="discord-thinking-enabled-input">
                                             <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.thinking_enabled'))}</span>
@@ -1120,6 +1148,7 @@ function buildDiscordAccountPayloadFromEditor(draft) {
         workspace_id: workspaceId,
         session_mode: nextSessionMode,
         yolo: readEditorChecked('discord-yolo-input', draft?.yolo !== false),
+        shell_safety_policy_enabled: readEditorChecked('discord-shell-safety-policy-input', draft?.shell_safety_policy_enabled !== false),
         thinking: {
             enabled: thinkingEnabled,
             effort: thinkingEnabled
@@ -3573,6 +3602,13 @@ async function requestFeishuTriggerInput(trigger = null) {
                 description: '',
             },
             {
+                id: 'shell_safety_policy_enabled',
+                label: t('settings.triggers.shell_safety_policy_enabled'),
+                type: 'checkbox',
+                value: targetConfig?.shell_safety_policy_enabled !== false,
+                description: '',
+            },
+            {
                 id: 'thinking_enabled',
                 label: t('settings.triggers.thinking_enabled'),
                 type: 'checkbox',
@@ -3629,6 +3665,7 @@ async function requestFeishuTriggerInput(trigger = null) {
             workspace_id: workspaceId,
             session_mode: nextSessionMode,
             yolo: values.yolo !== false,
+            shell_safety_policy_enabled: values.shell_safety_policy_enabled !== false,
             thinking: {
                 enabled: values.thinking_enabled === true,
                 effort: values.thinking_enabled === true

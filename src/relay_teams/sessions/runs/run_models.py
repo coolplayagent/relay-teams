@@ -115,6 +115,8 @@ class IntentInput(BaseModel):
     generation_config: MediaGenerationConfig | None = None
     execution_mode: ExecutionMode = ExecutionMode.AI
     yolo: bool = False
+    shell_safety_policy_enabled: bool = True
+    shell_safety_policy_override_provided: bool = False
     reuse_root_instance: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None

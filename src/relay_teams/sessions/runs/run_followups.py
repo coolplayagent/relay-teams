@@ -474,9 +474,15 @@ class RunFollowupRouter:
             normalized_session_id
         )
         _ = self._session_repo.mark_started(normalized_session_id)
+        source_yolo, source_shell_safety_policy_enabled = self._source_run_policy(
+            source_run_id=source_run_id,
+            session_id=normalized_session_id,
+        )
         intent = IntentInput(
             session_id=normalized_session_id,
             input=(TextContentPart(text=message),),
+            yolo=source_yolo,
+            shell_safety_policy_enabled=source_shell_safety_policy_enabled,
         )
         new_run_id, _ = self._create_run(intent, InjectionSource.SYSTEM)
         self._ensure_run_started(new_run_id)
@@ -543,9 +549,18 @@ class RunFollowupRouter:
             self._session_repo.mark_started,
             normalized_session_id,
         )
+        (
+            source_yolo,
+            source_shell_safety_policy_enabled,
+        ) = await self._source_run_policy_async(
+            source_run_id=source_run_id,
+            session_id=normalized_session_id,
+        )
         intent = IntentInput(
             session_id=normalized_session_id,
             input=(TextContentPart(text=message),),
+            yolo=source_yolo,
+            shell_safety_policy_enabled=source_shell_safety_policy_enabled,
         )
         if self._create_run_async is None:
             new_run_id, _ = await asyncio.to_thread(
@@ -852,12 +867,13 @@ class RunFollowupRouter:
             run_intent_repo.append_followup(run_id=run_id, content=content)
             return False
 
-    def update_run_yolo(
+    def update_run_runtime_policy(
         self,
         *,
         run_id: str,
         session_id: str,
         yolo: bool,
+        shell_safety_policy_enabled: bool | None = None,
     ) -> None:
         run_intent_repo = self._get_run_intent_repo()
         if run_intent_repo is None:
@@ -866,15 +882,47 @@ class RunFollowupRouter:
             intent = run_intent_repo.get(run_id, fallback_session_id=session_id)
         except KeyError:
             return
-        if intent.yolo == yolo:
+        if intent.yolo == yolo and (
+            shell_safety_policy_enabled is None
+            or intent.shell_safety_policy_enabled == shell_safety_policy_enabled
+        ):
             return
         intent.session_id = session_id
         intent.yolo = yolo
+        if shell_safety_policy_enabled is not None:
+            intent.shell_safety_policy_enabled = shell_safety_policy_enabled
         run_intent_repo.upsert(
             run_id=run_id,
             session_id=session_id,
             intent=intent,
         )
+
+    def _source_run_policy(
+        self, *, source_run_id: str, session_id: str
+    ) -> tuple[bool, bool]:
+        run_intent_repo = self._get_run_intent_repo()
+        if run_intent_repo is None:
+            return False, True
+        try:
+            intent = run_intent_repo.get(source_run_id, fallback_session_id=session_id)
+        except KeyError:
+            return False, True
+        return intent.yolo, intent.shell_safety_policy_enabled
+
+    async def _source_run_policy_async(
+        self, *, source_run_id: str, session_id: str
+    ) -> tuple[bool, bool]:
+        run_intent_repo = self._get_run_intent_repo()
+        if run_intent_repo is None:
+            return False, True
+        try:
+            intent = await run_intent_repo.get_async(
+                source_run_id,
+                fallback_session_id=session_id,
+            )
+        except KeyError:
+            return False, True
+        return intent.yolo, intent.shell_safety_policy_enabled
 
     def publish_injection_event(
         self,

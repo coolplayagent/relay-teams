@@ -53,6 +53,7 @@ export const els = {
   promptInputHint: qs("#prompt-input-hint"),
   promptInputStatus: qs("#prompt-input-status"),
   yoloToggle: qs("#yolo-toggle"),
+  shellSafetyPolicyToggle: qs("#shell-safety-policy-toggle"),
   thinkingModeToggle: qs("#thinking-mode-toggle"),
   thinkingEffortField: qs("#thinking-effort-field"),
   thinkingEffortSelect: qs("#thinking-effort-select"),

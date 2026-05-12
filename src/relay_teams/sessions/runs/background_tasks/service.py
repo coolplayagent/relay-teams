@@ -1789,6 +1789,7 @@ class BackgroundTaskService:
             return
         parent_thinking = RunThinkingConfig()
         parent_yolo = False
+        parent_shell_safety_policy_enabled = True
         parent_conversation_context = None
         try:
             parent_intent = self._run_intent_repo.get(parent_run_id)
@@ -1797,6 +1798,9 @@ class BackgroundTaskService:
         if parent_intent is not None:
             parent_thinking = parent_intent.thinking
             parent_yolo = parent_intent.yolo
+            parent_shell_safety_policy_enabled = (
+                parent_intent.shell_safety_policy_enabled
+            )
             parent_conversation_context = parent_intent.conversation_context
         self._run_intent_repo.upsert(
             run_id=subagent_run_id,
@@ -1806,6 +1810,7 @@ class BackgroundTaskService:
                 input=content_parts_from_text(prompt),
                 execution_mode=ExecutionMode.AI,
                 yolo=parent_yolo,
+                shell_safety_policy_enabled=parent_shell_safety_policy_enabled,
                 reuse_root_instance=False,
                 thinking=parent_thinking,
                 target_role_id=subagent_role_id,

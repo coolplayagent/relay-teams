@@ -3077,6 +3077,14 @@ function applyYolo(nextValue, { persist = true } = {}) {
   }
 }
 
+export function applyShellSafetyPolicyEnabled(nextValue) {
+  const enabled = nextValue !== false;
+  state.shellSafetyPolicyEnabled = enabled;
+  if (els.shellSafetyPolicyToggle) {
+    els.shellSafetyPolicyToggle.checked = enabled;
+  }
+}
+
 function readSavedThinkingState() {
   try {
     const enabled = localStorage.getItem(THINKING_MODE_STORAGE_KEY) === "true";

@@ -5482,6 +5482,205 @@ export async function fetchTriggers() {
     assert "Existing Feishu" in str(payload["modalHtml"])
 
 
+def test_project_view_preserves_shell_policy_when_updating_feishu_connector(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+document.querySelector("[data-feature-feishu-edit]")?.onclick?.();
+await flushTasks();
+document.getElementById("feishu-trigger-name-input").value = "Existing Feishu";
+document.getElementById("feishu-trigger-name-input").oninput();
+document.querySelector("[data-feature-feishu-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    updateTriggerPayload: globalThis.__updateTriggerPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 1, needs_config: 0, disabled: 0, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "feishu",
+                provider: "feishu",
+                category: "im",
+                display_name: "Feishu",
+                description: "Feishu",
+                status: "connected",
+                auth_type: "api_key",
+                account_count: 1,
+                enabled_count: 1,
+                capabilities: ["messages"],
+            },
+        ],
+    };
+}
+
+export async function fetchTriggers() {
+    return [
+        {
+            trigger_id: "trg_feishu_1",
+            name: "Existing Feishu",
+            status: "enabled",
+            tenant_key: "tenant-1",
+            chat_id: "oc_123",
+            callback_url: "http://localhost:9000/callback",
+            source_config: { provider: "feishu", app_id: "cli_existing", app_name: "Agent Teams Bot" },
+            target_config: {
+                workspace_id: "default",
+                session_mode: "normal",
+                normal_root_role_id: "SpecCoder",
+                yolo: true,
+                shell_safety_policy_enabled: false,
+                thinking: { enabled: false, effort: null },
+            },
+            secret_status: { app_secret_configured: true },
+        },
+    ];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "default", root_path: "/work/default" }];
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [{ role_id: "SpecCoder", name: "SpecCoder" }] };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function updateTrigger(triggerId, payload) {
+    globalThis.__updateTriggerPayload = { triggerId, payload };
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    update_trigger_payload = cast(dict[str, object], payload["updateTriggerPayload"])
+    target_config = cast(
+        dict[str, object],
+        cast(dict[str, object], update_trigger_payload["payload"])["target_config"],
+    )
+    assert update_trigger_payload["triggerId"] == "trg_feishu_1"
+    assert target_config["shell_safety_policy_enabled"] is False
+
+
+def test_project_view_saves_new_feishu_connector_shell_policy(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+document.querySelector("[data-feature-gateway-add-feishu]")?.onclick?.();
+await flushTasks();
+document.getElementById("feishu-trigger-name-input").value = "New Feishu";
+document.getElementById("feishu-trigger-name-input").oninput();
+document.getElementById("feishu-app-name-input").value = "Agent Teams Bot";
+document.getElementById("feishu-app-name-input").oninput();
+document.getElementById("feishu-app-id-input").value = "cli_new";
+document.getElementById("feishu-app-id-input").oninput();
+document.getElementById("feishu-app-secret-input").value = "secret";
+document.getElementById("feishu-app-secret-input").oninput();
+document.getElementById("feishu-trigger-shell-safety-policy-input").checked = false;
+document.getElementById("feishu-trigger-shell-safety-policy-input").onchange();
+document.querySelector("[data-feature-feishu-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    createTriggerPayload: globalThis.__createTriggerPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 0, needs_config: 1, disabled: 0, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "feishu",
+                provider: "feishu",
+                category: "im",
+                display_name: "Feishu",
+                description: "Feishu",
+                status: "needs_config",
+                auth_type: "api_key",
+                account_count: 0,
+                enabled_count: 0,
+                capabilities: ["messages"],
+            },
+        ],
+    };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "default", root_path: "/work/default" }];
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [{ role_id: "SpecCoder", name: "SpecCoder" }] };
+}
+
+export async function fetchConfigStatus() {
+    return { skills: { skills: [] } };
+}
+
+export async function fetchOrchestrationConfig() {
+    return { presets: [] };
+}
+
+export async function createTrigger(payload) {
+    globalThis.__createTriggerPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    create_trigger_payload = cast(dict[str, object], payload["createTriggerPayload"])
+    target_config = cast(dict[str, object], create_trigger_payload["target_config"])
+    assert target_config["shell_safety_policy_enabled"] is False
+
+
 def test_project_view_adds_feishu_connector_from_empty_card(
     tmp_path: Path,
 ) -> None:
@@ -5538,6 +5737,7 @@ export async function fetchWorkspaces() {
     )
 
     assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
+    assert 'id="feishu-trigger-shell-safety-policy-input"' in str(payload["modalHtml"])
 
 
 def test_project_view_enables_disabled_wechat_connector_from_management_modal(
@@ -6111,6 +6311,7 @@ document.getElementById("discord-normal-root-role-id-input").value = "role-1";
 document.getElementById("discord-allowed-channel-ids-input").value = "chan-1\\nchan-2,chan-1";
 document.getElementById("discord-allow-channel-messages-input").checked = true;
 document.getElementById("discord-yolo-input").checked = false;
+document.getElementById("discord-shell-safety-policy-input").checked = false;
 document.getElementById("discord-thinking-enabled-input").checked = true;
 document.getElementById("discord-thinking-effort-input").value = "high";
 document.getElementById("discord-enabled-input").checked = true;
@@ -6186,6 +6387,7 @@ export async function createDiscordGatewayAccount(payload) {
     assert "gateway-discord-channel-card" in modal_html
     assert "gateway-toggle-grid" in modal_html
     assert 'id="discord-yolo-input"' in modal_html
+    assert 'id="discord-shell-safety-policy-input"' in modal_html
     assert 'id="discord-thinking-enabled-input"' in modal_html
     assert 'id="discord-thinking-effort-input"' in modal_html
     assert modal_html.index("Discord Routing") < modal_html.index(
@@ -6199,6 +6401,7 @@ export async function createDiscordGatewayAccount(payload) {
         "workspace_id": "workspace-1",
         "session_mode": "normal",
         "yolo": False,
+        "shell_safety_policy_enabled": False,
         "thinking": {
             "enabled": True,
             "effort": "high",

@@ -23,6 +23,7 @@ from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 
 class _PublicTool:
@@ -49,6 +50,26 @@ class _MissingRunIntentRepo:
 class _FakeToolApprovalPolicy:
     def with_yolo(self, _yolo: bool) -> "_FakeToolApprovalPolicy":
         return self
+
+    def with_runtime_overrides(
+        self,
+        *,
+        yolo: bool | None = None,
+        shell_safety_policy_enabled: bool | None = None,
+    ) -> "_FakeToolApprovalPolicy":
+        _ = (yolo, shell_safety_policy_enabled)
+        return self
+
+
+class _RunIntentRepo:
+    def __init__(self, *, yolo: bool, shell_safety_policy_enabled: bool) -> None:
+        self._intent = SimpleNamespace(
+            yolo=yolo,
+            shell_safety_policy_enabled=shell_safety_policy_enabled,
+        )
+
+    async def get_async(self, _run_id: str) -> object:
+        return self._intent
 
 
 class _CapturingRunEventHub:
@@ -290,11 +311,11 @@ async def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
             "_monitor_service": None,
             "_todo_service": None,
             "_run_intent_repo": _MissingRunIntentRepo(),
-            "_get_role_registry": lambda: object(),
-            "_get_skill_registry": lambda: object(),
-            "_get_mcp_registry": lambda: object(),
-            "_get_task_service": lambda: object(),
-            "_get_task_execution_service": lambda: object(),
+            "_get_role_registry": object,
+            "_get_skill_registry": object,
+            "_get_mcp_registry": object,
+            "_get_task_service": object,
+            "_get_task_execution_service": object,
             "_runtime_role_resolver": runtime_role_resolver,
             "_run_control_manager": object(),
             "_tool_approval_manager": object(),
@@ -314,6 +335,68 @@ async def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
     assert requested == [(role, request)]
     assert deps.model_capabilities == resolved_config.capabilities
     assert deps.runtime_role_resolver is runtime_role_resolver
+
+
+@pytest.mark.asyncio
+async def test_build_tool_deps_applies_shell_safety_policy_from_run_intent() -> None:
+    bridge = object.__new__(host_tool_bridge_module.ExternalAcpHostToolBridge)
+    request = LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        role_id="main-agent",
+        system_prompt="system",
+        user_prompt="hello",
+    )
+    bridge.__dict__.update(
+        {
+            "_task_repo": object(),
+            "_shared_store": object(),
+            "_event_bus": object(),
+            "_message_repo": object(),
+            "_approval_ticket_repo": object(),
+            "_user_question_repo": None,
+            "_run_runtime_repo": object(),
+            "_injection_manager": object(),
+            "_run_event_hub": object(),
+            "_agent_repo": object(),
+            "_workspace_manager": _FakeWorkspaceManager(),
+            "_media_asset_service": None,
+            "_computer_runtime": None,
+            "_background_task_service": None,
+            "_monitor_service": None,
+            "_todo_service": None,
+            "_run_intent_repo": _RunIntentRepo(
+                yolo=True,
+                shell_safety_policy_enabled=False,
+            ),
+            "_get_role_registry": lambda: object(),
+            "_get_skill_registry": lambda: object(),
+            "_get_mcp_registry": lambda: object(),
+            "_get_task_service": lambda: object(),
+            "_get_task_execution_service": lambda: object(),
+            "_runtime_role_resolver": object(),
+            "_run_control_manager": object(),
+            "_tool_approval_manager": object(),
+            "_user_question_manager": None,
+            "_tool_approval_policy": ToolApprovalPolicy(),
+            "_shell_approval_repo": None,
+            "_metric_recorder": None,
+            "_get_notification_service": lambda: None,
+            "_im_tool_service": None,
+            "_resolve_model_config": None,
+            "_role": None,
+        }
+    )
+
+    deps = await bridge._build_tool_deps_async(request=request)
+
+    assert deps.tool_approval_policy.yolo is True
+    assert deps.tool_approval_policy.shell_safety_policy_enabled is False
 
 
 def test_host_tool_bridge_init_stores_model_resolver(

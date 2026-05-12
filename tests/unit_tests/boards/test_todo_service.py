@@ -1134,6 +1134,42 @@ async def test_start_request_changes_and_run_completion_flow(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_board_started_runs_inherit_general_shell_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+        shell_safety_policy_enabled=False,
+    )
+    item = await service.create_todo(
+        BoardTodoCreateInput(workspace_id="repo", title="Implement", body="Body")
+    )
+
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    changed = await service.request_changes(
+        todo_id=item.todo_id,
+        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+    )
+
+    assert changed.run_id == "run-2"
+    assert [intent.shell_safety_policy_enabled for intent in run_service.intents] == [
+        False,
+        False,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_start_rejects_non_todo_items_without_creating_another_run(
     tmp_path: Path,
 ) -> None:
@@ -2160,6 +2196,7 @@ class _RunService:
         self._runtime = runtime
         self.count = 0
         self.prompts: list[str] = []
+        self.intents: list[IntentInput] = []
 
     async def create_run_async(
         self,
@@ -2169,6 +2206,7 @@ class _RunService:
     ) -> tuple[str, str]:
         self.count += 1
         run_id = f"run-{self.count}"
+        self.intents.append(intent)
         self.prompts.append(content_parts_to_text(intent.input))
         self._runtime.records[run_id] = RunRuntimeRecord(
             run_id=run_id,
@@ -2269,6 +2307,7 @@ def _service(
     session_service: SessionServiceLike | None = None,
     run_service: SessionRunServiceLike | None = None,
     run_runtime: _RunRuntimeRepository | None = None,
+    shell_safety_policy_enabled: bool = True,
 ) -> BoardTodoService:
     runtime = run_runtime or _RunRuntimeRepository()
     return BoardTodoService(
@@ -2283,6 +2322,7 @@ def _service(
         run_service=run_service or _RunService(runtime),
         run_runtime_repo=runtime,
         get_shared_github_token=lambda: shared_github_token,
+        get_shell_safety_policy_enabled=lambda: shell_safety_policy_enabled,
     )
 
 

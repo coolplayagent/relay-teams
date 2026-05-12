@@ -265,6 +265,9 @@ def prepare_shell_execution(
         shell_policy = validate_shell_command(
             command,
             yolo=ctx.deps.tool_approval_policy.yolo,
+            shell_safety_policy_enabled=(
+                ctx.deps.tool_approval_policy.shell_safety_policy_enabled
+            ),
             effective_cwd=cwd,
         )
     except ValueError as exc:

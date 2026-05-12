@@ -540,6 +540,33 @@ async def test_verification_tool_policy_falls_back_when_intent_lookup_fails(
 
 
 @pytest.mark.asyncio
+async def test_verification_tool_policy_uses_persisted_run_intent(
+    tmp_path: Path,
+) -> None:
+    coordinator, _, _, _, task_execution_service = _build_coordinator(tmp_path)
+    run_intent_repo = RunIntentRepository(tmp_path / "verification_intent.db")
+    task_execution_service.run_intent_repo = run_intent_repo
+    await run_intent_repo.upsert_async(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("verify shell policy"),
+            yolo=True,
+            shell_safety_policy_enabled=False,
+        ),
+    )
+
+    policy = await coordinator._verification_tool_policy_async(
+        trace_id="run-1",
+        fallback_session_id="session-1",
+    )
+
+    assert policy.yolo is True
+    assert policy.shell_safety_policy_enabled is False
+
+
+@pytest.mark.asyncio
 async def test_verify_task_async_includes_delegated_role_contracts(
     tmp_path: Path,
 ) -> None:

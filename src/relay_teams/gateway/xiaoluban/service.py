@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, Protocol, cast
+from typing import Callable, NamedTuple, Protocol, cast
 from uuid import uuid4
 
 from pydantic import JsonValue
@@ -87,6 +87,7 @@ class XiaolubanGatewayService:
         run_service: SessionRunService | None = None,
         event_log: EventLog | None = None,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -99,6 +100,9 @@ class XiaolubanGatewayService:
         self._run_service = run_service
         self._event_log = event_log
         self._session_ingress_service = session_ingress_service
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
         self._im_terminal_suppressed_run_ids: dict[str, float] = {}
         self._im_terminal_suppression_lock = threading.Lock()
         self._pending_im_replies: dict[str, _IMReplyContext] = {}
@@ -1108,6 +1112,9 @@ class XiaolubanGatewayService:
             session_id=gateway_session.internal_session_id,
             input=content_parts_from_text(text),
             yolo=True,
+            shell_safety_policy_enabled=await asyncio.to_thread(
+                self._get_shell_safety_policy_enabled
+            ),
             conversation_context=RuntimePromptConversationContext(
                 source_provider=XIAOLUBAN_PLATFORM,
                 source_kind="im",

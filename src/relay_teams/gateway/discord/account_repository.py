@@ -53,12 +53,24 @@ class DiscordAccountRepository(SharedSqliteRepository):
                     normal_root_role_id TEXT,
                     orchestration_preset_id TEXT,
                     yolo INTEGER NOT NULL,
+                    shell_safety_policy_enabled INTEGER NOT NULL DEFAULT 1,
                     thinking_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in self._conn.execute("PRAGMA table_info(discord_accounts)")
+            }
+            if "shell_safety_policy_enabled" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE discord_accounts
+                    ADD COLUMN shell_safety_policy_enabled INTEGER NOT NULL DEFAULT 1
+                    """
+                )
 
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -124,11 +136,12 @@ class DiscordAccountRepository(SharedSqliteRepository):
                     normal_root_role_id,
                     orchestration_preset_id,
                     yolo,
+                    shell_safety_policy_enabled,
                     thinking_json,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     display_name=excluded.display_name,
                     status=excluded.status,
@@ -141,6 +154,7 @@ class DiscordAccountRepository(SharedSqliteRepository):
                     normal_root_role_id=excluded.normal_root_role_id,
                     orchestration_preset_id=excluded.orchestration_preset_id,
                     yolo=excluded.yolo,
+                    shell_safety_policy_enabled=excluded.shell_safety_policy_enabled,
                     thinking_json=excluded.thinking_json,
                     updated_at=excluded.updated_at
                 """,
@@ -157,6 +171,7 @@ class DiscordAccountRepository(SharedSqliteRepository):
                     record.normal_root_role_id,
                     record.orchestration_preset_id,
                     1 if record.yolo else 0,
+                    1 if record.shell_safety_policy_enabled else 0,
                     json.dumps(
                         record.thinking.model_dump(mode="json"), ensure_ascii=False
                     ),
@@ -225,6 +240,9 @@ class DiscordAccountRepository(SharedSqliteRepository):
                     row["orchestration_preset_id"]
                 ),
                 "yolo": bool(int(row["yolo"])),
+                "shell_safety_policy_enabled": bool(
+                    int(row["shell_safety_policy_enabled"])
+                ),
                 "thinking": json.loads(str(row["thinking_json"])),
                 "created_at": created_at,
                 "updated_at": updated_at,

@@ -22,7 +22,11 @@ import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfile
 import { renderModelProfilesPanelMarkup } from './modelProfiles/template.js';
 import {
     bindNotificationSettingsHandlers,
+    canSaveNotificationConfig,
+    collectNotificationConfigFromPanel,
+    getLoadedNotificationConfig,
     loadNotificationSettingsPanel,
+    renderNotificationSettingsSectionMarkup,
 } from './notifications.js';
 import { bindEnvironmentVariableSettingsHandlers, loadEnvironmentVariablesPanel } from './environmentVariables.js';
 import {
@@ -33,21 +37,29 @@ import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
 import {
     bindSpeechSettingsHandlers,
+    canSaveSpeechConfig,
     loadSpeechSettingsPanel,
-    renderSpeechSettingsPanelMarkup,
+    readSpeechForm,
+    renderSpeechSettingsSectionMarkup,
 } from './speechSettings.js';
 import { bindWorkspaceSettingsHandlers, loadWorkspaceSettingsPanel } from './workspaceSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
+import { applyShellSafetyPolicyEnabled } from '../../app/prompt.js';
 import {
+    fetchGeneralConfig,
+    saveNotificationConfig,
+    saveGeneralConfig,
+    saveSpeechConfig,
     fetchModelProfiles,
     fetchOrchestrationConfig,
     fetchRoleConfigOptions,
     fetchRoleConfigs,
 } from '../../core/api.js';
+import { showToast } from '../../utils/feedback.js';
 import { t, translateDocument } from '../../utils/i18n.js';
-import { errorToPayload, logError } from '../../utils/logger.js';
+import { errorToPayload, logError, sysLog } from '../../utils/logger.js';
 
 let settingsModal = null;
 let currentTab = 'appearance';
@@ -62,13 +74,13 @@ const TAB_METADATA = {
         titleKey: 'settings.panel.appearance.title',
         descriptionKey: 'settings.panel.appearance.description',
     },
+    general: {
+        titleKey: 'settings.panel.general.title',
+        descriptionKey: 'settings.panel.general.description',
+    },
     model: {
         titleKey: 'settings.panel.model.title',
         descriptionKey: 'settings.panel.model.description',
-    },
-    speech: {
-        titleKey: 'settings.panel.speech.title',
-        descriptionKey: 'settings.panel.speech.description',
     },
     mcp: {
         titleKey: 'settings.panel.mcp.title',
@@ -121,12 +133,12 @@ const TAB_METADATA = {
 };
 
 const ACTION_TAB_OWNERS = {
+    'save-general-btn': 'general',
     'add-profile-btn': 'model',
     'save-profile-btn': 'model',
     'cancel-profile-btn': 'model',
     'test-profile-btn': 'model',
     'profile-probe-inline-status': 'model',
-    'save-speech-btn': 'speech',
     'add-ssh-profile-btn': 'workspace',
     'save-ssh-profile-btn': 'workspace',
     'cancel-ssh-profile-btn': 'workspace',
@@ -154,7 +166,6 @@ const ACTION_TAB_OWNERS = {
     'add-env-btn': 'environment',
     'save-env-btn': 'environment',
     'cancel-env-btn': 'environment',
-    'save-notifications-btn': 'notifications',
     'save-web-btn': 'web',
     'save-proxy-btn': 'proxy',
     'add-mcp-server-btn': 'mcp',
@@ -174,6 +185,159 @@ export function initSettings() {
     initialized = true;
 }
 
+function renderGeneralSettingsPanelMarkup() {
+    return `
+        <div class="settings-panel" id="general-panel" style="display:none;">
+            <div class="settings-section">
+                <div class="settings-content-stack general-settings-stack">
+                    <section class="proxy-form-section general-setting-card">
+                        <div class="proxy-form-section-header general-setting-card-head">
+                            <div class="general-setting-card-copy-block">
+                                <h5 data-i18n="settings.general.shell_policy_title">Shell Policy</h5>
+                            </div>
+                            <label class="notification-toggle general-setting-toggle">
+                                <input type="checkbox" id="settings-shell-safety-policy-toggle" checked>
+                                <span class="notification-toggle-check" aria-hidden="true"></span>
+                                <span class="notification-toggle-label" data-i18n="settings.field.enabled">Enabled</span>
+                            </label>
+                        </div>
+                        <div class="appearance-grid general-setting-card-body">
+                            <div class="appearance-row">
+                                <label for="settings-shell-safety-policy-toggle" data-i18n="settings.general.shell_policy">Enable shell safety policy</label>
+                                <span class="general-setting-inline-note" data-i18n="settings.general.shell_policy_state">Applies to future runs after you save.</span>
+                            </div>
+                        </div>
+                    </section>
+                    ${renderSpeechSettingsSectionMarkup()}
+                    ${renderNotificationSettingsSectionMarkup()}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function bindGeneralSettingsHandlers() {
+    const toggle = document.getElementById('settings-shell-safety-policy-toggle');
+    if (toggle && toggle.dataset.bound !== 'true') {
+        toggle.dataset.bound = 'true';
+    }
+    const saveBtn = document.getElementById('save-general-btn');
+    if (saveBtn && saveBtn.dataset.bound !== 'true') {
+        saveBtn.dataset.bound = 'true';
+        saveBtn.addEventListener('click', () => handleSaveGeneralSettings());
+    }
+}
+
+async function handleSaveGeneralSettings() {
+    const toggle = document.getElementById('settings-shell-safety-policy-toggle');
+    const nextShellSafetyPolicyEnabled = toggle?.checked !== false;
+    try {
+        await saveGeneralConfig({
+            shell_safety_policy_enabled: nextShellSafetyPolicyEnabled,
+        });
+    } catch (error) {
+        const message = error?.message || t('settings.general.save_failed');
+        showToast({
+            title: t('settings.general.save_failed'),
+            message,
+            tone: 'danger',
+        });
+        sysLog(message, 'log-error');
+        return;
+    }
+
+    applyShellSafetyPolicyEnabled(nextShellSafetyPolicyEnabled);
+    showToast({
+        title: t('settings.general.saved'),
+        message: t('settings.general.saved_message'),
+        tone: 'success',
+    });
+    sysLog(t('settings.general.log_saved'));
+
+    if (canSaveSpeechConfig()) {
+        try {
+            await saveSpeechConfig(readSpeechForm());
+            document.dispatchEvent(new CustomEvent('agent-teams-speech-config-updated'));
+        } catch (error) {
+            const message = error?.message || t('settings.speech.save_failed');
+            showToast({
+                title: t('settings.speech.save_failed'),
+                message,
+                tone: 'danger',
+            });
+            sysLog(message, 'log-error');
+        }
+    }
+    if (canSaveNotificationConfig()) {
+        try {
+            await saveNotificationConfig(
+                mergeNotificationConfig(
+                    getLoadedNotificationConfig(),
+                    collectNotificationConfigFromPanel(),
+                ),
+            );
+        } catch (error) {
+            const message = error?.message || t('settings.notifications.save_failed');
+            showToast({
+                title: t('settings.notifications.save_failed'),
+                message,
+                tone: 'danger',
+            });
+            sysLog(message, 'log-error');
+        }
+    }
+}
+
+async function loadGeneralSettingsPanel() {
+    const toggle = document.getElementById('settings-shell-safety-policy-toggle');
+    const generalConfig = await fetchGeneralConfig();
+    const enabled = generalConfig?.shell_safety_policy_enabled !== false;
+    applyShellSafetyPolicyEnabled(enabled);
+    if (toggle) {
+        toggle.checked = enabled;
+    }
+    return Promise.all([
+        loadSpeechSettingsPanel(),
+        loadNotificationSettingsPanel(),
+    ]);
+}
+
+function mergeNotificationConfig(currentConfig, panelConfig) {
+    const nextConfig = {};
+    const baseConfig = (currentConfig && typeof currentConfig === 'object')
+        ? currentConfig
+        : {};
+    const patchConfig = (panelConfig && typeof panelConfig === 'object')
+        ? panelConfig
+        : {};
+    Object.keys(baseConfig).forEach(type => {
+        const existingRule = baseConfig[type];
+        nextConfig[type] = existingRule && typeof existingRule === 'object'
+            ? { ...existingRule }
+            : existingRule;
+    });
+    Object.keys(patchConfig).forEach(type => {
+        const existingRule = baseConfig[type];
+        const nextRule = patchConfig[type];
+        const mergedRule = existingRule && typeof existingRule === 'object'
+            ? { ...existingRule }
+            : {};
+        if (nextRule && typeof nextRule === 'object') {
+            if (Object.prototype.hasOwnProperty.call(nextRule, 'enabled')) {
+                mergedRule.enabled = nextRule.enabled;
+            }
+            if (Array.isArray(nextRule.channels)) {
+                const preservedChannels = Array.isArray(existingRule?.channels)
+                    ? existingRule.channels.filter(channel => !['browser', 'toast'].includes(channel))
+                    : [];
+                mergedRule.channels = [...preservedChannels, ...nextRule.channels];
+            }
+        }
+        nextConfig[type] = mergedRule;
+    });
+    return nextConfig;
+}
+
 function createModal() {
     settingsModal = document.createElement('div');
     settingsModal.id = 'settings-modal';
@@ -188,11 +352,11 @@ function createModal() {
                     <button class="settings-tab active" data-tab="appearance">
                         <span class="settings-tab-label" data-i18n="settings.tab.appearance">Appearance</span>
                     </button>
+                    <button class="settings-tab" data-tab="general">
+                        <span class="settings-tab-label" data-i18n="settings.tab.general">General</span>
+                    </button>
                     <button class="settings-tab" data-tab="model">
                         <span class="settings-tab-label" data-i18n="settings.tab.model">Model</span>
-                    </button>
-                    <button class="settings-tab" data-tab="speech">
-                        <span class="settings-tab-label" data-i18n="settings.tab.speech">Speech</span>
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
@@ -214,9 +378,6 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="orchestration">
                         <span class="settings-tab-label" data-i18n="settings.tab.orchestration">Orchestration</span>
-                    </button>
-                    <button class="settings-tab" data-tab="notifications">
-                        <span class="settings-tab-label" data-i18n="settings.tab.notifications">Notifications</span>
                     </button>
                     <button class="settings-tab" data-tab="web">
                         <span class="settings-tab-label" data-i18n="settings.tab.web">Web</span>
@@ -319,8 +480,8 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    ${renderGeneralSettingsPanelMarkup()}
                     ${renderModelProfilesPanelMarkup()}
-                    ${renderSpeechSettingsPanelMarkup()}
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
@@ -593,101 +754,6 @@ function createModal() {
                             </div>
                         </div>
                     </div>
-                    <div class="settings-panel" id="notifications-panel" style="display:none;">
-                        <div class="settings-section">
-                            <div class="settings-content-stack notifications-panel-body">
-                                <p class="notifications-help" data-i18n="settings.notifications.help">
-                                    A notification is sent only when <strong>Enabled</strong> is on and at least one delivery channel is selected.
-                                </p>
-                                <div class="notification-grid">
-                                    <div class="notification-row" data-notif-type="tool_approval_requested">
-                                        <div class="notification-row-main">
-                                            <div class="notification-row-title" data-i18n="settings.notifications.tool_approval_requested">Tool approval requested</div>
-                                            <div class="notification-row-desc" data-i18n="settings.notifications.tool_approval_requested_copy">When an agent asks for approval before a tool call.</div>
-                                        </div>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-tool_approval_requested-enabled">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.enabled">Enabled</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-tool_approval_requested-browser">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.browser">Browser</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-tool_approval_requested-toast">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.toast">Toast</span>
-                                        </label>
-                                    </div>
-                                    <div class="notification-row" data-notif-type="run_completed">
-                                        <div class="notification-row-main">
-                                            <div class="notification-row-title" data-i18n="settings.notifications.run_completed">Run completed</div>
-                                            <div class="notification-row-desc" data-i18n="settings.notifications.run_completed_copy">When a run finishes successfully.</div>
-                                        </div>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_completed-enabled">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.enabled">Enabled</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_completed-browser">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.browser">Browser</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_completed-toast">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.toast">Toast</span>
-                                        </label>
-                                    </div>
-                                    <div class="notification-row" data-notif-type="run_failed">
-                                        <div class="notification-row-main">
-                                            <div class="notification-row-title" data-i18n="settings.notifications.run_failed">Run failed</div>
-                                            <div class="notification-row-desc" data-i18n="settings.notifications.run_failed_copy">When a run stops because of an error.</div>
-                                        </div>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_failed-enabled">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.enabled">Enabled</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_failed-browser">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.browser">Browser</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_failed-toast">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.toast">Toast</span>
-                                        </label>
-                                    </div>
-                                    <div class="notification-row" data-notif-type="run_stopped">
-                                        <div class="notification-row-main">
-                                            <div class="notification-row-title" data-i18n="settings.notifications.run_stopped">Run stopped</div>
-                                            <div class="notification-row-desc" data-i18n="settings.notifications.run_stopped_copy">When a run is stopped by user action.</div>
-                                        </div>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_stopped-enabled">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.enabled">Enabled</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_stopped-browser">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.browser">Browser</span>
-                                        </label>
-                                        <label class="notification-toggle">
-                                            <input type="checkbox" id="notif-run_stopped-toast">
-                                            <span class="notification-toggle-check" aria-hidden="true"></span>
-                                            <span class="notification-toggle-label" data-i18n="settings.field.toast">Toast</span>
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                     <div class="settings-panel" id="proxy-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack proxy-panel-body">
@@ -926,10 +992,10 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="add-hook-btn" type="button" style="display:none;" data-i18n="settings.hooks.add_group">新增 Hook</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-general-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.workspace.add_profile">Add SSH Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
-                            <button class="primary-btn section-action-btn settings-action" id="save-speech-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
@@ -949,7 +1015,6 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-orchestration-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-env-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-env-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
-                            <button class="primary-btn section-action-btn settings-action" id="save-notifications-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-web-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="delete-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.delete">Delete</button>
@@ -1004,6 +1069,7 @@ function setupEventListeners() {
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
+    bindGeneralSettingsHandlers();
     bindSpeechSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
@@ -1061,20 +1127,18 @@ async function showPanel(tab) {
 async function loadSettingsPanel(tab) {
     if (tab === 'model') {
         await loadModelProfilesPanel();
+    } else if (tab === 'general') {
+        await loadGeneralSettingsPanel();
     } else if (tab === 'hooks') {
         await loadHooksSettingsPanel();
     } else if (tab === 'agents') {
         await loadAgentSettingsPanel();
     } else if (tab === 'roles') {
         await loadRoleSettingsPanel();
-    } else if (tab === 'speech') {
-        await loadSpeechSettingsPanel();
     } else if (tab === 'orchestration') {
         await loadOrchestrationSettingsPanel();
     } else if (tab === 'environment') {
         await loadEnvironmentVariablesPanel();
-    } else if (tab === 'notifications') {
-        await loadNotificationSettingsPanel();
     } else if (tab === 'web') {
         await loadWebSettingsPanel();
     } else if (tab === 'proxy') {
@@ -1129,11 +1193,9 @@ function renderPanelActions(tab) {
         document.getElementById('add-profile-btn').style.display = 'inline-flex';
         return;
     }
-    if (tab === 'speech') {
-        document.getElementById('save-speech-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'hooks') {
+    if (tab === 'general') {
+        document.getElementById('save-general-btn').style.display = 'inline-flex';
+    } else if (tab === 'hooks') {
         syncHooksSettingsActions();
     } else if (tab === 'agents') {
         document.getElementById('add-agent-btn').style.display = 'inline-flex';
@@ -1143,8 +1205,6 @@ function renderPanelActions(tab) {
         document.getElementById('add-orchestration-preset-btn').style.display = 'inline-flex';
     } else if (tab === 'environment') {
         document.getElementById('add-env-btn').style.display = 'inline-flex';
-    } else if (tab === 'notifications') {
-        document.getElementById('save-notifications-btn').style.display = 'inline-flex';
     } else if (tab === 'web') {
         document.getElementById('save-web-btn').style.display = 'inline-flex';
     } else if (tab === 'proxy') {

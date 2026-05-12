@@ -66,6 +66,22 @@ export async function fetchUiLanguageSettings() {
     return requestJson('/api/system/configs/ui-language', undefined, 'Failed to fetch UI language');
 }
 
+export async function fetchGeneralConfig() {
+    return requestJson('/api/system/configs/general', undefined, 'Failed to fetch general config');
+}
+
+export async function saveGeneralConfig(config) {
+    return requestJson(
+        '/api/system/configs/general',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ config }),
+        },
+        'Failed to save general config',
+    );
+}
+
 export async function saveUiLanguageSettings(payload) {
     return requestJson(
         '/api/system/configs/ui-language',

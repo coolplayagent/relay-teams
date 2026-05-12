@@ -47,6 +47,7 @@ _RUN_INTENT_SELECT_COLUMNS = """
     generation_config_json,
     execution_mode,
     yolo,
+    shell_safety_policy_enabled,
     reuse_root_instance,
     thinking_enabled,
     thinking_effort,
@@ -67,6 +68,7 @@ _RUN_INTENT_UPSERT_SQL = """
         generation_config_json,
         execution_mode,
         yolo,
+        shell_safety_policy_enabled,
         reuse_root_instance,
         thinking_enabled,
         thinking_effort,
@@ -78,7 +80,7 @@ _RUN_INTENT_UPSERT_SQL = """
         created_at,
         updated_at
     )
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id)
     DO UPDATE SET
         session_id=excluded.session_id,
@@ -89,6 +91,7 @@ _RUN_INTENT_UPSERT_SQL = """
         generation_config_json=excluded.generation_config_json,
         execution_mode=excluded.execution_mode,
         yolo=excluded.yolo,
+        shell_safety_policy_enabled=excluded.shell_safety_policy_enabled,
         reuse_root_instance=excluded.reuse_root_instance,
         thinking_enabled=excluded.thinking_enabled,
         thinking_effort=excluded.thinking_effort,
@@ -120,6 +123,7 @@ class RunIntentRepository(SharedSqliteRepository):
                     generation_config_json TEXT,
                     execution_mode TEXT NOT NULL,
                     yolo           TEXT NOT NULL DEFAULT 'false',
+                    shell_safety_policy_enabled TEXT NOT NULL DEFAULT 'true',
                     reuse_root_instance TEXT NOT NULL DEFAULT 'true',
                     thinking_enabled TEXT NOT NULL DEFAULT 'false',
                     thinking_effort TEXT,
@@ -143,6 +147,12 @@ class RunIntentRepository(SharedSqliteRepository):
                 self._conn.execute(
                     """
                     ALTER TABLE run_intents ADD COLUMN yolo TEXT NOT NULL DEFAULT 'false'
+                    """
+                )
+            if "shell_safety_policy_enabled" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE run_intents ADD COLUMN shell_safety_policy_enabled TEXT NOT NULL DEFAULT 'true'
                     """
                 )
             if "thinking_enabled" not in columns:
@@ -595,6 +605,7 @@ def _run_intent_upsert_params(
         ),
         intent.execution_mode.value,
         "true" if intent.yolo else "false",
+        "true" if intent.shell_safety_policy_enabled else "false",
         "true" if intent.reuse_root_instance else "false",
         "true" if intent.thinking.enabled else "false",
         intent.thinking.effort,
@@ -635,6 +646,9 @@ def _intent_input_from_row(
         generation_config=_coerce_generation_config(row["generation_config_json"]),
         execution_mode=ExecutionMode(str(row["execution_mode"])),
         yolo=str(row["yolo"]).strip().lower() == "true",
+        shell_safety_policy_enabled=(
+            str(row["shell_safety_policy_enabled"]).strip().lower() != "false"
+        ),
         reuse_root_instance=(
             str(row["reuse_root_instance"]).strip().lower() != "false"
         ),

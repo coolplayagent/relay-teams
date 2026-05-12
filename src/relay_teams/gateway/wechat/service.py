@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-from collections.abc import Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 import json
@@ -112,6 +112,7 @@ class WeChatGatewayService:
         im_session_command_service: ImSessionCommandService,
         inbound_queue_repo: WeChatInboundQueueRepository,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        get_shell_safety_policy_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -130,6 +131,9 @@ class WeChatGatewayService:
         self._im_session_command_service = im_session_command_service
         self._inbound_queue_repo = inbound_queue_repo
         self._session_ingress_service = session_ingress_service
+        self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
+            lambda: True
+        )
         self._status_lock = Lock()
         self._status_by_account: dict[str, WeChatGatewaySnapshot] = {}
         self._monitor_stop_events: dict[str, Event] = {}
@@ -1211,6 +1215,7 @@ class WeChatGatewayService:
             input=content_parts_from_text(record.text),
             yolo=account.yolo,
             thinking=account.thinking,
+            shell_safety_policy_enabled=self._get_shell_safety_policy_enabled(),
             conversation_context=RuntimePromptConversationContext(
                 source_provider=WECHAT_PLATFORM,
                 source_kind="im",

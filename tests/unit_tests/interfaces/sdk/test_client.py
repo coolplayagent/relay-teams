@@ -1088,6 +1088,69 @@ async def test_create_run_includes_target_role_id(monkeypatch) -> None:
     }
 
 
+async def test_agent_runtime_sdk_create_run_includes_shell_policy_override_when_set(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    async def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"run_id": "run-1", "session_id": "session-1"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    await client.create_run(
+        input="hello",
+        session_id="session-1",
+        shell_safety_policy_enabled=False,
+    )
+
+    assert captured["payload"] == {
+        "session_id": "session-1",
+        "input": [{"kind": "text", "text": "hello"}],
+        "execution_mode": "ai",
+        "yolo": False,
+        "target_role_id": None,
+        "shell_safety_policy_enabled": False,
+    }
+
+
+async def test_agent_runtime_sdk_create_run_keeps_target_role_positional(
+    monkeypatch,
+) -> None:
+    client = AsyncAgentTeamsClient()
+    captured: dict[str, object] = {}
+
+    async def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        captured["method"] = method
+        captured["path"] = path
+        captured["payload"] = payload
+        return {"run_id": "run-1", "session_id": "session-1"}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    await client.create_run("hello", "session-1", "ai", False, "architect")
+
+    assert captured["payload"] == {
+        "session_id": "session-1",
+        "input": [{"kind": "text", "text": "hello"}],
+        "execution_mode": "ai",
+        "yolo": False,
+        "target_role_id": "architect",
+    }
+
+
 async def test_agent_runtime_sdk_calls_expected_endpoints(monkeypatch) -> None:
     client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []

@@ -76,6 +76,10 @@ _BASH_DIRECTORY_COMMANDS = frozenset({"cd", "pushd"})
 _BASH_COMMAND_WRAPPERS = frozenset({"builtin", "command", "env", "noglob"})
 _BASH_DYNAMIC_DIRECTORY_PATTERNS = ("$", "~", "`", "*", "?", "[", "]", "{", "}")
 _POWERSHELL_DYNAMIC_DIRECTORY_PATTERNS = ("$", "`", "*", "?", "[", "]", "{", "}")
+_SHELL_POLICY_SETTINGS_HINT = (
+    " If you want to allow this kind of shell command in future runs, "
+    "disable the shell safety policy in the settings for this run source."
+)
 
 
 class ShellRuntimeFamily(str, Enum):
@@ -107,6 +111,7 @@ def validate_shell_command(
     command: str,
     *,
     yolo: bool = False,
+    shell_safety_policy_enabled: bool = True,
     effective_cwd: Path | None = None,
 ) -> ShellPolicyDecision:
     normalized_command = canonicalize_shell_command(command).strip()
@@ -129,7 +134,8 @@ def validate_shell_command(
     normalized_subcommands: list[str] = []
     for index, subcommand in enumerate(subcommands):
         if (
-            yolo
+            shell_safety_policy_enabled
+            and yolo
             and effective_cwd is not None
             and _validate_directory_change(
                 subcommand=subcommand,
@@ -140,14 +146,16 @@ def validate_shell_command(
             and len(subcommands) > 1
         ):
             continue
-        blocked_name = _blocked_command_name(
-            subcommand=subcommand,
-            runtime_family=runtime_family,
-        )
-        if blocked_name is not None:
-            raise ValueError(
-                f"command is blocked by local shell policy: {blocked_name}"
+        if shell_safety_policy_enabled:
+            blocked_name = _blocked_command_name(
+                subcommand=subcommand,
+                runtime_family=runtime_family,
             )
+            if blocked_name is not None:
+                raise ValueError(
+                    "command is blocked by local shell policy: "
+                    f"{blocked_name}.{_SHELL_POLICY_SETTINGS_HINT}"
+                )
         prefixes.append(
             _build_prefix_candidate(
                 subcommand=subcommand,

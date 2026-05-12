@@ -96,6 +96,9 @@ function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
         }
     }
     if (els.yoloToggle) els.yoloToggle.disabled = isBusy;
+    if (els.shellSafetyPolicyToggle) {
+        els.shellSafetyPolicyToggle.disabled = isBusy;
+    }
     if (els.thinkingModeToggle) els.thinkingModeToggle.disabled = isBusy;
     if (els.thinkingEffortSelect) els.thinkingEffortSelect.disabled = isBusy;
     if (els.stopBtn) {

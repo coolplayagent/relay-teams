@@ -989,7 +989,10 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         self, run_id: str
     ) -> ToolApprovalPolicy:
         try:
-            yolo = (await self._run_intent_repo.get_async(run_id)).yolo
+            intent = await self._run_intent_repo.get_async(run_id)
         except KeyError:
-            yolo = False
-        return self._tool_approval_policy.with_yolo(yolo)
+            return self._tool_approval_policy.with_yolo(False)
+        return self._tool_approval_policy.with_runtime_overrides(
+            yolo=intent.yolo,
+            shell_safety_policy_enabled=intent.shell_safety_policy_enabled,
+        )

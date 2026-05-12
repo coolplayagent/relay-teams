@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from relay_teams.interfaces.server.deps import get_llm_evaluator
+from relay_teams.interfaces.server.deps import (
+    get_general_config_service,
+    get_llm_evaluator,
+)
 
 
 def test_get_llm_evaluator_returns_evaluator() -> None:
@@ -40,3 +43,16 @@ def test_get_llm_evaluator_uses_default_model_when_no_config() -> None:
     ):
         result = get_llm_evaluator(fake_request)
         assert result is not None
+
+
+def test_get_general_config_service_returns_container_service() -> None:
+    fake_container = MagicMock()
+    fake_request = MagicMock()
+
+    with patch(
+        "relay_teams.interfaces.server.deps.get_container",
+        return_value=fake_container,
+    ):
+        result = get_general_config_service(fake_request)
+
+    assert result is fake_container.general_config_service

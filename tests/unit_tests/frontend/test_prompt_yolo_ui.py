@@ -45,6 +45,13 @@ def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     assert "display: none;" in new_session_composer_css
 
 
+def test_bootstrap_does_not_initialize_shell_safety_policy_toggle() -> None:
+    bootstrap = Path("frontend/dist/js/app/bootstrap.js").read_text(encoding="utf-8")
+
+    assert "initializeShellSafetyPolicyToggle," not in bootstrap
+    assert "initializeShellSafetyPolicyToggle();" not in bootstrap
+
+
 def test_send_user_prompt_includes_yolo_and_thinking(tmp_path: Path) -> None:
     source = Path("frontend/dist/js/core/api/runs.js").read_text(encoding="utf-8")
     temp_dir = tmp_path / "api"
@@ -67,7 +74,7 @@ export async function requestJson(url, options, errorMessage) {
     runner = """
 import { sendUserPrompt } from "./runs.js";
 
-await sendUserPrompt("session-1", "ship it", true, { enabled: true, effort: "high" });
+    await sendUserPrompt("session-1", "ship it", true, { enabled: true, effort: "high" });
 console.log(JSON.stringify(globalThis.__captured));
 """.strip()
     result = subprocess.run(
@@ -83,6 +90,7 @@ console.log(JSON.stringify(globalThis.__captured));
     assert payload["url"] == "/api/runs"
     assert payload["method"] == "POST"
     assert payload["body"]["yolo"] is True
+    assert "shell_safety_policy_enabled" not in payload["body"]
     assert payload["body"]["execution_mode"] == "ai"
     assert payload["body"]["thinking"] == {"enabled": True, "effort": "high"}
 
@@ -350,6 +358,7 @@ export const state = {
         effort: "medium",
     },
     yolo: true,
+    shellSafetyPolicyEnabled: true,
 };
 
 let normalModeRoles = [];
@@ -479,6 +488,7 @@ function createElement(initial = {}) {
 
 export const els = {
     yoloToggle: createElement({ checked: true }),
+    shellSafetyPolicyToggle: createElement({ checked: true }),
     thinkingModeToggle: createElement({ checked: false }),
     thinkingEffortField: createElement({ hidden: true }),
     thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
@@ -827,6 +837,7 @@ export const state = {
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
+    shellSafetyPolicyEnabled: true,
     thinking: { enabled: false, effort: "medium" },
     instanceRoleMap: {},
     roleInstanceMap: {},
@@ -951,6 +962,7 @@ export const els = {
     sendBtn: createElement(),
     stopBtn: createElement({ style: { display: "none" } }),
     yoloToggle: createElement({ checked: true }),
+    shellSafetyPolicyToggle: createElement({ checked: true }),
     thinkingModeToggle: createElement({ checked: false }),
     thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
 };
@@ -1232,6 +1244,7 @@ export const state = {
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
+    shellSafetyPolicyEnabled: true,
     thinking: { enabled: false, effort: "medium" },
     instanceRoleMap: {},
     roleInstanceMap: {},
@@ -1381,6 +1394,7 @@ export const els = {
     sendBtn: createElement({ hidden: false }),
     stopBtn: createElement({ style: { display: "none" }, hidden: false }),
     yoloToggle: createElement({ checked: true, hidden: false }),
+    shellSafetyPolicyToggle: createElement({ checked: true, hidden: false }),
     thinkingModeToggle: createElement({ checked: false, hidden: false }),
     thinkingEffortSelect: createElement({ value: "medium", disabled: true, hidden: false }),
 };
@@ -3439,6 +3453,7 @@ export const state = {{
     pausedSubagent: null,
     isGenerating: false,
     yolo: true,
+    shellSafetyPolicyEnabled: true,
     thinking: {{ enabled: false, effort: "medium" }},
     instanceRoleMap: {{}},
     roleInstanceMap: {{}},
@@ -3597,6 +3612,7 @@ export const els = {
     sendBtn: createElement(),
     stopBtn: createElement({ style: { display: "none" } }),
     yoloToggle: createElement({ checked: true }),
+    shellSafetyPolicyToggle: createElement({ checked: true }),
     thinkingModeToggle: createElement({ checked: false }),
     thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
 };

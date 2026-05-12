@@ -249,7 +249,10 @@ class CoordinatorGraph(BaseModel):
             },
         )
         root_role_id = self._root_role_id(intent)
-        verification_tool_policy = ToolApprovalPolicy(yolo=intent.yolo)
+        verification_tool_policy = ToolApprovalPolicy(
+            yolo=intent.yolo,
+            shell_safety_policy_enabled=intent.shell_safety_policy_enabled,
+        )
 
         root_task = TaskEnvelope(
             task_id=new_task_id().value,
@@ -2458,7 +2461,10 @@ class CoordinatorGraph(BaseModel):
                 },
             )
             return ToolApprovalPolicy()
-        return ToolApprovalPolicy(yolo=intent.yolo)
+        return ToolApprovalPolicy(
+            yolo=intent.yolo,
+            shell_safety_policy_enabled=intent.shell_safety_policy_enabled,
+        )
 
     async def _topology_for_run_async(
         self,

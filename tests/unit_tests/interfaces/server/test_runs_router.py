@@ -8,7 +8,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from relay_teams.interfaces.server.deps import get_run_service, get_skill_registry
+from relay_teams.general import GeneralConfig
+from relay_teams.interfaces.server.deps import (
+    get_general_config_service,
+    get_run_service,
+    get_skill_registry,
+)
 from relay_teams.interfaces.server.routers import runs
 from relay_teams.media import (
     ContentPart,
@@ -494,10 +499,19 @@ class _FakeContainer:
         self.media_asset_service = media_asset_service
 
 
+class _FakeGeneralConfigService:
+    def __init__(self, enabled: bool = True) -> None:
+        self._config = GeneralConfig(shell_safety_policy_enabled=enabled)
+
+    def get_config(self) -> GeneralConfig:
+        return self._config
+
+
 def _create_client(
     fake_service: _FakeRunService,
     fake_skill_registry: _FakeSkillRegistry | None = None,
     fake_container: _FakeContainer | None = None,
+    fake_general_config_service: _FakeGeneralConfigService | None = None,
 ) -> TestClient:
     app = FastAPI()
     registry = fake_skill_registry or _FakeSkillRegistry()
@@ -506,6 +520,9 @@ def _create_client(
     app.include_router(runs.router, prefix="/api")
     app.dependency_overrides[get_run_service] = lambda: fake_service
     app.dependency_overrides[get_skill_registry] = lambda: registry
+    app.dependency_overrides[get_general_config_service] = lambda: (
+        fake_general_config_service or _FakeGeneralConfigService()
+    )
     return TestClient(app)
 
 
@@ -639,6 +656,51 @@ def test_create_run_route_accepts_yolo() -> None:
     assert created.intent == "hello"
     assert created.yolo is True
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_create_run_route_uses_saved_general_shell_policy_by_default() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(
+        fake_service,
+        fake_general_config_service=_FakeGeneralConfigService(enabled=False),
+    )
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "hello"}],
+            "execution_mode": "ai",
+        },
+    )
+
+    assert response.status_code == 200
+    created = fake_service.created_run_inputs[0]
+    assert created.shell_safety_policy_enabled is False
+    assert created.shell_safety_policy_override_provided is False
+
+
+def test_create_run_route_allows_explicit_shell_policy_override() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(
+        fake_service,
+        fake_general_config_service=_FakeGeneralConfigService(enabled=True),
+    )
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "hello"}],
+            "execution_mode": "ai",
+            "shell_safety_policy_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    created = fake_service.created_run_inputs[0]
+    assert created.shell_safety_policy_enabled is False
+    assert created.shell_safety_policy_override_provided is True
 
 
 def test_create_run_route_accepts_orchestration_policy_override() -> None:

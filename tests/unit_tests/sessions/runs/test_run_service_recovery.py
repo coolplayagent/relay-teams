@@ -749,6 +749,7 @@ def test_create_run_updates_active_run_yolo(tmp_path: Path) -> None:
         session_id="session-1",
         input=content_parts_from_text("initial"),
         yolo=False,
+        shell_safety_policy_enabled=False,
     )
     RunRuntimeRepository(db_path).ensure(
         run_id="run-existing",
@@ -781,6 +782,7 @@ def test_create_run_updates_active_run_yolo(tmp_path: Path) -> None:
     assert run_id == "run-existing"
     assert session_id == "session-1"
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
     queued = manager._injection_manager.drain_at_boundary("run-existing", "inst-1")
     assert len(queued) == 1
     assert queued[0].content == "follow up"
@@ -1315,6 +1317,7 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
         display_input=content_parts_from_text("/time initial"),
         skills=("deepresearch",),
         yolo=False,
+        shell_safety_policy_enabled=False,
     )
     manager._pending_runs["run-existing"] = pending_intent
     RunRuntimeRepository(db_path).ensure(
@@ -1345,10 +1348,12 @@ def test_create_run_updates_pending_run_yolo(tmp_path: Path) -> None:
     persisted = RunIntentRepository(db_path).get("run-existing")
     assert run_id == "run-existing"
     assert pending_intent.yolo is True
+    assert pending_intent.shell_safety_policy_enabled is False
     assert pending_intent.display_input == ()
     assert pending_intent.intent == "initial\n\nfollow up"
     assert pending_intent.skills == ("deepresearch", "time")
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
     assert persisted.display_input == ()
     assert persisted.display_intent == "initial\n\nfollow up"
     assert persisted.skills == ("deepresearch", "time")
@@ -1363,6 +1368,7 @@ def test_create_run_updates_recoverable_run_yolo(tmp_path: Path) -> None:
         session_id="session-1",
         input=content_parts_from_text("existing"),
         yolo=False,
+        shell_safety_policy_enabled=False,
     )
     RunRuntimeRepository(db_path).ensure(
         run_id="run-existing",
@@ -1395,6 +1401,7 @@ def test_create_run_updates_recoverable_run_yolo(tmp_path: Path) -> None:
     persisted = RunIntentRepository(db_path).get("run-existing")
     assert run_id == "run-existing"
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
 
 
 def test_create_run_blocks_when_tool_approval_pending(tmp_path: Path) -> None:
@@ -3905,6 +3912,8 @@ async def test_create_run_async_merges_followup_into_pending_run(
             input=content_parts_from_text("second"),
             skills=("skill-b", "skill-a"),
             yolo=True,
+            shell_safety_policy_enabled=False,
+            shell_safety_policy_override_provided=True,
         )
     )
 
@@ -3915,9 +3924,11 @@ async def test_create_run_async_merges_followup_into_pending_run(
     assert pending.intent == "first\n\nsecond"
     assert pending.skills == ("skill-a", "skill-b")
     assert pending.yolo is True
+    assert pending.shell_safety_policy_enabled is False
     assert persisted.intent == pending.intent
     assert persisted.skills == pending.skills
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio
@@ -3986,6 +3997,8 @@ async def test_create_run_async_enqueues_followup_to_active_run(
             session_id="session-1",
             input=content_parts_from_text("follow"),
             yolo=True,
+            shell_safety_policy_enabled=False,
+            shell_safety_policy_override_provided=True,
         )
     )
 
@@ -3993,6 +4006,54 @@ async def test_create_run_async_enqueues_followup_to_active_run(
     assert (next_run_id, next_session_id) == (run_id, session_id)
     assert appended == [(run_id, "follow", True, InjectionSource.USER)]
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_preserves_active_run_shell_policy_without_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_active_followup_shell_policy.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+            shell_safety_policy_enabled=False,
+        )
+    )
+    manager._running_run_ids.add(run_id)
+    manager._injection_manager.activate(run_id)
+    appended: list[tuple[str, str, bool, InjectionSource]] = []
+
+    def _append_followup(
+        run_id: str,
+        content: str,
+        *,
+        enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
+        appended.append((run_id, content, enqueue, source))
+        return True
+
+    monkeypatch.setattr(manager, "_append_followup_to_coordinator", _append_followup)
+
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("follow"),
+            yolo=True,
+            shell_safety_policy_enabled=True,
+        )
+    )
+
+    persisted = RunIntentRepository(db_path).get(run_id)
+    assert (next_run_id, next_session_id) == (run_id, session_id)
+    assert appended == [(run_id, "follow", True, InjectionSource.USER)]
+    assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio
@@ -4035,6 +4096,8 @@ async def test_create_run_async_queues_followup_for_recoverable_run(
             session_id="session-1",
             input=content_parts_from_text("resume"),
             yolo=True,
+            shell_safety_policy_enabled=False,
+            shell_safety_policy_override_provided=True,
         )
     )
 
@@ -4043,6 +4106,7 @@ async def test_create_run_async_queues_followup_for_recoverable_run(
     assert appended == [(run_id, "resume", False, InjectionSource.USER)]
     assert run_id in manager._resume_requested_runs
     assert persisted.yolo is True
+    assert persisted.shell_safety_policy_enabled is False
 
 
 @pytest.mark.asyncio
@@ -4199,16 +4263,18 @@ async def test_async_followup_validation_helpers_cover_edge_paths(
             ),
         )
 
-    await manager._update_run_yolo_async(
+    await manager._update_run_runtime_policy_async(
         run_id="missing-run",
         session_id="session-1",
         yolo=True,
+        shell_safety_policy_enabled=False,
     )
     manager._run_intent_repo = None
-    await manager._update_run_yolo_async(
+    await manager._update_run_runtime_policy_async(
         run_id="missing-run",
         session_id="session-1",
         yolo=True,
+        shell_safety_policy_enabled=False,
     )
 
     assert await manager._run_accepts_followups_async(

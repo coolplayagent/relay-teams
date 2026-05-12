@@ -2880,6 +2880,76 @@
     font-weight: 600;
 }
 
+.general-settings-stack {
+    gap: 0.9rem;
+}
+
+.general-setting-card {
+    padding: 1rem 1rem 1.05rem;
+    border: 1px solid color-mix(in srgb, var(--settings-border-soft) 78%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--settings-surface-bg) 94%, transparent);
+}
+
+.general-setting-card:first-child {
+    padding-top: 1rem;
+    border-top: 1px solid color-mix(in srgb, var(--settings-border-soft) 78%, transparent);
+}
+
+.general-setting-card + .general-setting-card {
+    margin-top: 0;
+}
+
+.general-setting-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.95rem;
+}
+
+.general-setting-card-head-compact {
+    margin-bottom: 0.8rem;
+}
+
+.general-setting-card-copy-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    min-width: 0;
+}
+
+.general-setting-card-head h5 {
+    font-size: 0.98rem;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+.general-setting-card-copy {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    max-width: 58rem;
+}
+
+.general-setting-card-body {
+    gap: 0.8rem;
+}
+
+.general-setting-toggle {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding-top: 0.08rem;
+}
+
+.general-setting-inline-note {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.4;
+    text-align: right;
+}
+
 .proxy-form-grid,
 .proxy-probe-grid {
     display: flex;
@@ -3374,6 +3444,7 @@
     flex-direction: column;
     gap: 0;
     border-top: 1px solid var(--settings-divider);
+    margin-top: 0.9rem;
 }
 
 .notification-row {
@@ -3483,6 +3554,23 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 @media (max-width: 760px) {
+    .general-setting-card {
+        padding: 0.9rem 0.85rem 0.95rem;
+    }
+
+    .general-setting-card-head {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .general-setting-toggle {
+        align-self: flex-start;
+    }
+
+    .general-setting-inline-note {
+        text-align: left;
+    }
+
     .notification-row {
         grid-template-columns: 1fr 1fr;
     }
