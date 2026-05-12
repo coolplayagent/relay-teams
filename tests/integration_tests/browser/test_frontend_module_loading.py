@@ -116,9 +116,20 @@ def test_connector_card_module_and_assets_are_linked() -> None:
                 "connectorsResponse: { summary: { connected: 1, needs_config: 0, error: 0 }, "
                 "items: [{ connector_id: 'github', provider: 'github', display_name: 'GitHub', "
                 "description: 'Connect GitHub repositories.', status: 'connected', "
-                "auth_type: 'api_token', account_count: 1, enabled_count: 1, capabilities: ['repositories'] }] }"
+                "auth_type: 'api_token', account_count: 1, enabled_count: 1, capabilities: ['repositories'] }, "
+                "{ connector_id: 'w3', provider: 'w3', display_name: 'W3', "
+                "description: 'Connect W3 unified authentication.', status: 'needs_config', "
+                "auth_type: 'username_password', account_count: 0, enabled_count: 0, capabilities: ['w3_auth', 'web_token'] }] }"
                 "}); "
                 "if (!html.includes('GitHub')) throw new Error('GitHub card missing'); "
+                "if (!html.includes('/assets/connectors/w3.svg')) throw new Error('W3 icon missing'); "
+                "if (!(html.indexOf('官方连接器') < html.indexOf('W3'))) throw new Error('W3 not in official group'); "
+                "if (html.includes('<h3>模型</h3>')) throw new Error('W3 rendered a model connector group'); "
+                "const w3Modal = mod.renderConnectorConfigModalMarkup({ item: { connector_id: 'w3', provider: 'w3', display_name: 'W3', description: 'W3', status: 'needs_config', auth_type: 'username_password', account_count: 0, enabled_count: 0, capabilities: ['w3_auth'] }, accountManagementMarkup: '<button data-feature-w3-save></button>', showConfigureAction: false }); "
+                "if (w3Modal.includes('data-connector-configure')) throw new Error('duplicate W3 configure button rendered'); "
+                "if (w3Modal.includes('data-feature-w3-sync') || w3Modal.includes('connectors-w3-sync-summary')) throw new Error('W3 sync UI rendered'); "
+                "if (w3Modal.includes('data-feature-w3-test')) throw new Error('separate W3 test action rendered'); "
+                "if (!w3Modal.includes('data-feature-w3-save')) throw new Error('W3 auth action missing'); "
                 "if (html.includes('Gmail') || html.includes('Slack') || html.includes('Jira')) throw new Error('unsupported connector rendered'); "
                 "console.log(typeof mod.renderConnectorConfigModalMarkup);"
             ),
@@ -140,7 +151,7 @@ def test_connector_card_module_and_assets_are_linked() -> None:
     assert completed.stdout.strip() == "function"
     assert "/css/components/connectors.css" in index_html
     assert "components/connectors.css" in bundled_css
-    for provider in ("github", "feishu", "wechat", "xiaoluban"):
+    for provider in ("github", "discord", "feishu", "wechat", "xiaoluban"):
         assert provider in manifest
         assert (
             repo_root
@@ -150,6 +161,11 @@ def test_connector_card_module_and_assets_are_linked() -> None:
             / "connectors"
             / f"{provider}.svg"
         ).exists()
+    assert "w3" in manifest
+    assert "w3.svg" in manifest
+    assert (
+        repo_root / "frontend" / "dist" / "assets" / "connectors" / "w3.svg"
+    ).exists()
 
 
 def test_new_session_draft_opens_without_creating_session() -> None:

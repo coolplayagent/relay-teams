@@ -10,6 +10,7 @@ const CONNECTOR_ICON_BY_PROVIDER = Object.freeze({
     feishu: '/assets/connectors/feishu.svg',
     wechat: '/assets/connectors/wechat.svg',
     xiaoluban: '/assets/connectors/xiaoluban.svg',
+    w3: '/assets/connectors/w3.svg',
 });
 
 const CONNECTOR_GROUP_BY_PROVIDER = Object.freeze({
@@ -18,10 +19,12 @@ const CONNECTOR_GROUP_BY_PROVIDER = Object.freeze({
     feishu: 'internal',
     wechat: 'internal',
     xiaoluban: 'internal',
+    w3: 'official',
 });
 
 const CONNECTOR_GROUP_LABEL_KEYS = Object.freeze({
     official: 'feature.connectors.group.official',
+    models: 'feature.connectors.group.models',
     internal: 'feature.connectors.group.internal',
 });
 
@@ -38,6 +41,7 @@ const PROVIDER_NAME_KEYS = Object.freeze({
     feishu: 'feature.connectors.provider.feishu.name',
     wechat: 'feature.connectors.provider.wechat.name',
     xiaoluban: 'feature.connectors.provider.xiaoluban.name',
+    w3: 'feature.connectors.provider.w3.name',
 });
 
 const PROVIDER_DESCRIPTION_KEYS = Object.freeze({
@@ -46,6 +50,7 @@ const PROVIDER_DESCRIPTION_KEYS = Object.freeze({
     feishu: 'feature.connectors.provider.feishu.description',
     wechat: 'feature.connectors.provider.wechat.description',
     xiaoluban: 'feature.connectors.provider.xiaoluban.description',
+    w3: 'feature.connectors.provider.w3.description',
 });
 
 const CAPABILITY_LABEL_KEYS = Object.freeze({
@@ -61,6 +66,11 @@ const CAPABILITY_LABEL_KEYS = Object.freeze({
     file_messages: 'feature.connectors.capability.file_messages',
     im_forwarding: 'feature.connectors.capability.im_forwarding',
     notifications: 'feature.connectors.capability.notifications',
+    w3_auth: 'feature.connectors.capability.w3_auth',
+    web_token: 'feature.connectors.capability.web_token',
+    maas_models: 'feature.connectors.capability.maas_models',
+    codeagent_models: 'feature.connectors.capability.codeagent_models',
+    model_import: 'feature.connectors.capability.model_import',
 });
 
 const CONNECT_ACTION_LABEL_KEYS = Object.freeze({
@@ -68,6 +78,7 @@ const CONNECT_ACTION_LABEL_KEYS = Object.freeze({
     feishu: 'feature.connectors.action.connect_feishu',
     wechat: 'feature.connectors.action.connect_wechat',
     xiaoluban: 'feature.connectors.action.connect_xiaoluban',
+    w3: 'feature.connectors.action.connect_w3',
 });
 
 export function renderConnectorsCardPageMarkup({
@@ -110,6 +121,7 @@ export function renderConnectorsCardPageMarkup({
                 </div>
             </section>
             ${renderConnectorGroup('official', grouped.official)}
+            ${renderConnectorGroup('models', grouped.models)}
             ${renderConnectorGroup('internal', grouped.internal)}
             ${renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs)}
             ${filteredItems.length === 0 ? renderEmptyState() : ''}
@@ -147,6 +159,7 @@ export function renderRuntimeToolsModalMarkup({
 export function renderConnectorConfigModalMarkup({
     item,
     accountManagementMarkup = '',
+    showConfigureAction = true,
 } = {}) {
     if (!item) {
         return '';
@@ -182,9 +195,9 @@ export function renderConnectorConfigModalMarkup({
                     ${item.last_error ? `<p class="connectors-error-copy">${escapeHtml(item.last_error)}</p>` : ''}
                     ${accountManagementMarkup || ''}
                 </div>
-                <div class="connectors-config-actions">
+                ${showConfigureAction ? `<div class="connectors-config-actions">
                     <button class="primary-btn" type="button" data-connector-configure="${escapeHtml(provider)}">${escapeHtml(formatConnectActionLabel(provider, status))}</button>
-                </div>
+                </div>` : ''}
             </div>
         </div>
     `;
@@ -251,10 +264,18 @@ function renderConnectorCard(item) {
 
 function renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs) {
     const items = getRuntimeToolItems(runtimeToolsResponse);
-    if (items.length === 0) {
-        return '';
-    }
+    const hasLoadedItems = Array.isArray(runtimeToolsResponse?.items);
     const summary = summarizeRuntimeTools(items, runtimeToolJobs);
+    const cardStatus = hasLoadedItems
+        ? formatRuntimeToolCardStatus(summary)
+        : t('feature.connectors.runtime_tools.status.loading');
+    const cardStatusClass = hasLoadedItems
+        ? summary.error > 0
+            ? 'error'
+            : summary.missing > 0
+                ? 'needs_config'
+                : 'connected'
+        : 'needs_config';
     return `
         <section class="connectors-section connectors-runtime-tools">
             <h3>${escapeHtml(t('feature.connectors.runtime_tools.group_title'))}</h3>
@@ -269,8 +290,8 @@ function renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs) {
                     </div>
                     <div class="connectors-card-footer">
                         <span class="connectors-card-status">
-                            <span class="connectors-status-dot is-${escapeHtml(summary.error > 0 ? 'error' : summary.missing > 0 ? 'needs_config' : 'connected')}"></span>
-                            ${escapeHtml(formatRuntimeToolCardStatus(summary))}
+                            <span class="connectors-status-dot is-${escapeHtml(cardStatusClass)}"></span>
+                            ${escapeHtml(cardStatus)}
                         </span>
                         <button class="connectors-card-action" type="button" data-runtime-tools-open>
                             ${escapeHtml(t('feature.connectors.runtime_tools.open'))}
@@ -473,7 +494,7 @@ function groupConnectorItems(items) {
             result[groupKey].push(item);
             return result;
         },
-        { official: [], internal: [] },
+        { official: [], models: [], internal: [] },
     );
 }
 
@@ -496,6 +517,9 @@ function formatAuthType(authType) {
     }
     if (value === 'qr_login') {
         return t('feature.connectors.auth.qr_login');
+    }
+    if (value === 'username_password') {
+        return t('feature.connectors.auth.username_password');
     }
     return value || t('feature.connectors.value.not_configured');
 }

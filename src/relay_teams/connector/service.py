@@ -35,6 +35,14 @@ from relay_teams.net.github_connectivity import (
 )
 from relay_teams.triggers import GitHubTriggerAccountRecord, GitHubTriggerAccountStatus
 from relay_teams.validation import RequiredIdentifierStr
+from relay_teams.connector.w3_models import (
+    W3ConnectorSaveRequest,
+    W3ConnectorSaveResponse,
+    W3ConnectorStatusResponse,
+    W3ConnectorSyncResponse,
+    W3ConnectorTestRequest,
+    W3ConnectorTestResponse,
+)
 
 
 class GitHubTriggerServiceLike(Protocol):
@@ -82,12 +90,47 @@ class XiaolubanImListenerServiceLike(Protocol):
         raise NotImplementedError
 
 
+class W3ConnectorServiceLike(Protocol):
+    def get_status(self) -> W3ConnectorStatusResponse:
+        raise NotImplementedError
+
+    def connector_item(self) -> ConnectorItem:
+        raise NotImplementedError
+
+    async def save_credentials(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        raise NotImplementedError
+
+    async def save_credentials_and_import(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        raise NotImplementedError
+
+    async def test_connection(
+        self,
+        request: W3ConnectorTestRequest | None = None,
+        *,
+        force_refresh: bool = False,
+    ) -> W3ConnectorTestResponse:
+        raise NotImplementedError
+
+    async def test_connector_result(self) -> ConnectorTestResult:
+        raise NotImplementedError
+
+    async def sync_models_with_saved_credentials(self) -> W3ConnectorSyncResponse:
+        raise NotImplementedError
+
+
 CONNECTOR_PROVIDER_BY_ID: Mapping[str, ConnectorProvider] = {
     ConnectorProvider.GITHUB.value: ConnectorProvider.GITHUB,
     ConnectorProvider.DISCORD.value: ConnectorProvider.DISCORD,
     ConnectorProvider.FEISHU.value: ConnectorProvider.FEISHU,
     ConnectorProvider.WECHAT.value: ConnectorProvider.WECHAT,
     ConnectorProvider.XIAOLUBAN.value: ConnectorProvider.XIAOLUBAN,
+    ConnectorProvider.W3.value: ConnectorProvider.W3,
 }
 
 
@@ -103,6 +146,7 @@ class ConnectorService:
         wechat_gateway_service: WeChatGatewayServiceLike,
         xiaoluban_gateway_service: XiaolubanGatewayServiceLike,
         xiaoluban_im_listener_service: XiaolubanImListenerServiceLike,
+        w3_connector_service: W3ConnectorServiceLike,
         get_shared_github_token: Callable[[], str | None] | None = None,
     ) -> None:
         self._github_trigger_service = github_trigger_service
@@ -113,6 +157,7 @@ class ConnectorService:
         self._wechat_gateway_service = wechat_gateway_service
         self._xiaoluban_gateway_service = xiaoluban_gateway_service
         self._xiaoluban_im_listener_service = xiaoluban_im_listener_service
+        self._w3_connector_service = w3_connector_service
         self._get_shared_github_token = get_shared_github_token or (lambda: None)
 
     async def list_connectors(self) -> ConnectorListResponse:
@@ -127,6 +172,7 @@ class ConnectorService:
             self._feishu_item(feishu_accounts),
             self._wechat_item(wechat_accounts),
             self._xiaoluban_item(xiaoluban_accounts),
+            self._w3_connector_service.connector_item(),
         )
         return ConnectorListResponse(summary=self._summary(items), items=items)
 
@@ -144,7 +190,27 @@ class ConnectorService:
             return await self._test_wechat()
         if provider == ConnectorProvider.XIAOLUBAN:
             return await self._test_xiaoluban()
+        if provider == ConnectorProvider.W3:
+            return await self._w3_connector_service.test_connector_result()
         raise KeyError(f"Unknown connector_id: {connector_id}")
+
+    def get_w3_connector(self) -> W3ConnectorStatusResponse:
+        return self._w3_connector_service.get_status()
+
+    async def save_w3_connector(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        return await self._w3_connector_service.save_credentials(request)
+
+    async def test_w3_connector(
+        self,
+        request: W3ConnectorTestRequest | None,
+    ) -> W3ConnectorTestResponse:
+        return await self._w3_connector_service.test_connection(request)
+
+    async def sync_w3_models(self) -> W3ConnectorSyncResponse:
+        return await self._w3_connector_service.sync_models_with_saved_credentials()
 
     def _github_item(
         self,

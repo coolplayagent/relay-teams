@@ -24,6 +24,7 @@ from relay_teams.providers.model_config import (
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
     MaaSAuthConfig,
+    ModelAuthSource,
     ModelRequestHeader,
     ProviderType,
 )
@@ -34,6 +35,7 @@ from relay_teams.providers.model_header_utils import (
 from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
+from relay_teams.providers.w3_auth_source import require_w3_credentials
 from relay_teams.secrets import AppSecretStore, get_secret_store
 
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
@@ -575,19 +577,22 @@ class ModelConfigManager:
         if not isinstance(raw_maas_auth, dict):
             raise ValueError("maas_auth must be an object")
         resolved_payload: dict[str, str] = {}
+        auth_source = _normalize_auth_source(raw_maas_auth.get("auth_source"))
+        resolved_payload["auth_source"] = auth_source.value
         username = raw_maas_auth.get("username")
         if isinstance(username, str) and username.strip():
             resolved_payload["username"] = username.strip()
-        password = raw_maas_auth.get("password")
-        if not isinstance(password, str) or not password.strip():
-            password = self._secret_store.get_secret(
-                self._config_dir,
-                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
-                owner_id=profile_name,
-                field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
-            )
-        if isinstance(password, str) and password.strip():
-            resolved_payload["password"] = password.strip()
+        if auth_source == ModelAuthSource.PROFILE:
+            password = raw_maas_auth.get("password")
+            if not isinstance(password, str) or not password.strip():
+                password = self._secret_store.get_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=_MODEL_PROFILE_MAAS_PASSWORD_FIELD,
+                )
+            if isinstance(password, str) and password.strip():
+                resolved_payload["password"] = password.strip()
         return MaaSAuthConfig.model_validate(resolved_payload)
 
     def _resolve_codeagent_auth(
@@ -601,6 +606,8 @@ class ModelConfigManager:
         if not isinstance(raw_codeagent_auth, dict):
             raise ValueError("codeagent_auth must be an object")
         resolved_payload: dict[str, str | bool] = {}
+        auth_source = _normalize_auth_source(raw_codeagent_auth.get("auth_source"))
+        resolved_payload["auth_source"] = auth_source.value
         auth_method_raw = raw_codeagent_auth.get("auth_method")
         if isinstance(auth_method_raw, str) and auth_method_raw.strip():
             resolved_payload["auth_method"] = auth_method_raw.strip()
@@ -609,22 +616,29 @@ class ModelConfigManager:
             if resolved_payload.get("auth_method") == CodeAgentAuthMethod.PASSWORD.value
             else CodeAgentAuthMethod.SSO
         )
+        if (
+            resolved_auth_method != CodeAgentAuthMethod.PASSWORD
+            and auth_source == ModelAuthSource.W3
+        ):
+            auth_source = ModelAuthSource.PROFILE
+            resolved_payload["auth_source"] = auth_source.value
         username = raw_codeagent_auth.get("username")
         if isinstance(username, str) and username.strip():
             resolved_payload["username"] = username.strip()
         if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
             password = raw_codeagent_auth.get("password")
-            if isinstance(password, str) and password.strip():
-                resolved_payload["password"] = password.strip()
-            else:
-                secret_value = self._secret_store.get_secret(
-                    self._config_dir,
-                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
-                    owner_id=profile_name,
-                    field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
-                )
-                if secret_value is not None:
-                    resolved_payload["password"] = secret_value
+            if auth_source == ModelAuthSource.PROFILE:
+                if isinstance(password, str) and password.strip():
+                    resolved_payload["password"] = password.strip()
+                else:
+                    secret_value = self._secret_store.get_secret(
+                        self._config_dir,
+                        namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                        owner_id=profile_name,
+                        field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
+                    )
+                    if secret_value is not None:
+                        resolved_payload["password"] = secret_value
             if raw_codeagent_auth.get("has_password"):
                 resolved_payload["has_password"] = True
             return CodeAgentAuthConfig.model_validate(
@@ -930,6 +944,11 @@ class ModelConfigManager:
         raw_maas_auth = merged_profile.get("maas_auth")
         if not isinstance(raw_maas_auth, dict):
             raise ValueError("maas_auth must be an object")
+        auth_source = _parse_auth_source_for_save(raw_maas_auth.get("auth_source"))
+        if auth_source == ModelAuthSource.W3:
+            require_w3_credentials(self._config_dir, secret_store=self._secret_store)
+            merged_profile["maas_auth"] = {"auth_source": ModelAuthSource.W3.value}
+            return merged_profile, None, False
         current_owner = (
             source_name
             if source_name is not None and source_name != profile_name
@@ -957,6 +976,7 @@ class ModelConfigManager:
         username = raw_maas_auth.get("username")
         validated = MaaSAuthConfig.model_validate(
             {
+                "auth_source": ModelAuthSource.PROFILE.value,
                 "username": username,
                 "password": next_password
                 or current_password
@@ -967,12 +987,12 @@ class ModelConfigManager:
                 ),
             }
         )
-        merged_profile["maas_auth"] = cast(
-            JsonValue,
-            {
-                "username": validated.username,
-            },
-        )
+        if validated.username is None:
+            raise ValueError("MAAS auth username requires a value.")
+        merged_profile["maas_auth"] = {
+            "auth_source": validated.auth_source.value,
+            "username": validated.username,
+        }
         return merged_profile, next_password, preserve_password
 
     def _prepare_profile_codeagent_auth_for_storage(
@@ -1020,7 +1040,15 @@ class ModelConfigManager:
                 isinstance(existing_profile, dict)
                 and "codeagent_auth" in existing_profile
             ):
-                merged_profile["codeagent_auth"] = existing_profile["codeagent_auth"]
+                existing_auth_payload = existing_profile["codeagent_auth"]
+                if isinstance(existing_auth_payload, dict):
+                    preserved_auth_payload = dict(existing_auth_payload)
+                    preserved_auth_payload["auth_source"] = _normalize_auth_source(
+                        preserved_auth_payload.get("auth_source")
+                    ).value
+                    merged_profile["codeagent_auth"] = preserved_auth_payload
+                else:
+                    merged_profile["codeagent_auth"] = existing_auth_payload
                 preserved_auth = (
                     self._resolve_codeagent_auth(current_owner, existing_profile)
                     if isinstance(existing_profile, dict)
@@ -1071,7 +1099,32 @@ class ModelConfigManager:
             if normalized_auth_method == CodeAgentAuthMethod.PASSWORD.value
             else CodeAgentAuthMethod.SSO
         )
+        auth_source = _parse_auth_source_for_save(raw_codeagent_auth.get("auth_source"))
+        if (
+            auth_source == ModelAuthSource.W3
+            and resolved_auth_method != CodeAgentAuthMethod.PASSWORD
+        ):
+            raise ValueError(
+                "CodeAgent W3 auth source is only supported for password auth."
+            )
         if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
+            if auth_source == ModelAuthSource.W3:
+                require_w3_credentials(
+                    self._config_dir, secret_store=self._secret_store
+                )
+                merged_profile["codeagent_auth"] = {
+                    "auth_method": CodeAgentAuthMethod.PASSWORD.value,
+                    "auth_source": ModelAuthSource.W3.value,
+                }
+                return (
+                    merged_profile,
+                    None,
+                    None,
+                    None,
+                    False,
+                    False,
+                    None,
+                )
             password = raw_codeagent_auth.get("password")
             next_password = (
                 password.strip()
@@ -1122,12 +1175,14 @@ class ModelConfigManager:
             validated = CodeAgentAuthConfig.model_validate(
                 {
                     "auth_method": CodeAgentAuthMethod.PASSWORD.value,
+                    "auth_source": ModelAuthSource.PROFILE.value,
                     "username": normalized_username,
                     "password": next_password or current_password or existing_password,
                 }
             )
             merged_profile["codeagent_auth"] = {
                 "auth_method": validated.auth_method.value,
+                "auth_source": validated.auth_source.value,
                 "username": validated.username,
                 "has_password": True,
             }
@@ -1203,22 +1258,20 @@ class ModelConfigManager:
         CodeAgentAuthConfig.model_validate(
             codeagent_auth_payload,
         )
-        merged_profile["codeagent_auth"] = cast(
-            JsonValue,
-            {
-                "auth_method": CodeAgentAuthMethod.SSO.value,
-                "has_access_token": bool(
-                    next_access_token
-                    or current_access_token
-                    or (
-                        existing_codeagent_auth.access_token
-                        if existing_codeagent_auth is not None
-                        else None
-                    )
-                ),
-                "has_refresh_token": True,
-            },
-        )
+        merged_profile["codeagent_auth"] = {
+            "auth_method": CodeAgentAuthMethod.SSO.value,
+            "auth_source": ModelAuthSource.PROFILE.value,
+            "has_access_token": bool(
+                next_access_token
+                or current_access_token
+                or (
+                    existing_codeagent_auth.access_token
+                    if existing_codeagent_auth is not None
+                    else None
+                )
+            ),
+            "has_refresh_token": True,
+        }
         return (
             merged_profile,
             next_access_token,
@@ -1760,7 +1813,15 @@ def _is_env_placeholder(value: str) -> bool:
 def _build_maas_auth_profile_payload(
     maas_auth: MaaSAuthConfig,
 ) -> dict[str, JsonValue]:
+    if maas_auth.auth_source == ModelAuthSource.W3:
+        return {
+            "auth_source": maas_auth.auth_source.value,
+            "username": "",
+            "password": "",
+            "has_password": False,
+        }
     return {
+        "auth_source": maas_auth.auth_source.value,
         "username": maas_auth.username,
         "password": maas_auth.password or "",
         "has_password": maas_auth.password is not None,
@@ -1773,15 +1834,20 @@ def _build_codeagent_auth_profile_payload(
     if codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
         return {
             "auth_method": codeagent_auth.auth_method.value,
+            "auth_source": codeagent_auth.auth_source.value,
             "username": codeagent_auth.username or "",
             "password": codeagent_auth.password or "",
-            "has_password": codeagent_auth.password is not None
-            or codeagent_auth.has_password,
+            "has_password": (
+                False
+                if codeagent_auth.auth_source == ModelAuthSource.W3
+                else codeagent_auth.password is not None or codeagent_auth.has_password
+            ),
             "has_access_token": False,
             "has_refresh_token": False,
         }
     return {
         "auth_method": codeagent_auth.auth_method.value,
+        "auth_source": codeagent_auth.auth_source.value,
         "has_access_token": codeagent_auth.access_token is not None
         or codeagent_auth.has_access_token,
         "has_refresh_token": codeagent_auth.refresh_token is not None
@@ -1800,11 +1866,32 @@ def _build_header_secret_sync_profile(
     )
     if provider_raw == ProviderType.CODEAGENT.value:
         return {
-            "provider": cast(JsonValue, provider_raw),
-            "headers": cast(JsonValue, []),
+            "provider": provider_raw,
+            "headers": [],
         }
     if "headers" not in raw_profile:
         return raw_profile
     sync_profile = dict(raw_profile)
-    sync_profile["provider"] = cast(JsonValue, provider_raw)
+    sync_profile["provider"] = provider_raw
     return sync_profile
+
+
+def _normalize_auth_source(value: object) -> ModelAuthSource:
+    if isinstance(value, str) and value.strip() == ModelAuthSource.W3.value:
+        return ModelAuthSource.W3
+    return ModelAuthSource.PROFILE
+
+
+def _parse_auth_source_for_save(value: object) -> ModelAuthSource:
+    if value is None:
+        return ModelAuthSource.PROFILE
+    if not isinstance(value, str):
+        raise ValueError("auth_source must be 'profile' or 'w3'.")
+    normalized = value.strip()
+    if not normalized:
+        return ModelAuthSource.PROFILE
+    if normalized == ModelAuthSource.W3.value:
+        return ModelAuthSource.W3
+    if normalized == ModelAuthSource.PROFILE.value:
+        return ModelAuthSource.PROFILE
+    raise ValueError("auth_source must be 'profile' or 'w3'.")

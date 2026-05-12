@@ -67,3 +67,55 @@ def test_runtime_tools_render_as_separate_group_and_modal_only_list() -> None:
     )
     assert 'data-runtime-tool="rg"' not in page_html
     assert 'data-runtime-tool="rg"' in modal_html
+
+
+def test_runtime_tools_card_renders_before_items_load() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    module_path = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "connectors"
+        / "connectorCards.js"
+    )
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.document = { "
+                "getElementById() { return null; }, "
+                "querySelector() { return null; }, "
+                "querySelectorAll() { return []; }, "
+                "body: null "
+                "}; "
+                f"const mod = await import({module_path.as_uri()!r}); "
+                "const connectorsResponse = { summary: {}, items: [] }; "
+                "const pageHtml = mod.renderConnectorsCardPageMarkup({ "
+                "connectorsResponse, runtimeToolsResponse: null "
+                "}); "
+                "console.log(JSON.stringify({ pageHtml }));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    page_html = str(json.loads(completed.stdout.strip())["pageHtml"])
+
+    assert "data-runtime-tools-card" in page_html
+    assert 'data-runtime-tool="' not in page_html

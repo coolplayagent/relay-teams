@@ -168,6 +168,13 @@ export function renderModelProfilesPanelMarkup() {
                                         </div>
                                     </div>
                                     <div class="profile-credentials-row profile-maas-credentials-row" id="profile-maas-auth-fields" style="display:none;">
+                                        <div class="form-group form-group-span-2" id="profile-maas-auth-source-group" style="display:none;">
+                                            <label for="profile-maas-auth-source" data-i18n="settings.model.auth_source">Auth Source</label>
+                                            <select id="profile-maas-auth-source">
+                                                <option value="w3" data-i18n="settings.model.auth_source_w3">Use W3 Connector</option>
+                                                <option value="profile" data-i18n="settings.model.auth_source_profile">Use Profile Credentials</option>
+                                            </select>
+                                        </div>
                                         <div class="form-group">
                                             <label for="profile-maas-username" data-i18n="settings.model.username">Username</label>
                                             <input type="text" id="profile-maas-username" placeholder="username" data-i18n-placeholder="settings.model.username_placeholder" autocomplete="username">
@@ -192,6 +199,13 @@ export function renderModelProfilesPanelMarkup() {
                                             <select id="profile-codeagent-auth-method">
                                                 <option value="sso" data-i18n="settings.model.codeagent_auth_method_sso">SSO Sign-In</option>
                                                 <option value="password" data-i18n="settings.model.codeagent_auth_method_password">Username and Password</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group profile-codeagent-auth-source-row" id="profile-codeagent-auth-source-group" style="display:none;">
+                                            <label for="profile-codeagent-auth-source" data-i18n="settings.model.auth_source">Auth Source</label>
+                                            <select id="profile-codeagent-auth-source">
+                                                <option value="w3" data-i18n="settings.model.auth_source_w3">Use W3 Connector</option>
+                                                <option value="profile" data-i18n="settings.model.auth_source_profile">Use Profile Credentials</option>
                                             </select>
                                         </div>
                                         <div class="profile-codeagent-auth-detail-row">

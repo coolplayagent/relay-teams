@@ -40,6 +40,11 @@ class CodeAgentAuthMethod(StrEnum):
     PASSWORD = "password"
 
 
+class ModelAuthSource(StrEnum):
+    PROFILE = "profile"
+    W3 = "w3"
+
+
 class ModelFallbackTrigger(StrEnum):
     RATE_LIMIT_AFTER_RETRIES = "rate_limit_after_retries"
 
@@ -82,6 +87,7 @@ class CodeAgentAuthConfig(BaseModel):
     _secret_owner_id: str | None = PrivateAttr(default=None)
 
     auth_method: CodeAgentAuthMethod = CodeAgentAuthMethod.SSO
+    auth_source: ModelAuthSource = ModelAuthSource.PROFILE
     client_id: str = Field(default=DEFAULT_CODEAGENT_CLIENT_ID, min_length=1)
     scope: str = Field(default=DEFAULT_CODEAGENT_SCOPE, min_length=1)
     scope_resource: str = Field(
@@ -120,6 +126,11 @@ class CodeAgentAuthConfig(BaseModel):
         self.client_id = DEFAULT_CODEAGENT_CLIENT_ID
         self.scope = DEFAULT_CODEAGENT_SCOPE
         self.scope_resource = DEFAULT_CODEAGENT_SCOPE_RESOURCE
+        if (
+            self.auth_source == ModelAuthSource.W3
+            and self.auth_method != CodeAgentAuthMethod.PASSWORD
+        ):
+            raise ValueError("W3 auth source is only supported for password auth.")
         if self.password is not None:
             self.has_password = True
         if self.access_token is not None:
@@ -151,7 +162,8 @@ class CodeAgentAuthConfig(BaseModel):
 class MaaSAuthConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    username: str = Field(min_length=1)
+    auth_source: ModelAuthSource = ModelAuthSource.PROFILE
+    username: str | None = Field(default=None, min_length=1)
     password: str | None = Field(default=None, min_length=1)
 
     @field_validator("username", "password", mode="before")
@@ -317,9 +329,11 @@ class ModelEndpointConfig(BaseModel):
                 raise ValueError(
                     "MAAS model endpoint config requires maas_auth configuration."
                 )
-            if self.maas_auth.password is None:
+            if self.maas_auth.auth_source == ModelAuthSource.W3:
+                return self
+            if self.maas_auth.username is None or self.maas_auth.password is None:
                 raise ValueError(
-                    "MAAS model endpoint config requires maas_auth.password."
+                    "MAAS model endpoint config requires maas_auth.username and maas_auth.password."
                 )
             return self
         if self.provider == ProviderType.CODEAGENT:
@@ -329,6 +343,8 @@ class ModelEndpointConfig(BaseModel):
                     "CodeAgent model endpoint config requires codeagent_auth configuration."
                 )
             if self.codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
+                if self.codeagent_auth.auth_source == ModelAuthSource.W3:
+                    return self
                 if (
                     self.codeagent_auth.username is None
                     or self.codeagent_auth.password is None

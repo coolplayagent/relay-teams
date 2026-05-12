@@ -32,6 +32,7 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_BASE_URL,
     LlmRetryConfig,
     MaaSAuthConfig,
+    ModelAuthSource,
     ModelEndpointConfig,
     ModelFallbackConfig,
     ModelRequestHeader,
@@ -51,6 +52,7 @@ from relay_teams.providers.model_header_utils import (
 from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
+from relay_teams.providers.w3_auth_source import require_w3_credentials
 from relay_teams.secrets import get_secret_store
 
 _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
@@ -239,18 +241,33 @@ def load_llm_profile_state(
             base_url = DEFAULT_MAAS_BASE_URL
         elif provider == ProviderType.ANTHROPIC and not _string_is_configured(base_url):
             base_url = DEFAULT_ANTHROPIC_BASE_URL
-        maas_auth = _resolve_profile_maas_auth(
-            config_dir=config_dir,
-            profile_name=name,
-            raw_value=cfg.get("maas_auth"),
-            env_values=env_values,
-        )
-        codeagent_auth = _resolve_profile_codeagent_auth(
-            config_dir=config_dir,
-            profile_name=name,
-            raw_value=cfg.get("codeagent_auth"),
-            env_values=env_values,
-        )
+        try:
+            maas_auth = _resolve_profile_maas_auth(
+                config_dir=config_dir,
+                profile_name=name,
+                raw_value=cfg.get("maas_auth"),
+                env_values=env_values,
+            )
+            codeagent_auth = _resolve_profile_codeagent_auth(
+                config_dir=config_dir,
+                profile_name=name,
+                raw_value=cfg.get("codeagent_auth"),
+                env_values=env_values,
+            )
+        except ValueError as exc:
+            if _profile_uses_w3_auth_source(cfg):
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="runtime_config.w3_profile_skipped",
+                    message="Skipping W3-backed model profile because W3 credentials are unavailable.",
+                    payload={
+                        "profile_name": name,
+                        "error": str(exc),
+                    },
+                )
+                continue
+            raise
 
         if not model or not base_url:
             raise ValueError(
@@ -341,6 +358,11 @@ def load_llm_profile_state(
             ),
         )
 
+    if not profiles:
+        raise ValueError("No valid model profiles loaded.")
+    if default_profile_name not in profiles:
+        default_profile_name = sorted(profiles.keys())[0]
+
     return LoadedLlmProfiles(
         profiles=profiles,
         default_profile_name=default_profile_name,
@@ -393,6 +415,26 @@ def _resolve_profile_speech_realtime(
             f"Invalid profile '{profile_name}': speech_realtime must be an object."
         )
     return SpeechRealtimeConfig.model_validate(raw_value)
+
+
+def _profile_uses_w3_auth_source(profile: Mapping[str, object]) -> bool:
+    maas_auth = profile.get("maas_auth")
+    if isinstance(maas_auth, Mapping):
+        auth_source = maas_auth.get("auth_source")
+        if (
+            isinstance(auth_source, str)
+            and auth_source.strip() == ModelAuthSource.W3.value
+        ):
+            return True
+    codeagent_auth = profile.get("codeagent_auth")
+    if isinstance(codeagent_auth, Mapping):
+        auth_source = codeagent_auth.get("auth_source")
+        if (
+            isinstance(auth_source, str)
+            and auth_source.strip() == ModelAuthSource.W3.value
+        ):
+            return True
+    return False
 
 
 def _load_model_payload(model_file: Path) -> dict[str, object]:
@@ -550,6 +592,15 @@ def _resolve_profile_maas_auth(
         )
     payload = dict(raw_value)
     normalized_payload: dict[str, str] = {}
+    auth_source = _normalize_auth_source(payload.get("auth_source"))
+    if auth_source == ModelAuthSource.W3:
+        credentials = require_w3_credentials(config_dir)
+        return MaaSAuthConfig(
+            auth_source=ModelAuthSource.W3,
+            username=credentials.username,
+            password=credentials.password,
+        )
+    normalized_payload["auth_source"] = auth_source.value
 
     username = payload.get("username")
     if isinstance(username, str) and username.strip():
@@ -590,6 +641,8 @@ def _resolve_profile_codeagent_auth(
         )
     payload = dict(raw_value)
     normalized_payload: dict[str, str | bool] = {}
+    auth_source = _normalize_auth_source(payload.get("auth_source"))
+    normalized_payload["auth_source"] = auth_source.value
     auth_method_raw = payload.get("auth_method")
     if isinstance(auth_method_raw, str) and auth_method_raw.strip():
         normalized_payload["auth_method"] = auth_method_raw.strip()
@@ -605,6 +658,14 @@ def _resolve_profile_codeagent_auth(
 
     password = payload.get("password")
     if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
+        if auth_source == ModelAuthSource.W3:
+            credentials = require_w3_credentials(config_dir)
+            return CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                auth_source=ModelAuthSource.W3,
+                username=credentials.username,
+                password=credentials.password,
+            )
         if isinstance(password, str) and password.strip():
             normalized_payload["password"] = _resolve_required_config_value(
                 password,
@@ -707,6 +768,12 @@ def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | N
 
 def _string_is_configured(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _normalize_auth_source(value: object) -> ModelAuthSource:
+    if isinstance(value, str) and value.strip() == ModelAuthSource.W3.value:
+        return ModelAuthSource.W3
+    return ModelAuthSource.PROFILE
 
 
 def _resolve_path(config_dir: Path, raw_path: str) -> Path:

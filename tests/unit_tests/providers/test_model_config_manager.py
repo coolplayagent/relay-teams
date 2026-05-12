@@ -28,12 +28,39 @@ from relay_teams.providers.model_config import (
 )
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config_manager import ModelConfigManager
+from relay_teams.providers.w3_auth_source import (
+    W3_PASSWORD_FIELD,
+    W3_SECRET_NAMESPACE,
+    W3_SECRET_OWNER_ID,
+)
 from relay_teams.secrets import AppSecretStore
 
 
 class _FileOnlySecretStore(AppSecretStore):
     def has_usable_keyring_backend(self) -> bool:
         return False
+
+
+def _save_w3_credentials(
+    tmp_path: Path,
+    secret_store: AppSecretStore,
+    *,
+    username: str = "w3-user",
+    password: str = "w3-password",
+) -> None:
+    config_dir = tmp_path / "connectors"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "w3.json").write_text(
+        json.dumps({"username": username}),
+        encoding="utf-8",
+    )
+    secret_store.set_secret(
+        tmp_path,
+        namespace=W3_SECRET_NAMESPACE,
+        owner_id=W3_SECRET_OWNER_ID,
+        field_name=W3_PASSWORD_FIELD,
+        value=password,
+    )
 
 
 def test_get_model_config_returns_empty_when_file_missing(tmp_path: Path) -> None:
@@ -679,9 +706,10 @@ def test_get_model_profiles_migrates_legacy_api_key_out_of_model_json(
 def test_save_model_profile_stores_maas_password_in_secret_store(
     tmp_path: Path,
 ) -> None:
+    secret_store = _FileOnlySecretStore()
     manager = ModelConfigManager(
         config_dir=tmp_path,
-        secret_store=_FileOnlySecretStore(),
+        secret_store=secret_store,
     )
 
     manager.save_model_profile(
@@ -699,9 +727,6 @@ def test_save_model_profile_stores_maas_password_in_secret_store(
 
     profiles = manager.get_model_profiles()
     model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
-    secrets_payload = json.loads(
-        (tmp_path / "secrets.json").read_text(encoding="utf-8")
-    )
     maas_auth = cast(dict[str, JsonValue], profiles["maas-profile"]["maas_auth"])
 
     assert cast(str, profiles["maas-profile"]["base_url"]) == DEFAULT_MAAS_BASE_URL
@@ -710,15 +735,125 @@ def test_save_model_profile_stores_maas_password_in_secret_store(
     assert maas_auth["has_password"] is True
     assert model_payload["maas-profile"]["base_url"] == DEFAULT_MAAS_BASE_URL
     assert model_payload["maas-profile"]["maas_auth"] == {
+        "auth_source": "profile",
         "username": "relay-user",
     }
-    assert {
-        "namespace": "model_profile",
-        "owner_id": "maas-profile",
-        "field_name": maas_password_secret_field_name(),
-        "storage": "file",
-        "value": "relay-password",
-    } in secrets_payload["entries"]
+    assert (
+        secret_store.get_secret(
+            tmp_path,
+            namespace="model_profile",
+            owner_id="maas-profile",
+            field_name=maas_password_secret_field_name(),
+        )
+        == "relay-password"
+    )
+
+
+def test_save_maas_profile_can_use_w3_auth_source_without_profile_password(
+    tmp_path: Path,
+) -> None:
+    secret_store = _FileOnlySecretStore()
+    _save_w3_credentials(tmp_path, secret_store)
+    manager = ModelConfigManager(config_dir=tmp_path, secret_store=secret_store)
+
+    manager.save_model_profile(
+        "maas-w3",
+        {
+            "provider": "maas",
+            "model": "pangu",
+            "base_url": DEFAULT_MAAS_BASE_URL,
+            "maas_auth": {"auth_source": "w3"},
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    maas_auth = cast(dict[str, JsonValue], profiles["maas-w3"]["maas_auth"])
+    assert maas_auth["auth_source"] == "w3"
+    assert maas_auth["has_password"] is False
+    assert (
+        secret_store.get_secret(
+            tmp_path,
+            namespace="model_profile",
+            owner_id="maas-w3",
+            field_name=maas_password_secret_field_name(),
+        )
+        is None
+    )
+
+
+def test_save_maas_profile_rejects_w3_auth_source_without_connector(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(ValueError, match="W3 connector credentials are required"):
+        manager.save_model_profile(
+            "maas-w3",
+            {
+                "provider": "maas",
+                "model": "pangu",
+                "base_url": DEFAULT_MAAS_BASE_URL,
+                "maas_auth": {"auth_source": "w3"},
+            },
+        )
+
+
+def test_save_maas_profile_rejects_unknown_auth_source(tmp_path: Path) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(ValueError, match="auth_source must be 'profile' or 'w3'"):
+        manager.save_model_profile(
+            "maas-invalid",
+            {
+                "provider": "maas",
+                "model": "pangu",
+                "base_url": DEFAULT_MAAS_BASE_URL,
+                "maas_auth": {
+                    "auth_source": "w33",
+                    "username": "relay-user",
+                    "password": "relay-password",
+                },
+            },
+        )
+
+
+def test_get_model_profiles_tolerates_unknown_saved_maas_auth_source(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "model.json").write_text(
+        json.dumps(
+            {
+                "maas-dirty": {
+                    "provider": "maas",
+                    "model": "pangu",
+                    "base_url": DEFAULT_MAAS_BASE_URL,
+                    "maas_auth": {
+                        "auth_source": "w33",
+                        "username": "relay-user",
+                        "password": "relay-password",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    profiles = manager.get_model_profiles()
+    maas_auth = cast(dict[str, JsonValue], profiles["maas-dirty"]["maas_auth"])
+
+    assert maas_auth["auth_source"] == "profile"
+    assert maas_auth["username"] == "relay-user"
+    assert maas_auth["has_password"] is True
 
 
 def test_save_model_profile_defaults_anthropic_base_url_when_blank(
@@ -838,6 +973,7 @@ def test_save_model_profile_stores_codeagent_tokens_from_oauth_session(
     assert model_payload["codeagent-profile"]["base_url"] == DEFAULT_CODEAGENT_BASE_URL
     assert model_payload["codeagent-profile"]["codeagent_auth"] == {
         "auth_method": "sso",
+        "auth_source": "profile",
         "has_access_token": True,
         "has_refresh_token": True,
     }
@@ -1252,6 +1388,7 @@ def test_prepare_profile_codeagent_auth_reuses_existing_config_when_omitted(
 
     assert merged_profile["codeagent_auth"] == {
         "auth_method": "sso",
+        "auth_source": "profile",
         "has_access_token": True,
         "has_refresh_token": True,
     }
@@ -1488,6 +1625,7 @@ def test_prepare_profile_codeagent_auth_preserves_existing_password_for_password
 
     assert next_profile["codeagent_auth"] == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "relay-user",
         "has_password": True,
     }
@@ -1647,9 +1785,10 @@ def test_resolve_codeagent_auth_prefers_inline_tokens_and_session_id(
 def test_save_model_profile_stores_codeagent_password_in_secret_store(
     tmp_path: Path,
 ) -> None:
+    secret_store = _FileOnlySecretStore()
     manager = ModelConfigManager(
         config_dir=tmp_path,
-        secret_store=_FileOnlySecretStore(),
+        secret_store=secret_store,
     )
 
     manager.save_model_profile(
@@ -1672,25 +1811,183 @@ def test_save_model_profile_stores_codeagent_password_in_secret_store(
         profiles["codeagent-password"]["codeagent_auth"],
     )
     raw_config = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
-    secrets_payload = json.loads(
-        (tmp_path / "secrets.json").read_text(encoding="utf-8")
-    )
 
     assert saved_auth["auth_method"] == "password"
     assert saved_auth["username"] == "relay-user"
     assert saved_auth["has_password"] is True
     assert raw_config["codeagent-password"]["codeagent_auth"] == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "relay-user",
         "has_password": True,
     }
-    assert {
-        "namespace": "model_profile",
-        "owner_id": "codeagent-password",
-        "field_name": codeagent_password_secret_field_name(),
-        "storage": "file",
-        "value": "relay-password",
-    } in secrets_payload["entries"]
+    assert (
+        secret_store.get_secret(
+            tmp_path,
+            namespace="model_profile",
+            owner_id="codeagent-password",
+            field_name=codeagent_password_secret_field_name(),
+        )
+        == "relay-password"
+    )
+
+
+def test_save_codeagent_password_profile_can_use_w3_auth_source(
+    tmp_path: Path,
+) -> None:
+    secret_store = _FileOnlySecretStore()
+    _save_w3_credentials(tmp_path, secret_store)
+    manager = ModelConfigManager(config_dir=tmp_path, secret_store=secret_store)
+
+    manager.save_model_profile(
+        "codeagent-w3",
+        {
+            "provider": "codeagent",
+            "model": "claude",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "auth_method": "password",
+                "auth_source": "w3",
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    codeagent_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-w3"]["codeagent_auth"],
+    )
+    assert codeagent_auth["auth_source"] == "w3"
+    assert codeagent_auth["has_password"] is False
+    assert (
+        secret_store.get_secret(
+            tmp_path,
+            namespace="model_profile",
+            owner_id="codeagent-w3",
+            field_name=codeagent_password_secret_field_name(),
+        )
+        is None
+    )
+
+
+def test_save_codeagent_sso_profile_rejects_w3_auth_source(
+    tmp_path: Path,
+) -> None:
+    secret_store = _FileOnlySecretStore()
+    _save_w3_credentials(tmp_path, secret_store)
+    manager = ModelConfigManager(config_dir=tmp_path, secret_store=secret_store)
+
+    with pytest.raises(ValueError, match="only supported for password auth"):
+        manager.save_model_profile(
+            "codeagent-w3-sso",
+            {
+                "provider": "codeagent",
+                "model": "claude",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "auth_method": "sso",
+                    "auth_source": "w3",
+                },
+            },
+        )
+
+
+def test_save_codeagent_profile_rejects_unknown_auth_source(tmp_path: Path) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(ValueError, match="auth_source must be 'profile' or 'w3'"):
+        manager.save_model_profile(
+            "codeagent-invalid",
+            {
+                "provider": "codeagent",
+                "model": "claude",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "auth_method": "password",
+                    "auth_source": "w33",
+                    "username": "relay-user",
+                    "password": "relay-password",
+                },
+            },
+        )
+
+
+def test_get_model_profiles_tolerates_unknown_saved_codeagent_auth_source(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "model.json").write_text(
+        json.dumps(
+            {
+                "codeagent-dirty": {
+                    "provider": "codeagent",
+                    "model": "claude",
+                    "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "auth_source": "w33",
+                        "username": "relay-user",
+                        "password": "relay-password",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    profiles = manager.get_model_profiles()
+    codeagent_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-dirty"]["codeagent_auth"],
+    )
+
+    assert codeagent_auth["auth_source"] == "profile"
+    assert codeagent_auth["username"] == "relay-user"
+    assert codeagent_auth["has_password"] is True
+
+
+def test_get_model_profiles_normalizes_dirty_w3_codeagent_sso_auth_source(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "model.json").write_text(
+        json.dumps(
+            {
+                "codeagent-sso-dirty": {
+                    "provider": "codeagent",
+                    "model": "claude",
+                    "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                    "codeagent_auth": {
+                        "auth_method": "sso",
+                        "auth_source": "w3",
+                        "has_access_token": True,
+                        "has_refresh_token": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    profiles = manager.get_model_profiles()
+    codeagent_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-sso-dirty"]["codeagent_auth"],
+    )
+
+    assert codeagent_auth["auth_method"] == "sso"
+    assert codeagent_auth["auth_source"] == "profile"
+    assert codeagent_auth["has_access_token"] is True
+    assert codeagent_auth["has_refresh_token"] is True
 
 
 def test_save_model_profile_rejects_codeagent_username_change_without_new_password(
@@ -1838,6 +2135,7 @@ def test_save_model_profile_migrates_inline_codeagent_password_into_secret_store
     assert saved_auth["has_password"] is True
     assert raw_config["codeagent-profile"]["codeagent_auth"] == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "relay-user",
         "has_password": True,
     }

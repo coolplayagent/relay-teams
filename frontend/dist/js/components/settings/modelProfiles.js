@@ -9,6 +9,7 @@ import {
     fetchCodeAgentOAuthSession,
     fetchModelFallbackConfig,
     fetchModelProfiles,
+    fetchW3Connector,
     probeModelConnection,
     refreshModelCatalog,
     reloadModelConfig,
@@ -22,6 +23,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 
 let profiles = {};
 let fallbackConfig = { policies: [] };
+let w3Connector = null;
 let editingProfile = null;
 let nextDraftCodeAgentVerificationScopeId = 1;
 let profileProbeStates = {};
@@ -79,6 +81,10 @@ const PROVIDER_MODES = {
 const CODEAGENT_AUTH_METHODS = {
     SSO: 'sso',
     PASSWORD: 'password',
+};
+const AUTH_SOURCES = {
+    PROFILE: 'profile',
+    W3: 'w3',
 };
 const FALLBACK_POLICY_TRANSLATION_KEYS = {
     same_provider_then_other_provider: 'settings.model.fallback_policy_same_provider_then_other_provider',
@@ -181,6 +187,11 @@ export function bindModelProfileHandlers() {
         maasUsernameInput.oninput = handleDraftEndpointChanged;
     }
 
+    const maasAuthSourceInput = document.getElementById('profile-maas-auth-source');
+    if (maasAuthSourceInput) {
+        maasAuthSourceInput.onchange = handleDraftAuthSourceChanged;
+    }
+
     const maasPasswordInput = document.getElementById('profile-maas-password');
     if (maasPasswordInput) {
         maasPasswordInput.oninput = handleDraftMaasPasswordInput;
@@ -198,6 +209,11 @@ export function bindModelProfileHandlers() {
     const codeagentAuthMethodInput = document.getElementById('profile-codeagent-auth-method');
     if (codeagentAuthMethodInput) {
         codeagentAuthMethodInput.onchange = handleDraftCodeAgentAuthMethodChanged;
+    }
+
+    const codeagentAuthSourceInput = document.getElementById('profile-codeagent-auth-source');
+    if (codeagentAuthSourceInput) {
+        codeagentAuthSourceInput.onchange = handleDraftAuthSourceChanged;
     }
 
     const codeagentUsernameInput = document.getElementById('profile-codeagent-username');
@@ -274,12 +290,14 @@ export function bindModelProfileHandlers() {
 
 export async function loadModelProfilesPanel() {
     try {
-        const [loadedProfiles, loadedFallbackConfig] = await Promise.all([
+        const [loadedProfiles, loadedFallbackConfig, loadedW3Connector] = await Promise.all([
             fetchModelProfiles(),
             fetchModelFallbackConfig(),
+            fetchW3Connector().catch(() => null),
         ]);
         profiles = loadedProfiles;
         fallbackConfig = loadedFallbackConfig || { policies: [] };
+        w3Connector = loadedW3Connector;
         renderFallbackPolicyOptions();
         renderProfiles();
         renderDraftProbeState();
@@ -988,6 +1006,8 @@ function handleAddProfile() {
     draftMaasPasswordState = createDraftSecretState();
     draftCodeAgentPasswordState = createDraftSecretState();
     draftCodeAgentAuthState = createDraftCodeAgentAuthState(CODEAGENT_AUTH_METHODS.SSO);
+    setDraftMaasAuthSource(defaultDraftAuthSource());
+    setDraftCodeAgentAuthSource(defaultDraftAuthSource());
     document.getElementById('profile-maas-username').value = '';
     document.getElementById('profile-maas-password').value = '';
     document.getElementById('profile-codeagent-auth-method').value = CODEAGENT_AUTH_METHODS.SSO;
@@ -1052,6 +1072,7 @@ function handleEditProfile(name) {
         armedForInput: false,
         revealed: false,
     };
+    setDraftMaasAuthSource(normalizeAuthSource(profile.maas_auth?.auth_source, AUTH_SOURCES.PROFILE));
     document.getElementById('profile-maas-username').value = profile.maas_auth?.username || '';
     document.getElementById('profile-maas-password').value = '';
     const codeagentAuth = profile.codeagent_auth || {};
@@ -1068,6 +1089,7 @@ function handleEditProfile(name) {
         revealed: false,
     };
     document.getElementById('profile-codeagent-auth-method').value = codeagentAuthMethod;
+    setDraftCodeAgentAuthSource(normalizeAuthSource(codeagentAuth.auth_source, AUTH_SOURCES.PROFILE));
     document.getElementById('profile-codeagent-username').value = codeagentAuth.username || '';
     document.getElementById('profile-codeagent-password').value = '';
     draftCodeAgentAuthState = {
@@ -1206,7 +1228,7 @@ async function handleSaveProfile() {
     }
 
     if (isMaaSProvider(provider)) {
-        if (!maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+        if (!hasDraftMaasAuth(maasAuth)) {
             showToast({
                 title: t('settings.model.save_failed_title'),
                 message: 'MAAS profiles require username and password.',
@@ -1273,9 +1295,12 @@ async function handleSaveProfile() {
 
     if (isMaaSProvider(provider)) {
         profile.maas_auth = {
-            username: maasAuth.username,
+            auth_source: maasAuth.auth_source,
         };
-        if (maasAuth.password) {
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE) {
+            profile.maas_auth.username = maasAuth.username;
+        }
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE && maasAuth.password) {
             profile.maas_auth.password = maasAuth.password;
         }
     } else if (isCodeAgentProvider(provider)) {
@@ -1283,7 +1308,10 @@ async function handleSaveProfile() {
             auth_method: codeagentAuth.auth_method,
         };
         if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
-            profile.codeagent_auth.username = codeagentAuth.username;
+            profile.codeagent_auth.auth_source = codeagentAuth.auth_source;
+            if (codeagentAuth.auth_source === AUTH_SOURCES.PROFILE) {
+                profile.codeagent_auth.username = codeagentAuth.username;
+            }
             if (codeagentAuth.password) {
                 profile.codeagent_auth.password = codeagentAuth.password;
             }
@@ -1756,7 +1784,7 @@ function buildDraftProbePayload() {
     }
 
     if (isMaaSProvider(provider)) {
-        if (!maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+        if (!hasDraftMaasAuth(maasAuth)) {
             draftProbeState = {
                 status: 'failed',
                 message: 'Model, base URL, username, and password are required before testing a MAAS profile.',
@@ -1818,15 +1846,21 @@ function buildDraftProbePayload() {
 
     if (isMaaSProvider(provider)) {
         override.maas_auth = {
-            username: maasAuth.username,
+            auth_source: maasAuth.auth_source,
         };
-        if (maasAuth.password) {
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE) {
+            override.maas_auth.username = maasAuth.username;
+        }
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE && maasAuth.password) {
             override.maas_auth.password = maasAuth.password;
         }
     } else if (isCodeAgentProvider(provider)) {
         override.codeagent_auth = { auth_method: codeagentAuth.auth_method };
         if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
-            override.codeagent_auth.username = codeagentAuth.username;
+            override.codeagent_auth.auth_source = codeagentAuth.auth_source;
+            if (codeagentAuth.auth_source === AUTH_SOURCES.PROFILE) {
+                override.codeagent_auth.username = codeagentAuth.username;
+            }
             if (codeagentAuth.password) {
                 override.codeagent_auth.password = codeagentAuth.password;
             }
@@ -1859,7 +1893,7 @@ function buildDraftModelDiscoveryPayload() {
     const sslVerify = parseTriStateValue(document.getElementById('profile-ssl-verify').value);
 
     if (isMaaSProvider(provider)) {
-        if (!baseUrl || !maasAuth.username || !hasDraftMaasPassword(maasAuth)) {
+        if (!baseUrl || !hasDraftMaasAuth(maasAuth)) {
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
                 status: 'failed',
@@ -1924,15 +1958,21 @@ function buildDraftModelDiscoveryPayload() {
     }
     if (isMaaSProvider(provider)) {
         override.maas_auth = {
-            username: maasAuth.username,
+            auth_source: maasAuth.auth_source,
         };
-        if (maasAuth.password) {
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE) {
+            override.maas_auth.username = maasAuth.username;
+        }
+        if (maasAuth.auth_source === AUTH_SOURCES.PROFILE && maasAuth.password) {
             override.maas_auth.password = maasAuth.password;
         }
     } else if (isCodeAgentProvider(provider)) {
         override.codeagent_auth = { auth_method: codeagentAuth.auth_method };
         if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
-            override.codeagent_auth.username = codeagentAuth.username;
+            override.codeagent_auth.auth_source = codeagentAuth.auth_source;
+            if (codeagentAuth.auth_source === AUTH_SOURCES.PROFILE) {
+                override.codeagent_auth.username = codeagentAuth.username;
+            }
             if (codeagentAuth.password) {
                 override.codeagent_auth.password = codeagentAuth.password;
             }
@@ -2247,6 +2287,12 @@ function handleDraftCodeAgentAuthMethodChanged() {
     nextState.hasPersistedPassword = draftCodeAgentPasswordState.hasPersistedValue;
     draftCodeAgentAuthState = nextState;
     handleDraftEndpointChanged();
+    renderDraftCodeAgentAuthState();
+}
+
+function handleDraftAuthSourceChanged() {
+    handleDraftEndpointChanged();
+    renderDraftProviderFields();
     renderDraftCodeAgentAuthState();
 }
 
@@ -2826,7 +2872,7 @@ function renderProfileEditorState() {
     const apiKeyConfigured = draftApiKeyState.hasPersistedValue || Boolean(readDraftApiKeyValue());
     const maasAuth = readDraftMaasAuth();
     const credentialsReady = maasProvider
-        ? Boolean(maasAuth.username && hasDraftMaasPassword(maasAuth))
+        ? hasDraftMaasAuth(maasAuth)
         : codeagentProvider
             ? hasDraftCodeAgentAuth()
             : apiKeyConfigured;
@@ -3062,10 +3108,65 @@ function ensureProviderOption(providerInput, value) {
 }
 
 function readDraftMaasAuth() {
+    const authSource = getDraftMaasAuthSource();
+    if (authSource === AUTH_SOURCES.W3) {
+        return {
+            auth_source: AUTH_SOURCES.W3,
+            username: '',
+            password: '',
+        };
+    }
     return {
+        auth_source: AUTH_SOURCES.PROFILE,
         username: document.getElementById('profile-maas-username').value.trim(),
         password: readDraftMaasPasswordValue(),
     };
+}
+
+function getDraftMaasAuthSource() {
+    const input = document.getElementById('profile-maas-auth-source');
+    return normalizeAuthSource(input?.value, AUTH_SOURCES.PROFILE);
+}
+
+function setDraftMaasAuthSource(value) {
+    const input = document.getElementById('profile-maas-auth-source');
+    if (input) {
+        input.value = normalizeAuthSource(value, defaultDraftAuthSource());
+    }
+}
+
+function getDraftCodeAgentAuthSource() {
+    const input = document.getElementById('profile-codeagent-auth-source');
+    return normalizeAuthSource(input?.value, AUTH_SOURCES.PROFILE);
+}
+
+function setDraftCodeAgentAuthSource(value) {
+    const input = document.getElementById('profile-codeagent-auth-source');
+    if (input) {
+        input.value = normalizeAuthSource(value, defaultDraftAuthSource());
+    }
+}
+
+function normalizeAuthSource(value, fallback = AUTH_SOURCES.PROFILE) {
+    const normalized = String(value || '').trim();
+    if (normalized === AUTH_SOURCES.PROFILE) {
+        return AUTH_SOURCES.PROFILE;
+    }
+    if (normalized === AUTH_SOURCES.W3 && isW3AuthAvailable()) {
+        return AUTH_SOURCES.W3;
+    }
+    return fallback === AUTH_SOURCES.W3 && isW3AuthAvailable()
+        ? AUTH_SOURCES.W3
+        : AUTH_SOURCES.PROFILE;
+}
+
+function defaultDraftAuthSource() {
+    return isW3AuthAvailable() ? AUTH_SOURCES.W3 : AUTH_SOURCES.PROFILE;
+}
+
+function isW3AuthAvailable() {
+    return Boolean(w3Connector?.username)
+        && Boolean(w3Connector?.has_password);
 }
 
 function getDraftCodeAgentAuthMethod() {
@@ -3092,6 +3193,12 @@ function syncDraftCodeAgentAuthStatusMessage() {
         return;
     }
     if (authMethod === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        if (getDraftCodeAgentAuthSource() === AUTH_SOURCES.W3) {
+            draftCodeAgentAuthState.statusMessage = isW3AuthAvailable()
+                ? 'Using W3 connector'
+                : 'Not signed in';
+            return;
+        }
         if (requiresDraftCodeAgentPasswordReentry()) {
             draftCodeAgentAuthState.statusMessage = 'Re-enter password after changing username';
             return;
@@ -3125,8 +3232,18 @@ function syncDraftCodeAgentAuthStatusMessage() {
 function readDraftCodeAgentAuth() {
     const authMethod = getDraftCodeAgentAuthMethod();
     if (authMethod === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        const authSource = getDraftCodeAgentAuthSource();
+        if (authSource === AUTH_SOURCES.W3) {
+            return {
+                auth_method: authMethod,
+                auth_source: AUTH_SOURCES.W3,
+                username: '',
+                password: '',
+            };
+        }
         return {
             auth_method: authMethod,
+            auth_source: AUTH_SOURCES.PROFILE,
             username: document.getElementById('profile-codeagent-username').value.trim(),
             password: readDraftCodeAgentPasswordValue(),
         };
@@ -3136,6 +3253,7 @@ function readDraftCodeAgentAuth() {
         : null;
     return {
         auth_method: authMethod,
+        auth_source: AUTH_SOURCES.PROFILE,
         oauth_session_id: completedSessionId,
         has_access_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedAccessToken,
         has_refresh_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken,
@@ -3144,6 +3262,9 @@ function readDraftCodeAgentAuth() {
 
 function hasDraftCodeAgentAuth() {
     if (getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        if (getDraftCodeAgentAuthSource() === AUTH_SOURCES.W3) {
+            return isW3AuthAvailable();
+        }
         if (requiresDraftCodeAgentPasswordReentry()) {
             return false;
         }
@@ -3155,7 +3276,9 @@ function hasDraftCodeAgentAuth() {
 
 function hasPersistedCodeAgentCredentials() {
     return getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
-        ? draftCodeAgentAuthState.hasPersistedPassword
+        ? getDraftCodeAgentAuthSource() === AUTH_SOURCES.W3
+            ? isW3AuthAvailable()
+            : draftCodeAgentAuthState.hasPersistedPassword
         : draftCodeAgentAuthState.hasPersistedRefreshToken;
 }
 
@@ -3165,6 +3288,12 @@ function hasFreshDraftCodeAgentPasswordEntry() {
 }
 
 function shouldBlockDraftCodeAgentReauth() {
+    if (
+        getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+        && getDraftCodeAgentAuthSource() === AUTH_SOURCES.W3
+    ) {
+        return false;
+    }
     return draftCodeAgentAuthState.reauthRequired && !hasFreshDraftCodeAgentPasswordEntry();
 }
 
@@ -3174,6 +3303,9 @@ function hasDraftCodeAgentPassword() {
 
 function requiresDraftCodeAgentPasswordReentry() {
     if (getDraftCodeAgentAuthMethod() !== CODEAGENT_AUTH_METHODS.PASSWORD) {
+        return false;
+    }
+    if (getDraftCodeAgentAuthSource() === AUTH_SOURCES.W3) {
         return false;
     }
     if (!draftCodeAgentPasswordState.hasPersistedValue) {
@@ -3196,12 +3328,14 @@ function renderDraftCodeAgentAuthState() {
     const loginBtn = document.getElementById('profile-codeagent-login-status');
     const statusMessageEl = document.getElementById('profile-codeagent-login-status-message');
     const authMethodInput = document.getElementById('profile-codeagent-auth-method');
+    const authSourceGroup = document.getElementById('profile-codeagent-auth-source-group');
     const ssoGroup = document.getElementById('profile-codeagent-sso-group');
     const usernameGroup = document.getElementById('profile-codeagent-username-group');
     const passwordGroup = document.getElementById('profile-codeagent-password-group');
     const provider = getDraftProvider();
     const isCodeAgent = isCodeAgentProvider(provider);
     const authMethod = getDraftCodeAgentAuthMethod();
+    const authSource = getDraftCodeAgentAuthSource();
     const hasAuth = hasDraftCodeAgentAuth();
     const authVerified = Boolean(draftCodeAgentAuthState.verified || draftCodeAgentAuthState.completed);
     const statusMessage = draftCodeAgentAuthState.statusMessage
@@ -3224,11 +3358,26 @@ function renderDraftCodeAgentAuthState() {
     if (ssoGroup) {
         ssoGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.SSO ? 'block' : 'none';
     }
+    if (authSourceGroup) {
+        authSourceGroup.style.display = isCodeAgent
+            && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+            && isW3AuthAvailable()
+            ? 'block'
+            : 'none';
+    }
     if (usernameGroup) {
-        usernameGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD ? 'block' : 'none';
+        usernameGroup.style.display = isCodeAgent
+            && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+            && authSource === AUTH_SOURCES.PROFILE
+            ? 'block'
+            : 'none';
     }
     if (passwordGroup) {
-        passwordGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD ? 'block' : 'none';
+        passwordGroup.style.display = isCodeAgent
+            && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+            && authSource === AUTH_SOURCES.PROFILE
+            ? 'block'
+            : 'none';
     }
     if (loginBtn) {
         loginBtn.textContent = loginLabel;
@@ -3284,6 +3433,9 @@ function localizeCodeAgentAuthStatusMessage(statusMessage) {
     if (message === 'Credentials verified') {
         return t('settings.model.codeagent_credentials_verified');
     }
+    if (message === 'Using W3 connector') {
+        return t('settings.model.auth_source_w3_status');
+    }
     if (message === 'SSO popup blocked') {
         return t('settings.model.codeagent_sso_popup_blocked');
     }
@@ -3316,6 +3468,13 @@ function getCodeAgentAuthStatusTone(statusMessage, hasAuth) {
 
 function hasDraftMaasPassword(maasAuth) {
     return Boolean(maasAuth.password) || draftMaasPasswordState.hasPersistedValue;
+}
+
+function hasDraftMaasAuth(maasAuth) {
+    if (maasAuth.auth_source === AUTH_SOURCES.W3) {
+        return isW3AuthAvailable();
+    }
+    return Boolean(maasAuth.username && hasDraftMaasPassword(maasAuth));
 }
 
 function syncDraftModelFieldPlacement(maasProvider, codeagentProvider = false) {
@@ -3358,10 +3517,17 @@ function renderDraftProviderFields() {
     const apiKeyGroup = document.getElementById('profile-api-key-group');
     const customProviderGroup = getOptionalElement('profile-custom-provider-group');
     const maasFields = document.getElementById('profile-maas-auth-fields');
+    const maasAuthSourceGroup = document.getElementById('profile-maas-auth-source-group');
+    const maasUsernameGroup = document.getElementById('profile-maas-username')?.closest('.form-group');
+    const maasPasswordGroup = document.getElementById('profile-maas-password')?.closest('.form-group');
     const codeagentFields = document.getElementById('profile-codeagent-auth-fields');
     const passwordInput = document.getElementById('profile-maas-password');
     const baseUrlInput = document.getElementById('profile-base-url');
     const baseUrlGroup = baseUrlInput ? baseUrlInput.closest('.form-group') : null;
+    if (!isW3AuthAvailable()) {
+        setDraftMaasAuthSource(AUTH_SOURCES.PROFILE);
+        setDraftCodeAgentAuthSource(AUTH_SOURCES.PROFILE);
+    }
     syncDraftModelFieldPlacement(maasProvider, codeagentProvider);
     if (apiKeyGroup) {
         apiKeyGroup.style.display = (maasProvider || codeagentProvider) ? 'none' : 'block';
@@ -3372,6 +3538,15 @@ function renderDraftProviderFields() {
     syncCustomProviderInput();
     if (maasFields) {
         maasFields.style.display = maasProvider ? 'grid' : 'none';
+    }
+    if (maasAuthSourceGroup) {
+        maasAuthSourceGroup.style.display = maasProvider && isW3AuthAvailable() ? 'block' : 'none';
+    }
+    if (maasUsernameGroup) {
+        maasUsernameGroup.style.display = maasProvider && getDraftMaasAuthSource() === AUTH_SOURCES.PROFILE ? 'block' : 'none';
+    }
+    if (maasPasswordGroup) {
+        maasPasswordGroup.style.display = maasProvider && getDraftMaasAuthSource() === AUTH_SOURCES.PROFILE ? 'block' : 'none';
     }
     if (codeagentFields) {
         codeagentFields.style.display = codeagentProvider ? 'flex' : 'none';

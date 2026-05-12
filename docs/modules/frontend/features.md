@@ -135,6 +135,7 @@
 - Discord accounts。
 - Xiaoluban accounts。
 - WeChat accounts 和 login session。
+- W3 统一认证 connector 状态和账号密码表单。
 - workspace、normal roles、orchestration presets。
 
 用户可见区域：
@@ -147,6 +148,7 @@
 - workspace/role/preset 选择。
 - trigger rule、session mode、YOLO、thinking 配置。
 - Xiaoluban IM forwarding command 预览。
+- W3 卡片使用华为图标；连接成功后 MaaS/CodeAgent password 模型配置可选择复用 W3 认证。
 
 Feishu 编辑器表现：
 
@@ -173,9 +175,17 @@ Discord 表现：
 WeChat 表现：
 
 - 登录启动、等待登录结果。
-- 启用/禁用账号。
-- 删除账号。
-- 登录中展示连接状态。
+
+W3 表现：
+
+- 用户输入 W3 账号和密码。
+- W3 位于官方连接器栏，表示统一认证，而不是单独的模型同步入口。
+- 保存时后端验证能否拿到 MaaS `cloudDragonTokens.authToken`，也就是 W3 `WEB_TOKEN` / 请求头 `X-Auth-Token`，不要求立即推理。
+- 保存成功只保存认证配置，不自动发现、同步或创建模型 profile。
+- 已保存密码不回显，密码框为空时表示保持现有密码。
+- 弹窗只提供“测试并保存/更新认证”主动作，不展示同步模型按钮或导入统计。
+- W3 已连接时，MaaS 和 CodeAgent password 模型 profile 可选择“使用 W3 认证”，并在保存、测试连接、发现模型时由后端按需解析 W3 凭据。
+- 后续 MCP 等能力可复用 W3 的 WEB_TOKEN，由对应功能把 token 映射到自己的环境变量名。
 
 空态、加载态、错误态：
 

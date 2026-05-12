@@ -26,6 +26,13 @@ from relay_teams.connector import (
     ConnectorStatus,
     ConnectorSummary,
     ConnectorTestResult,
+    W3ConnectorTestRequest,
+    W3ConnectorTestResponse,
+    W3ConnectorSaveRequest,
+    W3ConnectorSaveResponse,
+    W3ConnectorStatusResponse,
+    W3ConnectorSyncResponse,
+    W3ModelSyncSummary,
 )
 from relay_teams.interfaces.server.deps import (
     get_binary_tool_service,
@@ -81,6 +88,46 @@ class _FakeConnectorService:
                     message="GitHub probe completed.",
                 ),
             ),
+        )
+
+    async def test_w3_connector(
+        self,
+        request: W3ConnectorTestRequest | None,
+    ) -> W3ConnectorTestResponse:
+        username = request.username if request is not None else None
+        return W3ConnectorTestResponse(
+            ok=True,
+            status="valid",
+            message="W3 login returned X-Auth-Token.",
+            username=username,
+            has_token=True,
+        )
+
+    def get_w3_connector(self) -> W3ConnectorStatusResponse:
+        return W3ConnectorStatusResponse(
+            username="w3-user",
+            has_password=True,
+            status=ConnectorStatus.CONNECTED,
+        )
+
+    async def save_w3_connector(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        return W3ConnectorSaveResponse(
+            ok=True,
+            status=ConnectorStatus.CONNECTED,
+            message="saved",
+            username=request.username,
+            has_password=True,
+            sync=None,
+        )
+
+    async def sync_w3_models(self) -> W3ConnectorSyncResponse:
+        return W3ConnectorSyncResponse(
+            ok=True,
+            message="synced",
+            sync=W3ModelSyncSummary(created_count=1),
         )
 
 
@@ -145,6 +192,53 @@ def test_test_connector_router_returns_probe_result() -> None:
     assert payload["connector_id"] == "github"
     assert payload["ok"] is True
     assert payload["checks"][0]["name"] == "github_connectivity"
+
+
+def test_test_w3_connector_router_accepts_empty_body() -> None:
+    client = _client()
+
+    response = client.post("/api/connectors/w3:test")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["has_token"] is True
+
+
+def test_get_w3_connector_router_returns_status() -> None:
+    client = _client()
+
+    response = client.get("/api/connectors/w3")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["username"] == "w3-user"
+    assert payload["status"] == "connected"
+
+
+def test_save_w3_connector_router_returns_save_response() -> None:
+    client = _client()
+
+    response = client.put(
+        "/api/connectors/w3",
+        json={"username": "new-user", "password": "secret"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["username"] == "new-user"
+
+
+def test_sync_w3_connector_models_router_returns_summary() -> None:
+    client = _client()
+
+    response = client.post("/api/connectors/w3:sync-models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["sync"]["created_count"] == 1
 
 
 def test_test_connector_router_returns_404_for_unknown_connector() -> None:

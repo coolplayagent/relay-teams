@@ -8,6 +8,7 @@ from relay_teams.providers.model_config import (
     CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     MaaSAuthConfig,
+    ModelAuthSource,
     ModelEndpointConfig,
     ProviderType,
     SpeechRealtimeConfig,
@@ -44,7 +45,7 @@ def test_model_endpoint_config_requires_maas_auth() -> None:
 def test_model_endpoint_config_requires_maas_password() -> None:
     with pytest.raises(
         ValueError,
-        match="MAAS model endpoint config requires maas_auth.password.",
+        match="MAAS model endpoint config requires maas_auth.username and maas_auth.password.",
     ):
         ModelEndpointConfig(
             provider=ProviderType.MAAS,
@@ -68,6 +69,31 @@ def test_model_endpoint_config_requires_codeagent_password_fields() -> None:
                 username="relay-user",
             ),
         )
+
+
+def test_model_endpoint_config_accepts_w3_auth_source_without_profile_password() -> (
+    None
+):
+    maas_config = ModelEndpointConfig(
+        provider=ProviderType.MAAS,
+        model="maas-chat",
+        base_url="https://maas.example/api/v2",
+        maas_auth=MaaSAuthConfig(auth_source=ModelAuthSource.W3),
+    )
+    codeagent_config = ModelEndpointConfig(
+        provider=ProviderType.CODEAGENT,
+        model="codeagent-chat",
+        base_url="https://codeagent.example/codeAgentPro",
+        codeagent_auth=CodeAgentAuthConfig(
+            auth_method=CodeAgentAuthMethod.PASSWORD,
+            auth_source=ModelAuthSource.W3,
+        ),
+    )
+
+    assert maas_config.maas_auth is not None
+    assert maas_config.maas_auth.auth_source == ModelAuthSource.W3
+    assert codeagent_config.codeagent_auth is not None
+    assert codeagent_config.codeagent_auth.auth_source == ModelAuthSource.W3
 
 
 def test_speech_realtime_config_normalizes_blank_optional_fields() -> None:

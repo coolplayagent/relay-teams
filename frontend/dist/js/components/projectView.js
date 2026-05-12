@@ -42,6 +42,7 @@ import {
     fetchConnectors,
     fetchRuntimeToolDownload,
     fetchRuntimeTools,
+    fetchW3Connector,
     fetchGitHubAccountRepositories,
     fetchGitHubRepoSubscriptions,
     fetchGitHubTriggerAccounts,
@@ -63,6 +64,7 @@ import {
     reloadSkillsConfig,
     runAutomationProject,
     startRuntimeToolDownload,
+    saveW3Connector,
     startWeChatGatewayLogin,
     updateWorkspace,
     updateAutomationProject,
@@ -165,6 +167,7 @@ const FEISHU_PLATFORM = 'feishu';
 const DISCORD_PLATFORM = 'discord';
 const XIAOLUBAN_PLATFORM = 'xiaoluban';
 const WECHAT_PLATFORM = 'wechat';
+const W3_PLATFORM = 'w3';
 const XIAOLUBAN_NO_WORKSPACES_VALUE = '__no_xiaoluban_notification_workspaces__';
 const XIAOLUBAN_ALL_WORKSPACES_VALUE = '__all_xiaoluban_notification_workspaces__';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
@@ -247,6 +250,14 @@ function createInitialGatewayFeatureState() {
         connectorSearch: '',
         connectorStatusFilter: 'all',
         connectorModalProvider: '',
+        w3Connector: null,
+        w3Draft: {
+            username: '',
+            password: '',
+        },
+        w3Saving: false,
+        w3StatusMessage: '',
+        w3StatusTone: '',
         workspaces: [],
         normalRoles: [],
         orchestrationPresets: [],
@@ -5902,6 +5913,7 @@ function renderConnectorConfigModal() {
     return renderConnectorConfigModalMarkup({
         item,
         accountManagementMarkup: renderConnectorAccountManagement(item),
+        showConfigureAction: String(item.provider || item.connector_id || '').trim() !== W3_PLATFORM,
     });
 }
 
@@ -5934,7 +5946,45 @@ function renderConnectorAccountManagement(item) {
             renderConnectorXiaolubanAccountList(currentGatewayFeatureState.xiaolubanAccounts),
         );
     }
+    if (provider === W3_PLATFORM) {
+        return renderConnectorW3Management();
+    }
     return '';
+}
+
+function renderConnectorW3Management() {
+    const status = currentGatewayFeatureState.w3Connector || {};
+    const draft = currentGatewayFeatureState.w3Draft || {};
+    const username = String(draft.username || status.username || '').trim();
+    const hasPassword = status.has_password === true;
+    const passwordPlaceholder = hasPassword
+        ? t('feature.connectors.w3.password_keep')
+        : t('settings.model.password_placeholder');
+    const busy = currentGatewayFeatureState.w3Saving;
+    const saveLabel = hasPassword
+        ? t('feature.connectors.w3.test_update_auth')
+        : t('feature.connectors.w3.test_save_auth');
+    return `
+        <section class="connectors-account-management connectors-w3-management">
+            <div class="connectors-account-management-header">
+                <h4>${escapeHtml(t('feature.connectors.w3.title'))}</h4>
+            </div>
+            <div class="connectors-w3-form">
+                <label>
+                    <span>${escapeHtml(t('settings.model.username'))}</span>
+                    <input type="text" value="${escapeHtml(username)}" autocomplete="username" data-feature-w3-username>
+                </label>
+                <label>
+                    <span>${escapeHtml(t('settings.model.password'))}</span>
+                    <input type="password" value="${escapeHtml(String(draft.password || ''))}" placeholder="${escapeHtml(passwordPlaceholder)}" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" data-feature-w3-password>
+                </label>
+                <div class="connectors-w3-actions">
+                    <button class="primary-btn section-action-btn" type="button" data-feature-w3-save ${busy ? 'disabled' : ''}>${escapeHtml(currentGatewayFeatureState.w3Saving ? t('settings.action.saving') : saveLabel)}</button>
+                </div>
+                ${currentGatewayFeatureState.w3StatusMessage ? `<p class="connectors-w3-status is-${escapeHtml(currentGatewayFeatureState.w3StatusTone || 'info')}">${escapeHtml(currentGatewayFeatureState.w3StatusMessage)}</p>` : ''}
+            </div>
+        </section>
+    `;
 }
 
 function renderConnectorAccountManagementSection(recordsMarkup) {
@@ -6164,6 +6214,33 @@ function bindConnectorConfigModalHandlers(root) {
             void handleConnectConnectorFromModal(button.getAttribute('data-connector-configure'));
         });
     });
+    root.querySelectorAll('[data-feature-w3-username]').forEach(input => {
+        input.addEventListener('input', () => {
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                w3Draft: {
+                    ...currentGatewayFeatureState.w3Draft,
+                    username: String(input.value || ''),
+                },
+            };
+        });
+    });
+    root.querySelectorAll('[data-feature-w3-password]').forEach(input => {
+        input.addEventListener('input', () => {
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                w3Draft: {
+                    ...currentGatewayFeatureState.w3Draft,
+                    password: String(input.value || ''),
+                },
+            };
+        });
+    });
+    root.querySelectorAll('[data-feature-w3-save]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleSaveW3Connector();
+        });
+    });
 }
 
 function renderGatewayFeatureView({ restoreSearchFocus = false, searchSelectionStart = null, searchSelectionEnd = null } = {}) {
@@ -6265,6 +6342,15 @@ async function handleOpenConnectorCard(provider) {
         await openAutomationGitHubView('access');
         return;
     }
+    if (normalizedProvider === W3_PLATFORM) {
+        await loadW3ConnectorState();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            connectorModalProvider: normalizedProvider,
+        };
+        renderGatewayFeatureModal();
+        return;
+    }
     const item = getConnectorItemByProvider(normalizedProvider);
     if (Number(item?.account_count || 0) === 0) {
         await handleConnectConnectorFromModal(normalizedProvider);
@@ -6283,6 +6369,9 @@ async function handleManageConnectorCard(provider) {
     if (normalizedProvider === 'github') {
         await openAutomationGitHubView('access');
         return;
+    }
+    if (normalizedProvider === W3_PLATFORM) {
+        await loadW3ConnectorState();
     }
     currentGatewayFeatureState = {
         ...currentGatewayFeatureState,
@@ -6546,6 +6635,101 @@ async function handleConnectConnectorFromModal(provider) {
     }
     if (normalizedProvider === XIAOLUBAN_PLATFORM) {
         await handleCreateXiaolubanFeatureAccount();
+        return;
+    }
+    if (normalizedProvider === W3_PLATFORM) {
+        await loadW3ConnectorState();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            connectorModalProvider: normalizedProvider,
+        };
+        renderGatewayFeatureModal();
+    }
+}
+
+async function loadW3ConnectorState() {
+    try {
+        const status = await fetchW3Connector();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            w3Connector: status,
+            w3Draft: {
+                username: String(status?.username || ''),
+                password: '',
+            },
+            w3StatusMessage: '',
+            w3StatusTone: '',
+        };
+    } catch (error) {
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            w3StatusMessage: String(error?.message || error || ''),
+            w3StatusTone: 'danger',
+        };
+    }
+}
+
+async function refreshConnectorsAfterW3Change() {
+    try {
+        const connectorsResponse = await fetchConnectors();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            connectorsResponse,
+        };
+    } catch (error) {
+        logWarn('Failed to refresh connectors after W3 change', error);
+    }
+}
+
+function buildW3CredentialPayload() {
+    const draft = currentGatewayFeatureState.w3Draft || {};
+    const status = currentGatewayFeatureState.w3Connector || {};
+    const username = String(draft.username || status.username || '').trim();
+    const password = String(draft.password || '').trim();
+    const payload = { username };
+    if (password) {
+        payload.password = password;
+    }
+    return payload;
+}
+
+async function handleSaveW3Connector() {
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        w3Saving: true,
+        w3StatusMessage: '',
+        w3StatusTone: '',
+    };
+    renderGatewayFeatureModal();
+    try {
+        const result = await saveW3Connector(buildW3CredentialPayload());
+        const status = await fetchW3Connector();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            w3Connector: status,
+            w3Draft: {
+                username: String(status?.username || ''),
+                password: '',
+            },
+            w3Saving: false,
+            w3StatusMessage: String(result?.message || ''),
+            w3StatusTone: result?.ok === true ? 'success' : 'danger',
+        };
+        await refreshConnectorsAfterW3Change();
+        renderGatewayFeatureView();
+        showToast({
+            title: t('feature.connectors.w3.saved_title'),
+            message: String(result?.message || ''),
+            tone: result?.ok === true ? 'success' : 'danger',
+        });
+    } catch (error) {
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            w3Saving: false,
+            w3StatusMessage: String(error?.message || error || ''),
+            w3StatusTone: 'danger',
+        };
+        renderGatewayFeatureModal();
     }
 }
 

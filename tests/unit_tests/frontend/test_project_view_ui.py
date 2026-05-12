@@ -7713,6 +7713,17 @@ export async function fetchRuntimeToolDownload(jobId) {
     };
 }
 """.strip(),
+        "fetchW3Connector": """
+export async function fetchW3Connector() {
+    return null;
+}
+""".strip(),
+        "saveW3Connector": """
+export async function saveW3Connector(payload) {
+    globalThis.__savedW3ConnectorPayload = payload;
+    return { status: "saved" };
+}
+""".strip(),
         "testConnector": """
 export async function testConnector(connectorId) {
     return { connector_id: connectorId, ok: true, checks: [] };

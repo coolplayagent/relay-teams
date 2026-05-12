@@ -75,6 +75,99 @@ console.log(JSON.stringify({
     }
 
 
+def test_request_json_adds_json_content_type_for_w3_payloads(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    request_source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    )
+    connectors_source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "connectors.js"
+    )
+    request_module_path = tmp_path / "request.mjs"
+    connectors_module_path = tmp_path / "connectors.mjs"
+    runner_path = tmp_path / "runner-w3-json-headers.mjs"
+    logger_path = tmp_path / "mockLogger.mjs"
+
+    request_module_path.write_text(
+        request_source_path.read_text(encoding="utf-8").replace(
+            "../../utils/logger.js",
+            "./mockLogger.mjs",
+        ),
+        encoding="utf-8",
+    )
+    connectors_module_path.write_text(
+        connectors_source_path.read_text(encoding="utf-8").replace(
+            "./request.js",
+            "./request.mjs",
+        ),
+        encoding="utf-8",
+    )
+    logger_path.write_text(
+        """
+export function errorToPayload(error, context = {}) {
+    return { name: error?.name || '', ...context };
+}
+
+export function logError(...args) {
+    globalThis.__logErrorCalls.push(args);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    runner_path.write_text(
+        """
+globalThis.__logErrorCalls = [];
+globalThis.__fetchCalls = [];
+globalThis.fetch = async (url, options = {}) => {
+    const rawHeaders = options.headers || {};
+    const headers = rawHeaders instanceof Headers
+        ? Object.fromEntries(rawHeaders.entries())
+        : Object.fromEntries(Object.entries(rawHeaders).map(([key, value]) => [key, value]));
+    globalThis.__fetchCalls.push({ url, method: options.method || 'GET', headers, body: options.body || '' });
+    return { ok: true, json: async () => ({ ok: true }), text: async () => '' };
+};
+
+const { saveW3Connector, testW3Connector } = await import('./connectors.mjs');
+await saveW3Connector({ username: 'u', password: 'p' });
+await testW3Connector({ username: 'u', password: 'p' });
+console.log(JSON.stringify(globalThis.__fetchCalls));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    calls = json.loads(completed.stdout)
+    assert calls == [
+        {
+            "url": "/api/connectors/w3",
+            "method": "PUT",
+            "headers": {"Content-Type": "application/json"},
+            "body": '{"username":"u","password":"p"}',
+        },
+        {
+            "url": "/api/connectors/w3:test",
+            "method": "POST",
+            "headers": {"Content-Type": "application/json"},
+            "body": '{"username":"u","password":"p"}',
+        },
+    ]
+
+
 def test_request_json_emits_backend_status_hints(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
