@@ -1679,7 +1679,7 @@ class SessionRunService:
         stop_on_pause: bool = True,
     ):
         queue = self._run_event_hub.subscribe(run_id)
-        terminal_reached = False
+        final_terminal_reached = False
         try:
             replay_high_watermark = 0
             if after_event_id >= 0 and self._event_log is not None:
@@ -1715,8 +1715,10 @@ class SessionRunService:
                         RunEventType.RUN_COMPLETED,
                         RunEventType.RUN_FAILED,
                         RunEventType.RUN_STOPPED,
-                    ) or (stop_on_pause and event_type == RunEventType.RUN_PAUSED):
-                        terminal_reached = True
+                    ):
+                        final_terminal_reached = True
+                        return
+                    if stop_on_pause and event_type == RunEventType.RUN_PAUSED:
                         return
 
             while True:
@@ -1732,12 +1734,14 @@ class SessionRunService:
                     RunEventType.RUN_COMPLETED,
                     RunEventType.RUN_FAILED,
                     RunEventType.RUN_STOPPED,
-                ) or (stop_on_pause and event.event_type == RunEventType.RUN_PAUSED):
-                    terminal_reached = True
+                ):
+                    final_terminal_reached = True
+                    break
+                if stop_on_pause and event.event_type == RunEventType.RUN_PAUSED:
                     break
         finally:
             self._run_event_hub.unsubscribe(run_id, queue)
-            if terminal_reached:
+            if final_terminal_reached:
                 self._run_event_hub.unsubscribe_all(run_id)
 
     async def stream_multiplexed_run_events(

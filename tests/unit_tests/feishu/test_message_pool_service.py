@@ -333,12 +333,34 @@ async def test_run_answer_check_runs_without_existing_loop() -> None:
     assert status == UserQuestionAnswerStatus.ANSWERED
 
 
+async def test_run_answer_check_uses_bound_loop_from_worker_thread() -> None:
+    loop = asyncio.get_running_loop()
+    observed_loops: list[asyncio.AbstractEventLoop] = []
+
+    async def answer() -> UserQuestionAnswerStatus:
+        observed_loops.append(asyncio.get_running_loop())
+        return UserQuestionAnswerStatus.ANSWERED
+
+    status = await asyncio.to_thread(lambda: _run_answer_check(answer, loop=loop))
+
+    assert status == UserQuestionAnswerStatus.ANSWERED
+    assert observed_loops == [loop]
+
+
 async def test_run_answer_check_rejects_existing_loop() -> None:
     async def answer() -> UserQuestionAnswerStatus:
         return UserQuestionAnswerStatus.INVALID_REPLY
 
     with pytest.raises(RuntimeError, match="active event loop"):
         _run_answer_check(answer)
+
+
+async def test_run_answer_check_rejects_bound_loop_reentry() -> None:
+    async def answer() -> UserQuestionAnswerStatus:
+        return UserQuestionAnswerStatus.INVALID_REPLY
+
+    with pytest.raises(RuntimeError, match="service loop"):
+        _run_answer_check(answer, loop=asyncio.get_running_loop())
 
 
 async def test_run_answer_check_raises_worker_errors() -> None:

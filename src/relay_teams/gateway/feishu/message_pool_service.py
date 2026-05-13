@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable, Coroutine
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import uuid4
@@ -268,7 +269,8 @@ class FeishuMessagePoolService:
                 lambda: self._inbound_runtime.answer_pending_user_question_async(
                     runtime_config=runtime_config,
                     message=normalized,
-                )
+                ),
+                loop=self._loop,
             )
         except (GatewaySessionBusyError, RuntimeError, KeyError, ValueError) as exc:
             log_event(
@@ -1151,7 +1153,25 @@ def _run_answer_check(
         [],
         Coroutine[object, object, UserQuestionAnswerStatus],
     ],
+    *,
+    loop: asyncio.AbstractEventLoop | None = None,
 ) -> UserQuestionAnswerStatus:
+    if loop is not None and loop.is_running():
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            future = asyncio.run_coroutine_threadsafe(coroutine_factory(), loop)
+            try:
+                return future.result(timeout=30)
+            except FutureTimeoutError as exc:
+                future.cancel()
+                raise RuntimeError(
+                    "Timed out answering a Feishu user question on the service loop"
+                ) from exc
+        if running_loop is loop:
+            raise RuntimeError(
+                "Cannot synchronously answer a Feishu user question on the service loop"
+            )
     try:
         asyncio.get_running_loop()
     except RuntimeError:
