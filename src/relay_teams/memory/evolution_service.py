@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from datetime import datetime, timezone
 
 from relay_teams.logger import get_logger
@@ -169,7 +170,7 @@ class MemoryEvolutionService:
         updated = await self._complete_apply_claim_async(applied)
         try:
             await self._mark_source_memories_applied_async(updated)
-        except Exception:
+        except (RuntimeError, sqlite3.Error, ValueError):
             LOGGER.exception(
                 "Failed to tag source memories for Memory Bank evolution draft %s",
                 updated.draft_id,
