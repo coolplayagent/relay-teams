@@ -563,19 +563,21 @@ class FeishuMessagePoolService:
                     UserQuestionAnswerStatus.ANSWERED,
                     UserQuestionAnswerStatus.INVALID_REPLY,
                 }:
-                    completed_at = datetime.now(tz=timezone.utc)
-                    self._message_pool_repo.update(
-                        claimed.message_pool_id,
-                        processing_status=FeishuMessageProcessingStatus.COMPLETED,
-                        final_reply_status=FeishuMessageDeliveryStatus.SKIPPED,
-                        final_reply_text=(
-                            "Answer received."
-                            if answer_status == UserQuestionAnswerStatus.ANSWERED
-                            else "Invalid answer ignored."
-                        ),
-                        completed_at=completed_at,
-                        last_error=None,
-                    )
+                    if answer_status == UserQuestionAnswerStatus.INVALID_REPLY:
+                        await self._complete_invalid_user_question_reply(
+                            record=claimed,
+                            runtime_config=runtime_config,
+                        )
+                    else:
+                        completed_at = datetime.now(tz=timezone.utc)
+                        self._message_pool_repo.update(
+                            claimed.message_pool_id,
+                            processing_status=FeishuMessageProcessingStatus.COMPLETED,
+                            final_reply_status=FeishuMessageDeliveryStatus.SKIPPED,
+                            final_reply_text="Answer received.",
+                            completed_at=completed_at,
+                            last_error=None,
+                        )
                     continue
                 session_id, run_id = await self._inbound_runtime.start_run_async(
                     runtime_config=runtime_config,
@@ -596,6 +598,55 @@ class FeishuMessagePoolService:
                 last_error=None,
             )
         return progress
+
+    async def _complete_invalid_user_question_reply(
+        self,
+        *,
+        record: FeishuMessagePoolRecord,
+        runtime_config: FeishuTriggerRuntimeConfig,
+    ) -> None:
+        reply_text = "请按问题数量逐行回答后再发送。"
+        completed_at = datetime.now(tz=timezone.utc)
+        attempts = record.final_reply_attempts + 1
+        try:
+            await self._send_terminal_reply(
+                record=record,
+                text=reply_text,
+                environment=runtime_config.environment,
+            )
+        except RuntimeError as exc:
+            status = (
+                FeishuMessageDeliveryStatus.FAILED
+                if attempts >= _FINAL_REPLY_MAX_ATTEMPTS
+                else FeishuMessageDeliveryStatus.PENDING
+            )
+            processing_status = (
+                FeishuMessageProcessingStatus.DEAD_LETTER
+                if attempts >= _FINAL_REPLY_MAX_ATTEMPTS
+                else FeishuMessageProcessingStatus.RETRYABLE_FAILED
+            )
+            self._message_pool_repo.update(
+                record.message_pool_id,
+                processing_status=processing_status,
+                final_reply_status=status,
+                final_reply_text=reply_text,
+                final_reply_attempts=attempts,
+                next_attempt_at=completed_at + _backoff_for_attempt(attempts),
+                completed_at=completed_at
+                if attempts >= _FINAL_REPLY_MAX_ATTEMPTS
+                else None,
+                last_error=str(exc),
+            )
+            return
+        self._message_pool_repo.update(
+            record.message_pool_id,
+            processing_status=FeishuMessageProcessingStatus.COMPLETED,
+            final_reply_status=FeishuMessageDeliveryStatus.SENT,
+            final_reply_text=reply_text,
+            final_reply_attempts=attempts,
+            completed_at=completed_at,
+            last_error=None,
+        )
 
     async def _finalize_waiting_results(self, *, limit: int = 20) -> bool:
         progress = False

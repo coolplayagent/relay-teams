@@ -600,6 +600,72 @@ async def test_message_pool_does_not_consume_older_queued_message_as_answer(
     assert len(run_service.created) == 1
 
 
+async def test_message_pool_sends_invalid_user_question_reply(
+    tmp_path: Path,
+) -> None:
+    service, repo, feishu_client, _runtime_repo, _event_log, run_service = (
+        _build_service(tmp_path)
+    )
+    runtime = _build_runtime()
+    session = service._inbound_runtime._session_service.create_session(
+        workspace_id="default"
+    )
+    service._inbound_runtime._external_session_binding_repo.upsert_binding(
+        platform=FEISHU_PLATFORM,
+        trigger_id=runtime.trigger_id,
+        tenant_key="tenant-1",
+        external_chat_id="oc_group_1",
+        session_id=session.session_id,
+    )
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-1",
+            "session_id": session.session_id,
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [
+                {"question": "Deploy?", "options": [{"label": "Ship"}]},
+                {"question": "Notify?", "options": [{"label": "Yes"}]},
+            ],
+            "status": "requested",
+            "answers": [],
+            "created_at": datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "updated_at": datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc).isoformat(),
+            "resolved_at": None,
+        }
+    ]
+    queued = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(
+            event_id="evt-invalid",
+            message_id="om_invalid",
+            text="Ship",
+        ),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    assert queued.status == "accepted"
+
+    assert await service._process_queued_messages() is True
+
+    record = repo.get_by_message_key(
+        trigger_id=runtime.trigger_id,
+        tenant_key="tenant-1",
+        message_key="om_invalid",
+    )
+    assert record.processing_status == FeishuMessageProcessingStatus.COMPLETED
+    assert record.final_reply_status == FeishuMessageDeliveryStatus.SENT
+    assert record.final_reply_text == "请按问题数量逐行回答后再发送。"
+    assert feishu_client.reply_messages == [
+        ("om_invalid", "请按问题数量逐行回答后再发送。")
+    ]
+    assert len(run_service.created) == 0
+
+
 async def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
     service, repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
         _build_service(tmp_path)
