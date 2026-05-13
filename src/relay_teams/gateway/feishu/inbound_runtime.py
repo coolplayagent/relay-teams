@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Protocol
 
 from pydantic import JsonValue
@@ -257,6 +258,7 @@ class FeishuInboundRuntime:
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
         message: FeishuNormalizedMessage,
+        message_created_at: datetime | None = None,
     ) -> UserQuestionAnswerStatus:
         binding = await self._external_session_binding_repo.get_binding_async(
             platform=FEISHU_PLATFORM,
@@ -279,6 +281,7 @@ class FeishuInboundRuntime:
                 run_service=self._run_service,
                 session_id=session_id,
                 text=message.trigger_text,
+                message_created_at=message_created_at,
             )
             return status
         run_id = await self._session_ingress_service.active_run_id_async(session_id)
@@ -288,6 +291,7 @@ class FeishuInboundRuntime:
             run_service=self._run_service,
             run_id=run_id,
             text=message.trigger_text,
+            message_created_at=message_created_at,
         )
 
     async def is_user_question_requested_async(

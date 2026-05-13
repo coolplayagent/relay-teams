@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import JsonValue
+from datetime import datetime, timezone
 
 from relay_teams.gateway.user_questions import (
     UserQuestionAnswerStatus,
@@ -210,6 +211,7 @@ def _question_record(
     question_id: str = "question-1",
     run_id: str = "run-1",
     status: str = "requested",
+    created_at: str = "2026-05-12T00:00:00+00:00",
 ) -> dict[str, JsonValue]:
     return {
         "question_id": question_id,
@@ -227,8 +229,8 @@ def _question_record(
         ],
         "status": status,
         "answers": [],
-        "created_at": "2026-05-12T00:00:00+00:00",
-        "updated_at": "2026-05-12T00:00:00+00:00",
+        "created_at": created_at,
+        "updated_at": created_at,
         "resolved_at": None,
     }
 
@@ -374,6 +376,26 @@ async def test_answer_pending_user_question_for_session_status_async_returns_run
     assert status == UserQuestionAnswerStatus.ANSWERED
     assert run_id == "run-1"
     assert service.answered == [("run-1", "question-1")]
+
+
+@pytest.mark.asyncio
+async def test_answer_pending_user_question_ignores_questions_newer_than_message() -> (
+    None
+):
+    service = _FakeAsyncRunService(
+        [_question_record(created_at="2026-05-12T00:00:05+00:00")]
+    )
+
+    status, run_id = await answer_pending_user_question_for_session_status_async(
+        run_service=service,
+        session_id="session-1",
+        text="Yes",
+        message_created_at=datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc),
+    )
+
+    assert status == UserQuestionAnswerStatus.NOT_PENDING
+    assert run_id is None
+    assert service.answered == []
 
 
 @pytest.mark.asyncio

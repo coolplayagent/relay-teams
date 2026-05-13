@@ -556,6 +556,7 @@ class FeishuMessagePoolService:
                     await self._inbound_runtime.answer_pending_user_question_async(
                         runtime_config=runtime_config,
                         message=enriched,
+                        message_created_at=claimed.created_at,
                     )
                 )
                 if answer_status in {

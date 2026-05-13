@@ -22,6 +22,7 @@ from relay_teams.gateway.feishu.message_pool_service import (
     _user_question_events_async,
 )
 from relay_teams.gateway.feishu.models import (
+    FEISHU_PLATFORM,
     FeishuEnvironment,
     FeishuMessageDeliveryStatus,
     FeishuMessageProcessingStatus,
@@ -529,6 +530,74 @@ async def test_message_pool_records_consumed_question_answers(
     assert record.processing_status == FeishuMessageProcessingStatus.COMPLETED
     assert record.final_reply_status == FeishuMessageDeliveryStatus.SKIPPED
     assert record.command_name == "answered_user_question"
+
+
+async def test_message_pool_does_not_consume_older_queued_message_as_answer(
+    tmp_path: Path,
+) -> None:
+    service, repo, _client, _runtime_repo, _event_log, run_service = _build_service(
+        tmp_path
+    )
+    runtime = _build_runtime()
+    old_message_time = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)
+    question_time = old_message_time + timedelta(seconds=5)
+    session = service._inbound_runtime._session_service.create_session(
+        workspace_id="default"
+    )
+    service._inbound_runtime._external_session_binding_repo.upsert_binding(
+        platform=FEISHU_PLATFORM,
+        trigger_id=runtime.trigger_id,
+        tenant_key="tenant-1",
+        external_chat_id="oc_group_1",
+        session_id=session.session_id,
+    )
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-1",
+            "session_id": session.session_id,
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [{"question": "Proceed?", "options": [{"label": "Ship"}]}],
+            "status": "requested",
+            "answers": [],
+            "created_at": question_time.isoformat(),
+            "updated_at": question_time.isoformat(),
+            "resolved_at": None,
+        }
+    ]
+    queued = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(
+            event_id="evt-old",
+            message_id="om_old",
+            text="Ship",
+        ),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    assert queued.status == "accepted"
+    record = repo.get_by_message_key(
+        trigger_id=runtime.trigger_id,
+        tenant_key="tenant-1",
+        message_key="om_old",
+    )
+    record = repo.update(
+        record.message_pool_id,
+        created_at=old_message_time,
+        updated_at=old_message_time,
+    )
+
+    assert await service._process_queued_messages() is True
+
+    updated = repo.get(record.message_pool_id)
+    assert updated is not None
+    assert updated.processing_status == FeishuMessageProcessingStatus.WAITING_RESULT
+    assert updated.final_reply_text is None
+    assert len(run_service.created) == 1
 
 
 async def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:

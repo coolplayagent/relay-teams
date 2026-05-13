@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Protocol, cast
 
@@ -191,9 +192,11 @@ async def answer_pending_user_question_status_async(
     run_service: UserQuestionRunServiceAsync,
     run_id: str,
     text: str,
+    message_created_at: datetime | None = None,
 ) -> UserQuestionAnswerStatus:
     record = _latest_requested_question(
-        await run_service.list_user_questions_async(run_id)
+        await run_service.list_user_questions_async(run_id),
+        message_created_at=message_created_at,
     )
     return await _answer_pending_user_question_record_async(
         run_service=run_service,
@@ -207,9 +210,11 @@ async def answer_pending_user_question_for_session_status_async(
     run_service: UserQuestionSessionRunServiceAsync,
     session_id: str,
     text: str,
+    message_created_at: datetime | None = None,
 ) -> tuple[UserQuestionAnswerStatus, str | None]:
     record = _latest_requested_question(
-        await run_service.list_user_questions_by_session_async(session_id)
+        await run_service.list_user_questions_by_session_async(session_id),
+        message_created_at=message_created_at,
     )
     status = await _answer_pending_user_question_record_async(
         run_service=run_service,
@@ -400,6 +405,8 @@ def _matches_option_label(text: str, question: UserQuestionPrompt) -> bool:
 
 def _latest_requested_question(
     raw_records: list[dict[str, JsonValue]],
+    *,
+    message_created_at: datetime | None = None,
 ) -> UserQuestionRequestRecord | None:
     requested: list[UserQuestionRequestRecord] = []
     for item in raw_records:
@@ -407,11 +414,22 @@ def _latest_requested_question(
             record = UserQuestionRequestRecord.model_validate(item)
         except ValueError:
             continue
-        if record.status == UserQuestionRequestStatus.REQUESTED:
-            requested.append(record)
+        if record.status != UserQuestionRequestStatus.REQUESTED:
+            continue
+        if message_created_at is not None and _utc_datetime(
+            record.created_at
+        ) > _utc_datetime(message_created_at):
+            continue
+        requested.append(record)
     if not requested:
         return None
     return max(requested, key=lambda question_record: question_record.created_at)
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _requested_question(
