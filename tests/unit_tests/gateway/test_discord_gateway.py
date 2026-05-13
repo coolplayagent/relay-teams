@@ -1396,40 +1396,41 @@ async def test_discord_watcher_uses_live_stream_after_question_pause_without_eve
         def __init__(self) -> None:
             super().__init__(())
             self.offsets: list[int] = []
+            self.stop_on_pause_values: list[bool] = []
 
         def stream_run_events(
             self,
             run_id: str,
             after_event_id: int = 0,
+            *,
+            stop_on_pause: bool = True,
         ) -> AsyncIterator[_FakeRunEvent]:
             _ = run_id
             self.offsets.append(after_event_id)
-            return self._events_for_offset(after_event_id)
+            self.stop_on_pause_values.append(stop_on_pause)
+            return self._events_for_offset()
 
         async def _events_for_offset(
             self,
-            after_event_id: int,
         ) -> AsyncIterator[_FakeRunEvent]:
-            if after_event_id == 0:
-                yield _FakeRunEvent(
-                    event_type=RunEventType.USER_QUESTION_REQUESTED,
-                    payload_json=json.dumps(
-                        {
-                            "question_id": "question-1",
-                            "questions": [
-                                {
-                                    "question": "Pick one",
-                                    "options": [{"label": "Ship"}],
-                                }
-                            ],
-                        }
-                    ),
-                )
-                yield _FakeRunEvent(
-                    event_type=RunEventType.RUN_PAUSED,
-                    payload_json=json.dumps({"error_message": "waiting"}),
-                )
-                return
+            yield _FakeRunEvent(
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload_json=json.dumps(
+                    {
+                        "question_id": "question-1",
+                        "questions": [
+                            {
+                                "question": "Pick one",
+                                "options": [{"label": "Ship"}],
+                            }
+                        ],
+                    }
+                ),
+            )
+            yield _FakeRunEvent(
+                event_type=RunEventType.RUN_PAUSED,
+                payload_json=json.dumps({"error_message": "waiting"}),
+            )
             yield _FakeRunEvent(
                 event_type=RunEventType.RUN_COMPLETED,
                 payload_json="{}",
@@ -1452,7 +1453,8 @@ async def test_discord_watcher_uses_live_stream_after_question_pause_without_eve
         reply_to_message_id="message-1",
     )
 
-    assert run_service.offsets == [0, -1]
+    assert run_service.offsets == [0]
+    assert run_service.stop_on_pause_values == [False]
     assert "Pick one" in fake_im_tool.sent_texts[0].text
     assert fake_im_tool.sent_texts[1].text == "Completed."
 
@@ -2365,8 +2367,10 @@ class _FakeRunService:
         self,
         run_id: str,
         after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
     ) -> AsyncIterator[_FakeRunEvent]:
-        _ = run_id
+        _ = (run_id, stop_on_pause)
         return self._iter_events(after_event_id=after_event_id)
 
     async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:

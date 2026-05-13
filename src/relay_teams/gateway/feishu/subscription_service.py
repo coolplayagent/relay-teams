@@ -566,6 +566,7 @@ class _FeishuWsController:
         try:
             await handler_task
         except asyncio.CancelledError:
+            # Cancellation is the expected shutdown path for the serial handler worker.
             pass
         self._handler_task = None
 

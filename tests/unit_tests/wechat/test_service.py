@@ -371,33 +371,35 @@ async def test_await_terminal_uses_live_stream_after_question_pause_without_even
         def __init__(self) -> None:
             super().__init__(())
             self.offsets: list[int] = []
+            self.stop_on_pause_values: list[bool] = []
 
         async def stream_run_events(
             self,
             run_id: str,
             after_event_id: int = 0,
+            *,
+            stop_on_pause: bool = True,
         ) -> AsyncIterator[RunEvent]:
             self.offsets.append(after_event_id)
-            if after_event_id == 0:
-                yield _event(
-                    run_id=run_id,
-                    event_type=RunEventType.USER_QUESTION_REQUESTED,
-                    payload={
-                        "question_id": "question-1",
-                        "questions": [
-                            {
-                                "question": "Pick one",
-                                "options": [{"label": "Ship"}],
-                            }
-                        ],
-                    },
-                ).model_copy(update={"event_id": None})
-                yield _event(
-                    run_id=run_id,
-                    event_type=RunEventType.RUN_PAUSED,
-                    payload={"error_message": "waiting for user input"},
-                ).model_copy(update={"event_id": None})
-                return
+            self.stop_on_pause_values.append(stop_on_pause)
+            yield _event(
+                run_id=run_id,
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload={
+                    "question_id": "question-1",
+                    "questions": [
+                        {
+                            "question": "Pick one",
+                            "options": [{"label": "Ship"}],
+                        }
+                    ],
+                },
+            ).model_copy(update={"event_id": None})
+            yield _event(
+                run_id=run_id,
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "waiting for user input"},
+            ).model_copy(update={"event_id": None})
             yield _event(
                 run_id=run_id,
                 event_type=RunEventType.RUN_COMPLETED,
@@ -420,7 +422,8 @@ async def test_await_terminal_uses_live_stream_after_question_pause_without_even
         context_token="ctx-1",
     )
 
-    assert run_service.offsets == [0, -1]
+    assert run_service.offsets == [0]
+    assert run_service.stop_on_pause_values == [False]
     assert "Pick one" in str(im_tool_service.send_text_calls[0]["text"])
     assert im_tool_service.send_text_calls[1]["text"] == "done"
 
@@ -1463,7 +1466,10 @@ class _FakeRunService:
         self,
         run_id: str,
         after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
     ) -> AsyncIterator[RunEvent]:
+        _ = stop_on_pause
         for index, event in enumerate(self._events, start=1):
             if index <= after_event_id:
                 continue

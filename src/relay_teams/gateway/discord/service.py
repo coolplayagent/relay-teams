@@ -100,6 +100,8 @@ class _RunEventSource(Protocol):
         self,
         run_id: str,
         after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
     ) -> AsyncIterator["_RunEventRecord"]:
         raise NotImplementedError  # pragma: no cover
 
@@ -851,86 +853,77 @@ class DiscordGatewayService:
         reply_to_message_id: str | None,
     ) -> None:
         try:
-            after_event_id = 0
-            while True:
-                skipped_question_pause = False
-                skip_next_pause_after_user_question = False
-                async for event in self._run_service.stream_run_events(
-                    run_id,
-                    after_event_id=after_event_id,
-                ):
-                    if event.event_type == RunEventType.USER_QUESTION_REQUESTED:
-                        parsed = parse_user_question_event(event.payload_json)
-                        if parsed is None:
-                            continue
-                        question_id, questions = parsed
-                        is_requested = await is_user_question_requested_async(
-                            run_service=self._run_service,
-                            run_id=run_id,
-                            question_id=question_id,
-                        )
-                        if not is_requested:
-                            skip_next_pause_after_user_question = True
-                            continue
-                        text = format_user_question_request(
-                            question_id=question_id,
-                            questions=questions,
-                        )
-                        await self._im_tool_service.send_text_to_discord_channel(
-                            account_id=account_id,
-                            channel_id=channel_id,
-                            text=text,
-                            reply_to_message_id=reply_to_message_id,
-                        )
-                        self._record_pause_notice(
-                            account_id=account_id,
-                            occurred_at=datetime.now(tz=timezone.utc),
-                        )
+            skip_next_pause_after_user_question = False
+            async for event in self._run_service.stream_run_events(
+                run_id,
+                stop_on_pause=False,
+            ):
+                if event.event_type == RunEventType.USER_QUESTION_REQUESTED:
+                    parsed = parse_user_question_event(event.payload_json)
+                    if parsed is None:
+                        continue
+                    question_id, questions = parsed
+                    is_requested = await is_user_question_requested_async(
+                        run_service=self._run_service,
+                        run_id=run_id,
+                        question_id=question_id,
+                    )
+                    if not is_requested:
                         skip_next_pause_after_user_question = True
                         continue
-                    if event.event_type == RunEventType.RUN_PAUSED:
-                        if skip_next_pause_after_user_question:
-                            if event.event_id is not None:
-                                after_event_id = event.event_id
-                            else:
-                                after_event_id = -1
-                            skipped_question_pause = True
-                            break
-                        text = self._paused_text(event)
-                        await self._im_tool_service.send_text_to_discord_channel(
-                            account_id=account_id,
-                            channel_id=channel_id,
-                            text=text,
-                            reply_to_message_id=reply_to_message_id,
-                        )
-                        self._record_pause_notice(
-                            account_id=account_id,
-                            occurred_at=datetime.now(tz=timezone.utc),
-                        )
-                        continue
-                    if event.event_type not in _TERMINAL_EVENT_TYPES:
-                        continue
-                    text = self._terminal_text(event)
+                    text = format_user_question_request(
+                        question_id=question_id,
+                        questions=questions,
+                    )
                     await self._im_tool_service.send_text_to_discord_channel(
                         account_id=account_id,
                         channel_id=channel_id,
                         text=text,
                         reply_to_message_id=reply_to_message_id,
                     )
-                    self._record_reply_success(
+                    self._record_pause_notice(
                         account_id=account_id,
-                        gateway_session_id=gateway_session_id,
-                        run_id=run_id,
-                        channel_id=channel_id,
-                        reply_to_message_id=reply_to_message_id,
                         occurred_at=datetime.now(tz=timezone.utc),
                     )
-                    return
-                if skipped_question_pause:
+                    skip_next_pause_after_user_question = True
                     continue
-                raise RuntimeError(
-                    f"Discord reply watcher ended before a stop event for {run_id}."
+                if event.event_type == RunEventType.RUN_PAUSED:
+                    if skip_next_pause_after_user_question:
+                        skip_next_pause_after_user_question = False
+                        continue
+                    text = self._paused_text(event)
+                    await self._im_tool_service.send_text_to_discord_channel(
+                        account_id=account_id,
+                        channel_id=channel_id,
+                        text=text,
+                        reply_to_message_id=reply_to_message_id,
+                    )
+                    self._record_pause_notice(
+                        account_id=account_id,
+                        occurred_at=datetime.now(tz=timezone.utc),
+                    )
+                    continue
+                if event.event_type not in _TERMINAL_EVENT_TYPES:
+                    continue
+                text = self._terminal_text(event)
+                await self._im_tool_service.send_text_to_discord_channel(
+                    account_id=account_id,
+                    channel_id=channel_id,
+                    text=text,
+                    reply_to_message_id=reply_to_message_id,
                 )
+                self._record_reply_success(
+                    account_id=account_id,
+                    gateway_session_id=gateway_session_id,
+                    run_id=run_id,
+                    channel_id=channel_id,
+                    reply_to_message_id=reply_to_message_id,
+                    occurred_at=datetime.now(tz=timezone.utc),
+                )
+                return
+            raise RuntimeError(
+                f"Discord reply watcher ended before a stop event for {run_id}."
+            )
         except Exception as exc:
             await self._record_reply_failure(
                 account_id=account_id,

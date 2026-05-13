@@ -1671,7 +1671,13 @@ class SessionRunService:
         if cancellation_requested:
             raise asyncio.CancelledError
 
-    async def stream_run_events(self, run_id: str, after_event_id: int = 0):
+    async def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
+    ):
         queue = self._run_event_hub.subscribe(run_id)
         terminal_reached = False
         try:
@@ -1706,11 +1712,10 @@ class SessionRunService:
                     replay_high_watermark = max(replay_high_watermark, row_id)
                     yield replay_event
                     if event_type in (
-                        RunEventType.RUN_PAUSED,
                         RunEventType.RUN_COMPLETED,
                         RunEventType.RUN_FAILED,
                         RunEventType.RUN_STOPPED,
-                    ):
+                    ) or (stop_on_pause and event_type == RunEventType.RUN_PAUSED):
                         terminal_reached = True
                         return
 
@@ -1724,11 +1729,10 @@ class SessionRunService:
                     continue
                 yield event
                 if event.event_type in (
-                    RunEventType.RUN_PAUSED,
                     RunEventType.RUN_COMPLETED,
                     RunEventType.RUN_FAILED,
                     RunEventType.RUN_STOPPED,
-                ):
+                ) or (stop_on_pause and event.event_type == RunEventType.RUN_PAUSED):
                     terminal_reached = True
                     break
         finally:
