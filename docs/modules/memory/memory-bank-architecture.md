@@ -145,7 +145,9 @@ conflicting final states for one draft. Apply releases the claim on skill-write
 failure or cancellation, retries final applied-state persistence, and treats
 source-memory metadata tagging as a best-effort follow-up. Tagging patches only
 metadata keys, so concurrent content, tag, status, and scoring edits are not
-overwritten by draft application.
+overwritten by draft application. Applied timestamps are recorded after the
+skill write completes, and source-memory tag patches use their own current
+patch time for recency ordering.
 
 ## API Surface
 

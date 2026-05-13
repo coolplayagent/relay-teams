@@ -154,6 +154,7 @@ class MemoryEvolutionService:
         except Exception:
             await self._release_apply_claim_async(draft, reason="save failed")
             raise
+        applied_at = datetime.now(tz=timezone.utc)
         applied_ref = saved.ref or runtime_name
         applied = draft.model_copy(
             update={
@@ -163,11 +164,15 @@ class MemoryEvolutionService:
                 "description": description,
                 "instructions": instructions,
                 "applied_skill_ref": applied_ref,
-                "updated_at": now,
-                "applied_at": now,
+                "updated_at": applied_at,
+                "applied_at": applied_at,
             }
         )
-        updated = await self._complete_apply_claim_async(applied)
+        try:
+            updated = await self._complete_apply_claim_async(applied)
+        except asyncio.CancelledError:
+            await self._finalize_apply_claim_after_cancellation_async(applied)
+            raise
         try:
             await self._mark_source_memories_applied_async(updated)
         except (RuntimeError, sqlite3.Error, ValueError):
@@ -249,7 +254,7 @@ class MemoryEvolutionService:
                 workspace_id=draft.workspace_id,
                 metadata_patch=metadata_patch,
                 metadata_limit=_MAX_MEMORY_METADATA_KEYS,
-                updated_at=draft.updated_at,
+                updated_at=datetime.now(tz=timezone.utc),
             )
             if not patched:
                 LOGGER.warning(
@@ -331,6 +336,18 @@ class MemoryEvolutionService:
             return updated
         message = "Memory evolution draft apply persistence did not complete"
         raise RuntimeError(message)
+
+    async def _finalize_apply_claim_after_cancellation_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> None:
+        try:
+            await asyncio.shield(self._complete_apply_claim_async(draft))
+        except (MemoryEvolutionConflictError, RuntimeError, sqlite3.Error, ValueError):
+            LOGGER.exception(
+                "Failed to finalize Memory Bank evolution draft %s after "
+                "apply cancellation",
+                draft.draft_id,
+            )
 
 
 def _default_description(

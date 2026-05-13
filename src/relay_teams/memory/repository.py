@@ -635,6 +635,21 @@ class MemoryBankRepository(SharedSqliteRepository):
             affected = cursor.rowcount
             await cursor.close()
             if affected == 0:
+                row = await async_fetchone(
+                    conn,
+                    "SELECT * FROM memory_evolution_drafts WHERE draft_id=?",
+                    (draft.draft_id,),
+                )
+                if row is None:
+                    return None
+                existing = _row_to_evolution_draft(row)
+                if (
+                    existing.status == MemoryEvolutionStatus.APPLIED
+                    and existing.skill_id == draft.skill_id
+                    and existing.runtime_name == draft.runtime_name
+                    and existing.applied_skill_ref == draft.applied_skill_ref
+                ):
+                    return existing
                 return None
             row = await async_fetchone(
                 conn,

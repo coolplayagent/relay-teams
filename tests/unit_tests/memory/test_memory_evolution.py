@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -712,6 +713,95 @@ class TestMemoryEvolutionService:
         assert applied is not None
         assert applied.status == MemoryEvolutionStatus.APPLIED
 
+    async def test_apply_draft_uses_post_save_applied_timestamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="post-save-time",
+                runtime_name="post-save-time",
+            )
+        )
+        original_save = evolution_service._skill_service.save_skill
+        save_finished_at: datetime | None = None
+
+        def slow_save(
+            skill_id: str, request: ClawHubSkillWriteRequest
+        ) -> ClawHubSkillDetail:
+            nonlocal save_finished_at
+            time.sleep(0.02)
+            saved = original_save(skill_id, request)
+            save_finished_at = datetime.now(tz=timezone.utc)
+            return saved
+
+        monkeypatch.setattr(
+            evolution_service._skill_service,
+            "save_skill",
+            slow_save,
+        )
+
+        applied = await evolution_service.apply_draft_async(
+            "ws-evo",
+            draft.draft_id,
+            ApplyMemoryEvolutionDraftRequest(),
+        )
+
+        assert save_finished_at is not None
+        assert applied is not None
+        assert applied.applied_at is not None
+        assert applied.applied_at >= save_finished_at
+        assert applied.updated_at == applied.applied_at
+
+    async def test_apply_draft_finalizes_claim_when_completion_is_cancelled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="cancelled-complete",
+                runtime_name="cancelled-complete",
+            )
+        )
+        repository = evolution_service._repo
+        original_complete = repository.complete_evolution_draft_apply_async
+        complete_attempts = 0
+
+        async def cancel_first_complete(
+            *, draft: MemoryEvolutionDraft
+        ) -> MemoryEvolutionDraft | None:
+            nonlocal complete_attempts
+            complete_attempts += 1
+            if complete_attempts == 1:
+                raise asyncio.CancelledError
+            return await original_complete(draft=draft)
+
+        monkeypatch.setattr(
+            repository,
+            "complete_evolution_draft_apply_async",
+            cancel_first_complete,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(),
+            )
+
+        reloaded = await evolution_service.get_draft_async("ws-evo", draft.draft_id)
+        assert complete_attempts == 2
+        assert reloaded is not None
+        assert reloaded.status == MemoryEvolutionStatus.APPLIED
+
     async def test_apply_draft_returns_applied_when_source_tagging_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -757,6 +847,60 @@ class TestMemoryEvolutionService:
         assert reloaded.status == MemoryEvolutionStatus.APPLIED
         assert source is not None
         assert "evolution_draft_id" not in source.metadata
+
+    async def test_apply_draft_uses_fresh_source_tag_timestamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="fresh-tag-time",
+                runtime_name="fresh-tag-time",
+            )
+        )
+        repository = evolution_service._repo
+        original_patch = repository.patch_entry_metadata_async
+        patch_times: list[datetime] = []
+
+        async def record_patch_metadata(
+            *,
+            memory_id: str,
+            workspace_id: str,
+            metadata_patch: dict[str, str],
+            metadata_limit: int,
+            updated_at: datetime,
+        ) -> bool:
+            patch_times.append(updated_at)
+            return await original_patch(
+                memory_id=memory_id,
+                workspace_id=workspace_id,
+                metadata_patch=metadata_patch,
+                metadata_limit=metadata_limit,
+                updated_at=updated_at,
+            )
+
+        monkeypatch.setattr(
+            repository,
+            "patch_entry_metadata_async",
+            record_patch_metadata,
+        )
+
+        applied = await evolution_service.apply_draft_async(
+            "ws-evo",
+            draft.draft_id,
+            ApplyMemoryEvolutionDraftRequest(),
+        )
+
+        source = await memory_service.get_entry_async(memory_id)
+        assert applied is not None
+        assert patch_times
+        assert patch_times[0] > applied.updated_at
+        assert source is not None
+        assert source.updated_at == patch_times[0]
 
     async def test_apply_draft_rejects_blank_instructions(self, tmp_path: Path) -> None:
         memory_service, evolution_service, _ = _build_services(tmp_path)
