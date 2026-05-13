@@ -224,12 +224,14 @@ Restore 语义：
 `request changes` 只允许从 `review` 发起：
 
 1. 用户输入 feedback。
-2. 后端渲染 request-changes prompt。
+2. 后端通过 `preview-request-changes` 渲染 request-changes prompt。
 3. 用户编辑并确认 final prompt。
-4. 复用 execution workspace 和 executor runtime target，除非用户显式更换 runtime target。
+4. 复用 bound session 和既有 session topology；当前阶段只允许调整 runtime target、YOLO/Thinking 和 queue 策略，不提供 workspace 切换。
 5. 若并发 slot 可用，在 bound session 中创建新 run。
 6. 若并发 slot 不可用且允许 queue，item 回到 `in_progress`，写入 request changes queue ticket。
 7. run 创建成功后，executor `run_id` 更新为新 run。
+
+当前落地阶段已经包含 queue 分支：确认后的 `request-changes` 如果 slot 可用会立即创建 run；如果并发满且 `queue_if_full=true`，会创建 `board_todo_execution_queue` ticket 并等待 worker 自动 drain。成功或排队时创建 `request_changes` attempt 和 handoff prompt snapshot，并把 `current_attempt_id`/`active_attempt_id` 指向该 attempt；run 创建失败时恢复到 `review`，attempt 标为 `failed`，保留错误摘要和 diagnostic。
 
 Request Changes 发放前必须取消或 supersede 该 TODO 上仍 active 的 AI review queue ticket / review run，避免旧 reviewer 对上一轮 executor attempt 的结论覆盖返工中的 item。上一轮已完成的 `review_state`、`review_decision`、`review_run_id` 归档到 prior attempt metadata，当前 review metadata 清空。进入 queue 时，上一轮已完成 executor run 从 item 当前引用移入 attempt history，item 的 current executor `run_id` 为空，直到新 run 创建成功后再绑定。
 
@@ -312,8 +314,8 @@ Reconcile 不应做外部网络调用，外部网络调用属于 source sync ada
 | queue ticket 获得 slot | claim ticket，准备 execution workspace，创建 session/run，后续由 `RunRuntimeStatus` 驱动展示 |
 | Start 创建 run 失败 | 回到 `todo`，reason `Start failed` |
 | run completed | `in_progress -> review` |
-| run failed | `in_progress -> todo`，清理当前 run |
-| run stopped | `in_progress -> todo`，清理当前 run |
+| run failed | 保持 `in_progress`，保留 session/run refs 并显示失败标签 |
+| run stopped | 保持 `in_progress`，保留 session/run refs 并显示停止/可恢复标签 |
 | run queued/running/paused/stopping | 保持 `in_progress` |
 | run missing | 回到 `todo`，清理 stale refs |
 | request changes 成功 | `review -> in_progress`，新 run id |

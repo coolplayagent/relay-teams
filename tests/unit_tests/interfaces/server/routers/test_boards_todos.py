@@ -15,9 +15,16 @@ from relay_teams.boards import (
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
     BoardTodoDeltaResponse,
+    BoardTodoHandoffTemplate,
+    BoardTodoHandoffTemplateDeleteResponse,
+    BoardTodoHandoffTemplateInput,
+    BoardTodoHandoffTemplateKind,
+    BoardTodoHandoffTemplateSettingsResponse,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
     BoardTodoMarkDoneRequest,
+    BoardTodoPreviewRequestChangesRequest,
+    BoardTodoPreviewRequestChangesResponse,
     BoardTodoPreviewStartRequest,
     BoardTodoPreviewStartResponse,
     BoardTodoService,
@@ -25,6 +32,7 @@ from relay_teams.boards import (
     BoardTodoSourceCreateRequest,
     BoardTodoSourceDeleteResponse,
     BoardTodoSourceKind,
+    BoardTodoTemplateScope,
     BoardTodoStartRequest,
     BoardTodoSourceSettingsResponse,
     BoardTodoSourceUpdateRequest,
@@ -79,18 +87,29 @@ _BOARDS_ROUTER = _load_boards_router_module()
 archive_board_todo = _BOARDS_ROUTER.archive_board_todo
 create_board_todo_source = _BOARDS_ROUTER.create_board_todo_source
 delete_board_todo_source = _BOARDS_ROUTER.delete_board_todo_source
+delete_source_board_todo_handoff_template = (
+    _BOARDS_ROUTER.delete_source_board_todo_handoff_template
+)
 link_board_todo_pull_request = _BOARDS_ROUTER.link_board_todo_pull_request
 mark_board_todo_done = _BOARDS_ROUTER.mark_board_todo_done
+list_board_todo_handoff_templates = _BOARDS_ROUTER.list_board_todo_handoff_templates
 list_board_todo_changes = _BOARDS_ROUTER.list_board_todo_changes
 list_board_todo_sources = _BOARDS_ROUTER.list_board_todo_sources
 list_board_todos = _BOARDS_ROUTER.list_board_todos
 preview_start_board_todo = _BOARDS_ROUTER.preview_start_board_todo
+preview_request_changes_board_todo = _BOARDS_ROUTER.preview_request_changes_board_todo
 request_board_todo_changes = _BOARDS_ROUTER.request_board_todo_changes
 restore_board_todo = _BOARDS_ROUTER.restore_board_todo
 start_board_todo = _BOARDS_ROUTER.start_board_todo
 sync_board_todo_changes = _BOARDS_ROUTER.sync_board_todo_changes
 sync_board_todos = _BOARDS_ROUTER.sync_board_todos
 update_board_todo_source = _BOARDS_ROUTER.update_board_todo_source
+upsert_source_board_todo_handoff_template = (
+    _BOARDS_ROUTER.upsert_source_board_todo_handoff_template
+)
+upsert_workspace_board_todo_handoff_template = (
+    _BOARDS_ROUTER.upsert_workspace_board_todo_handoff_template
+)
 
 
 @pytest.mark.asyncio
@@ -146,9 +165,42 @@ async def test_board_todo_router_delegates_to_service() -> None:
         source_id="bsrc_github",
         service=route_service,
     )
+    templates = await list_board_todo_handoff_templates(
+        service=route_service,
+        workspace_id="workspace",
+    )
+    workspace_template = await upsert_workspace_board_todo_handoff_template(
+        request=BoardTodoHandoffTemplateInput(
+            workspace_id="workspace",
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Template",
+        ),
+        service=route_service,
+    )
+    source_template = await upsert_source_board_todo_handoff_template(
+        source_id="bsrc_github",
+        request=BoardTodoHandoffTemplateInput(
+            workspace_id="workspace",
+            template_kind=BoardTodoHandoffTemplateKind.REQUEST_CHANGES,
+            template="Source template",
+        ),
+        service=route_service,
+    )
+    deleted_template = await delete_source_board_todo_handoff_template(
+        template_id="btemplate_source",
+        service=route_service,
+    )
     preview = await preview_start_board_todo(
         todo_id="todo_1",
         request=BoardTodoPreviewStartRequest(view_workspace_id="workspace"),
+        service=route_service,
+    )
+    request_preview = await preview_request_changes_board_todo(
+        todo_id="todo_1",
+        request=BoardTodoPreviewRequestChangesRequest(
+            view_workspace_id="workspace",
+            feedback="Revise",
+        ),
         service=route_service,
     )
     started = await start_board_todo(
@@ -158,7 +210,11 @@ async def test_board_todo_router_delegates_to_service() -> None:
     )
     requested = await request_board_todo_changes(
         todo_id="todo_1",
-        request=BoardTodoStatusUpdateRequest(feedback="Revise", yolo=True),
+        request=BoardTodoStatusUpdateRequest(
+            feedback="Revise",
+            final_prompt="Edited revise prompt",
+            yolo=True,
+        ),
         service=route_service,
     )
     marked_done = await mark_board_todo_done(
@@ -189,7 +245,12 @@ async def test_board_todo_router_delegates_to_service() -> None:
     assert created_source.repository_full_name == "owner/configured"
     assert updated_source.repository_full_name == "owner/updated"
     assert deleted_source.deleted is True
+    assert templates.board_workspace_id == "workspace"
+    assert workspace_template.scope == BoardTodoTemplateScope.WORKSPACE
+    assert source_template.scope == BoardTodoTemplateScope.SOURCE
+    assert deleted_template.deleted is True
     assert preview.prompt == "Preview prompt"
+    assert request_preview.prompt == "Request changes preview"
     assert started.status == BoardTodoStatus.IN_PROGRESS
     assert requested.last_status_reason == "Changes requested by user"
     assert marked_done.status == BoardTodoStatus.DONE
@@ -205,9 +266,14 @@ async def test_board_todo_router_delegates_to_service() -> None:
         "create_source:workspace:owner/configured",
         "update_source:bsrc_github:owner/updated",
         "delete_source:bsrc_github",
+        "list_handoff_templates:workspace",
+        "upsert_workspace_template:workspace:start",
+        "upsert_source_template:bsrc_github:request_changes",
+        "delete_source_template:btemplate_source",
         "preview_start_todo:todo_1:workspace",
+        "preview_request_changes_todo:todo_1:Revise:workspace",
         "start_todo:todo_1:Process:False",
-        "request_changes:todo_1:Revise:True",
+        "request_changes:todo_1:Revise:Edited revise prompt:True",
         "mark_done:todo_1:Looks good",
         "archive_todo:todo_1:Done elsewhere",
         "restore_todo:todo_1",
@@ -237,6 +303,34 @@ def test_board_todo_router_registers_mark_done_route() -> None:
     ]
 
     assert len(mark_done_routes) == 1
+
+
+def test_board_todo_router_registers_preview_request_changes_route() -> None:
+    preview_routes = [
+        route
+        for route in _BOARDS_ROUTER.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/boards/todos/{todo_id}:preview-request-changes"
+        and "POST" in route.methods
+    ]
+
+    assert len(preview_routes) == 1
+
+
+def test_board_todo_router_registers_handoff_template_routes() -> None:
+    paths = {
+        (route.path, tuple(sorted(route.methods or ())))
+        for route in _BOARDS_ROUTER.router.routes
+        if isinstance(route, APIRoute)
+    }
+
+    assert ("/boards/todo-handoff-templates", ("GET",)) in paths
+    assert ("/boards/todo-handoff-templates/workspace", ("PUT",)) in paths
+    assert ("/boards/todo-handoff-templates/source/{source_id}", ("PUT",)) in paths
+    assert (
+        "/boards/todo-handoff-templates/source/{template_id}",
+        ("DELETE",),
+    ) in paths
 
 
 @pytest.mark.asyncio
@@ -283,10 +377,45 @@ async def test_board_todo_router_maps_service_key_errors() -> None:
             source_id="bsrc_github",
             service=route_service,
         )
+    with pytest.raises(HTTPException) as list_templates_error:
+        await list_board_todo_handoff_templates(
+            service=route_service,
+            workspace_id="workspace",
+        )
+    with pytest.raises(HTTPException) as upsert_workspace_template_error:
+        await upsert_workspace_board_todo_handoff_template(
+            request=BoardTodoHandoffTemplateInput(
+                workspace_id="workspace",
+                template_kind=BoardTodoHandoffTemplateKind.START,
+                template="Template",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as upsert_source_template_error:
+        await upsert_source_board_todo_handoff_template(
+            source_id="bsrc_github",
+            request=BoardTodoHandoffTemplateInput(
+                workspace_id="workspace",
+                template_kind=BoardTodoHandoffTemplateKind.START,
+                template="Template",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as delete_source_template_error:
+        await delete_source_board_todo_handoff_template(
+            template_id="btemplate_source",
+            service=route_service,
+        )
     with pytest.raises(HTTPException) as preview_error:
         await preview_start_board_todo(
             todo_id="todo_1",
             request=BoardTodoPreviewStartRequest(),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as request_preview_error:
+        await preview_request_changes_board_todo(
+            todo_id="todo_1",
+            request=BoardTodoPreviewRequestChangesRequest(feedback="Again"),
             service=route_service,
         )
     with pytest.raises(HTTPException) as start_error:
@@ -330,7 +459,12 @@ async def test_board_todo_router_maps_service_key_errors() -> None:
     assert create_source_error.value.status_code == 404
     assert update_source_error.value.status_code == 404
     assert delete_source_error.value.status_code == 404
+    assert list_templates_error.value.status_code == 404
+    assert upsert_workspace_template_error.value.status_code == 404
+    assert upsert_source_template_error.value.status_code == 404
+    assert delete_source_template_error.value.status_code == 404
     assert preview_error.value.status_code == 404
+    assert request_preview_error.value.status_code == 404
     assert start_error.value.status_code == 404
     assert request_error.value.status_code == 404
     assert mark_done_error.value.status_code == 404
@@ -383,10 +517,45 @@ async def test_board_todo_router_maps_service_value_errors() -> None:
             source_id="bsrc_github",
             service=route_service,
         )
+    with pytest.raises(HTTPException) as list_templates_error:
+        await list_board_todo_handoff_templates(
+            service=route_service,
+            workspace_id="workspace",
+        )
+    with pytest.raises(HTTPException) as upsert_workspace_template_error:
+        await upsert_workspace_board_todo_handoff_template(
+            request=BoardTodoHandoffTemplateInput(
+                workspace_id="workspace",
+                template_kind=BoardTodoHandoffTemplateKind.START,
+                template="Template",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as upsert_source_template_error:
+        await upsert_source_board_todo_handoff_template(
+            source_id="bsrc_github",
+            request=BoardTodoHandoffTemplateInput(
+                workspace_id="workspace",
+                template_kind=BoardTodoHandoffTemplateKind.START,
+                template="Template",
+            ),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as delete_source_template_error:
+        await delete_source_board_todo_handoff_template(
+            template_id="btemplate_source",
+            service=route_service,
+        )
     with pytest.raises(HTTPException) as preview_error:
         await preview_start_board_todo(
             todo_id="todo_1",
             request=BoardTodoPreviewStartRequest(),
+            service=route_service,
+        )
+    with pytest.raises(HTTPException) as request_preview_error:
+        await preview_request_changes_board_todo(
+            todo_id="todo_1",
+            request=BoardTodoPreviewRequestChangesRequest(feedback="Again"),
             service=route_service,
         )
     with pytest.raises(HTTPException) as start_error:
@@ -424,7 +593,12 @@ async def test_board_todo_router_maps_service_value_errors() -> None:
     assert create_source_error.value.status_code == 422
     assert update_source_error.value.status_code == 422
     assert delete_source_error.value.status_code == 409
+    assert list_templates_error.value.status_code == 422
+    assert upsert_workspace_template_error.value.status_code == 422
+    assert upsert_source_template_error.value.status_code == 422
+    assert delete_source_template_error.value.status_code == 409
     assert preview_error.value.status_code == 409
+    assert request_preview_error.value.status_code == 409
     assert start_error.value.status_code == 409
     assert request_error.value.status_code == 409
     assert mark_done_error.value.status_code == 409
@@ -468,6 +642,25 @@ def _source(
         display_name="GitHub",
         enabled=True,
         repository_full_name=repository_full_name,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _template(
+    *,
+    scope: BoardTodoTemplateScope = BoardTodoTemplateScope.WORKSPACE,
+    template_id: str = "btemplate_workspace",
+    source_id: str | None = None,
+    template_kind: BoardTodoHandoffTemplateKind = BoardTodoHandoffTemplateKind.START,
+) -> BoardTodoHandoffTemplate:
+    return BoardTodoHandoffTemplate(
+        template_id=template_id,
+        workspace_id="workspace",
+        scope=scope,
+        source_id=source_id,
+        template_kind=template_kind,
+        template="Template",
         created_at=_NOW,
         updated_at=_NOW,
     )
@@ -583,6 +776,56 @@ class _BoardTodoRouteService:
         self.calls.append(f"delete_source:{source_id}")
         return BoardTodoSourceDeleteResponse(deleted=True, source_id=source_id)
 
+    async def list_handoff_templates(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoHandoffTemplateSettingsResponse:
+        self.calls.append(f"list_handoff_templates:{workspace_id}")
+        return BoardTodoHandoffTemplateSettingsResponse(
+            workspace_id=workspace_id,
+            board_workspace_id=workspace_id,
+            view_workspace_id=workspace_id,
+            templates=(_template(),),
+        )
+
+    async def upsert_workspace_handoff_template(
+        self,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        self.calls.append(
+            f"upsert_workspace_template:{payload.workspace_id}:"
+            f"{payload.template_kind.value}"
+        )
+        return _template(template_kind=payload.template_kind)
+
+    async def upsert_source_handoff_template(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        self.calls.append(
+            f"upsert_source_template:{source_id}:{payload.template_kind.value}"
+        )
+        return _template(
+            scope=BoardTodoTemplateScope.SOURCE,
+            template_id="btemplate_source",
+            source_id=source_id,
+            template_kind=payload.template_kind,
+        )
+
+    async def delete_source_handoff_template(
+        self,
+        *,
+        template_id: str,
+    ) -> BoardTodoHandoffTemplateDeleteResponse:
+        self.calls.append(f"delete_source_template:{template_id}")
+        return BoardTodoHandoffTemplateDeleteResponse(
+            deleted=True,
+            template_id=template_id,
+        )
+
     async def preview_start_todo(
         self,
         *,
@@ -595,6 +838,25 @@ class _BoardTodoRouteService:
             board_workspace_id="workspace",
             view_workspace_id=payload.view_workspace_id or "workspace",
             prompt="Preview prompt",
+        )
+
+    async def preview_request_changes_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewRequestChangesRequest,
+    ) -> BoardTodoPreviewRequestChangesResponse:
+        self.calls.append(
+            "preview_request_changes_todo:"
+            f"{todo_id}:{payload.feedback}:{payload.view_workspace_id}"
+        )
+        return BoardTodoPreviewRequestChangesResponse(
+            todo_id=todo_id,
+            board_workspace_id="workspace",
+            view_workspace_id=payload.view_workspace_id or "workspace",
+            prompt="Request changes preview",
+            session_id="session_1",
+            run_id="run_1",
         )
 
     async def start_todo(
@@ -613,7 +875,8 @@ class _BoardTodoRouteService:
         payload: BoardTodoStatusUpdateRequest,
     ) -> BoardTodoItem:
         self.calls.append(
-            f"request_changes:{todo_id}:{payload.feedback}:{payload.yolo}"
+            "request_changes:"
+            f"{todo_id}:{payload.feedback}:{payload.final_prompt}:{payload.yolo}"
         )
         return _item().model_copy(
             update={"last_status_reason": "Changes requested by user"}
@@ -723,12 +986,48 @@ class _FailingBoardTodoRouteService:
     ) -> BoardTodoSourceDeleteResponse:
         raise self._error
 
+    async def list_handoff_templates(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoHandoffTemplateSettingsResponse:
+        raise self._error
+
+    async def upsert_workspace_handoff_template(
+        self,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        raise self._error
+
+    async def upsert_source_handoff_template(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        raise self._error
+
+    async def delete_source_handoff_template(
+        self,
+        *,
+        template_id: str,
+    ) -> BoardTodoHandoffTemplateDeleteResponse:
+        raise self._error
+
     async def preview_start_todo(
         self,
         *,
         todo_id: str,
         payload: BoardTodoPreviewStartRequest,
     ) -> BoardTodoPreviewStartResponse:
+        raise self._error
+
+    async def preview_request_changes_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewRequestChangesRequest,
+    ) -> BoardTodoPreviewRequestChangesResponse:
         raise self._error
 
     async def start_todo(

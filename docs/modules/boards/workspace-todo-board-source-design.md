@@ -29,7 +29,7 @@ v1 支持一种用户可配置 source：
 
 ## Source 配置入口
 
-TODO 列 header 右上角提供 icon-only 设置按钮，打开 source settings 面板。顶部 toolbar 不再放文字 Sources 按钮，避免把来源设置和全局 board 操作混在一起。
+看板 toolbar 最右侧提供 icon-only 齿轮设置按钮，打开 TODO settings 面板。面板同时承载来源列表、Grouped/Mixed 视图偏好和 Handoff template 设置；TODO 列 header 不再单独放来源设置入口。
 
 设置面板属于解析后的 `board_workspace_id`：
 
@@ -55,6 +55,12 @@ Source 列表显示：
 - 最近同步结果和 diagnostics。
 - source 级 handoff template 是否覆盖。
 - 刷新按钮。
+
+Handoff Templates 区域显示：
+
+- workspace 默认 `start` / `request_changes` 模板。
+- 每个 source 的 `start` / `request_changes` override。
+- source override 删除后回落 workspace default，再回落 built-in template。
 
 GitHub source 编辑表单包含：
 

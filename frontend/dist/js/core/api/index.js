@@ -201,11 +201,14 @@ export {
     archiveBoardTodo,
     createBoardTodoSource,
     deleteBoardTodoSource,
+    deleteSourceBoardTodoHandoffTemplate,
     fetchBoardTodoChanges,
+    fetchBoardTodoHandoffTemplates,
     fetchBoardTodoSources,
     fetchBoardTodos,
     linkBoardTodoPullRequest,
     markBoardTodoDone,
+    previewRequestChangesBoardTodo,
     previewStartBoardTodo,
     requestBoardTodoChanges,
     restoreBoardTodo,
@@ -213,6 +216,8 @@ export {
     syncBoardTodoChanges,
     syncBoardTodos,
     updateBoardTodoSource,
+    upsertSourceBoardTodoHandoffTemplate,
+    upsertWorkspaceBoardTodoHandoffTemplate,
 } from './boardTodos.js';
 
 export {

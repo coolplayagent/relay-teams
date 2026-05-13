@@ -8,7 +8,6 @@ import {
     fetchBoardTodos,
     linkBoardTodoPullRequest,
     markBoardTodoDone,
-    requestBoardTodoChanges,
     restoreBoardTodo,
     syncBoardTodoChanges,
     syncBoardTodos,
@@ -18,7 +17,7 @@ import { state } from '../../core/state.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { showConfirmDialog, showFormDialog, showToast } from '../../utils/feedback.js';
 import { escapeHtml } from '../newSessionDraftIcons.js';
-import { reviewAndStartBoardTodo } from './todoHandoff.js';
+import { reviewAndRequestChangesBoardTodo, reviewAndStartBoardTodo } from './todoHandoff.js';
 import { openBoardTodoSourceSettings } from './todoSourceSettings.js';
 
 const ROOT_ID = 'board-todo-root';
@@ -953,6 +952,9 @@ async function handleStart(todoId) {
 }
 
 function renderRuntimeBadge(item) {
+    if (String(item?.status || '') === 'in_progress' && String(item?.queue_ticket_id || '').trim()) {
+        return `<span class="board-todos-run-badge is-queued">${escapeHtml(t('board_todos.run.queued'))}</span>`;
+    }
     const status = String(item?.run_status || '').trim().toLowerCase();
     if (!status || String(item?.status || '') !== 'in_progress') {
         return '';
@@ -1005,7 +1007,14 @@ async function handleRequestChanges(todoId) {
     if (!values?.feedback) {
         return;
     }
-    const item = await requestBoardTodoChanges(todoId, { feedback: values.feedback });
+    const item = await reviewAndRequestChangesBoardTodo({
+        todoId,
+        workspaceId: selectedWorkspaceId,
+        feedback: values.feedback,
+    });
+    if (!item) {
+        return;
+    }
     applyReturnedItem(item);
     void refreshCurrentDelta();
 }

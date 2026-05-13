@@ -107,6 +107,50 @@ export async function deleteBoardTodoSource(sourceId) {
     );
 }
 
+export async function fetchBoardTodoHandoffTemplates({ workspaceId } = {}) {
+    const query = new URLSearchParams();
+    query.set('workspace_id', String(workspaceId || '').trim());
+    return requestJson(
+        `/api/boards/todo-handoff-templates?${query.toString()}`,
+        {},
+        'Failed to fetch board TODO handoff templates',
+    );
+}
+
+export async function upsertWorkspaceBoardTodoHandoffTemplate(payload = {}) {
+    return requestJson(
+        '/api/boards/todo-handoff-templates/workspace',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save board TODO handoff template',
+    );
+}
+
+export async function upsertSourceBoardTodoHandoffTemplate(sourceId, payload = {}) {
+    return requestJson(
+        `/api/boards/todo-handoff-templates/source/${encodeURIComponent(sourceId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to save board TODO source handoff template',
+    );
+}
+
+export async function deleteSourceBoardTodoHandoffTemplate(templateId) {
+    return requestJson(
+        `/api/boards/todo-handoff-templates/source/${encodeURIComponent(templateId)}`,
+        {
+            method: 'DELETE',
+        },
+        'Failed to delete board TODO source handoff template',
+    );
+}
+
 export async function previewStartBoardTodo(todoId, payload = {}) {
     return requestJson(
         `/api/boards/todos/${encodeURIComponent(todoId)}:preview-start`,
@@ -128,6 +172,18 @@ export async function startBoardTodo(todoId, payload = {}) {
             body: JSON.stringify(payload),
         },
         'Failed to start board TODO',
+    );
+}
+
+export async function previewRequestChangesBoardTodo(todoId, payload = {}) {
+    return requestJson(
+        `/api/boards/todos/${encodeURIComponent(todoId)}:preview-request-changes`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to preview board TODO request changes prompt',
     );
 }
 

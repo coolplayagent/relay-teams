@@ -15,7 +15,10 @@ def test_board_todo_start_flow_previews_prompt_before_start() -> None:
     )
 
     assert "previewStartBoardTodo" in handoff
-    assert "startBoardTodo(todoId, values)" in handoff
+    assert "startBoardTodo(todoId, payload)" in handoff
+    assert "previewRequestChangesBoardTodo" in handoff
+    assert "requestBoardTodoChanges(todoId, payload)" in handoff
+    assert "reviewAndRequestChangesBoardTodo" in handoff
     assert "final_prompt" in handoff
     assert "fetchRoleConfigOptions" in handoff
     assert "fetchOrchestrationConfig" in handoff
@@ -52,7 +55,12 @@ def test_board_todo_start_flow_previews_prompt_before_start() -> None:
     assert "explicitNormalRoleId !== defaultNormalRoleId" in normalize_start
     assert "normal_root_role_id" in handoff
     assert "orchestration_preset_id" in handoff
+    assert "selectedRuntimeTargetId" in handoff
+    assert "`role:${selectedNormalRole}`" in handoff
+    assert "`preset:${selectedPreset}`" in handoff
     assert "thinking" in handoff
+    assert "function normalizeRequestChangesPayload" in handoff
+    assert "feedback" in handoff
     assert ".board-todo-start-composer .input-wrapper" in styles
     assert ".board-todo-start-composer .composer-actions" in styles
     assert ".board-todo-start-composer .input-controls" in styles
@@ -61,10 +69,15 @@ def test_board_todo_start_flow_previews_prompt_before_start() -> None:
     assert "padding: 22px 420px 64px 22px" not in styles
     assert "padding: 22px 22px 76px" in styles
     assert handoff.index("previewStartBoardTodo") < handoff.index(
-        "startBoardTodo(todoId, values)"
+        "startBoardTodo(todoId, payload)"
+    )
+    assert handoff.index("previewRequestChangesBoardTodo") < handoff.index(
+        "requestBoardTodoChanges(todoId, payload)"
     )
     assert "reviewAndStartBoardTodo" in board
+    assert "reviewAndRequestChangesBoardTodo" in board
     assert "startBoardTodo" not in board
+    assert "requestBoardTodoChanges" not in board
 
 
 def test_board_todo_source_settings_are_split_from_board_renderer() -> None:
@@ -87,6 +100,11 @@ def test_board_todo_source_settings_are_split_from_board_renderer() -> None:
     assert "board-todo-settings-view-toggle" in settings
     assert "board-todo-settings-view-row" in settings
     assert "board-todo-source-inline-action" in settings
+    assert "board_todos.sources.list_title" in settings
+    assert "board-todo-source-list-section" in settings
+    assert "board-todo-template-source-head" in settings
+    assert 'role="table"' in settings
+    assert "board_todos.templates.source_overrides" in settings
     assert "showSourceMutationError" in settings
     assert "state.error = message" in settings
     assert "profile-card-action-btn" not in settings
@@ -106,6 +124,39 @@ def test_board_todo_source_settings_are_split_from_board_renderer() -> None:
     assert "createBoardTodo(" not in api
     assert "/api/boards/todo-sources" in api
     assert ":preview-start" in api
+
+
+def test_board_todo_settings_modal_lists_have_clear_visual_structure() -> None:
+    settings = Path(
+        "frontend/dist/js/components/boards/todoSourceSettings.js"
+    ).read_text(encoding="utf-8")
+    styles = Path("frontend/dist/css/components/board-todos.css").read_text(
+        encoding="utf-8"
+    )
+    i18n = Path("frontend/dist/js/utils/i18n.js").read_text(encoding="utf-8")
+
+    assert "board-todo-source-settings-close" in settings
+    assert "renderCloseIcon" in settings
+    assert "board-todo-source-provider" in settings
+    assert "board-todo-source-title-row" in settings
+    assert "board-todo-source-actions" in settings
+    assert "board-todo-template-source-head" in settings
+    assert "board-todo-template-source-cell" in settings
+    assert "'board_todos.sources.list_title': 'TODO source list'" in i18n
+    assert "'board_todos.sources.list_title': 'TODO 来源列表'" in i18n
+    assert (
+        "'board_todos.templates.source_overrides': 'Source template overrides'" in i18n
+    )
+    assert "'board_todos.templates.source_overrides': '来源模板覆盖列表'" in i18n
+    assert ".board-todo-source-settings-modal" in styles
+    assert "width: min(960px, calc(100vw - 48px));" in styles
+    assert ".board-todo-source-record {" in styles
+    assert "grid-template-columns: auto minmax(0, 1fr) auto;" in styles
+    assert ".board-todo-template-source-head" in styles
+    assert (
+        "grid-template-columns: minmax(180px, 1.5fr) minmax(130px, 1fr) minmax(160px, 1fr);"
+        in styles
+    )
 
 
 def test_board_todo_in_process_cards_render_runtime_badges() -> None:

@@ -10,9 +10,15 @@ from relay_teams.boards import (
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
     BoardTodoDeltaResponse,
+    BoardTodoHandoffTemplate,
+    BoardTodoHandoffTemplateDeleteResponse,
+    BoardTodoHandoffTemplateInput,
+    BoardTodoHandoffTemplateSettingsResponse,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
     BoardTodoMarkDoneRequest,
+    BoardTodoPreviewRequestChangesRequest,
+    BoardTodoPreviewRequestChangesResponse,
     BoardTodoPreviewStartRequest,
     BoardTodoPreviewStartResponse,
     BoardTodoService,
@@ -204,6 +210,62 @@ async def delete_board_todo_source(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+# GET /api/boards/todo-handoff-templates
+async def list_board_todo_handoff_templates(
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+    workspace_id: str = Query(min_length=1),
+) -> BoardTodoHandoffTemplateSettingsResponse:
+    try:
+        return await service.list_handoff_templates(workspace_id=workspace_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# PUT /api/boards/todo-handoff-templates/workspace
+async def upsert_workspace_board_todo_handoff_template(
+    request: BoardTodoHandoffTemplateInput,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoHandoffTemplate:
+    try:
+        return await service.upsert_workspace_handoff_template(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# PUT /api/boards/todo-handoff-templates/source/{source_id}
+async def upsert_source_board_todo_handoff_template(
+    source_id: str,
+    request: BoardTodoHandoffTemplateInput,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoHandoffTemplate:
+    try:
+        return await service.upsert_source_handoff_template(
+            source_id=source_id,
+            payload=request,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# DELETE /api/boards/todo-handoff-templates/source/{template_id}
+async def delete_source_board_todo_handoff_template(
+    template_id: str,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoHandoffTemplateDeleteResponse:
+    try:
+        return await service.delete_source_handoff_template(template_id=template_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 # POST /api/boards/todos/{todo_id}:preview-start
 async def preview_start_board_todo(
     todo_id: str,
@@ -226,6 +288,23 @@ async def start_board_todo(
 ) -> BoardTodoItem:
     try:
         return await service.start_todo(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:preview-request-changes
+async def preview_request_changes_board_todo(
+    todo_id: str,
+    request: BoardTodoPreviewRequestChangesRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoPreviewRequestChangesResponse:
+    try:
+        return await service.preview_request_changes_todo(
+            todo_id=todo_id,
+            payload=request,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -400,6 +479,30 @@ router.add_api_route(
     response_model=BoardTodoSourceDeleteResponse,
 )
 router.add_api_route(
+    "/todo-handoff-templates",
+    list_board_todo_handoff_templates,
+    methods=["GET"],
+    response_model=BoardTodoHandoffTemplateSettingsResponse,
+)
+router.add_api_route(
+    "/todo-handoff-templates/workspace",
+    upsert_workspace_board_todo_handoff_template,
+    methods=["PUT"],
+    response_model=BoardTodoHandoffTemplate,
+)
+router.add_api_route(
+    "/todo-handoff-templates/source/{source_id}",
+    upsert_source_board_todo_handoff_template,
+    methods=["PUT"],
+    response_model=BoardTodoHandoffTemplate,
+)
+router.add_api_route(
+    "/todo-handoff-templates/source/{template_id}",
+    delete_source_board_todo_handoff_template,
+    methods=["DELETE"],
+    response_model=BoardTodoHandoffTemplateDeleteResponse,
+)
+router.add_api_route(
     "/todos/{todo_id}:preview-start",
     preview_start_board_todo,
     methods=["POST"],
@@ -410,6 +513,12 @@ router.add_api_route(
     start_board_todo,
     methods=["POST"],
     response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:preview-request-changes",
+    preview_request_changes_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoPreviewRequestChangesResponse,
 )
 router.add_api_route(
     "/todos/{todo_id}:request-changes",

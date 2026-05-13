@@ -42,6 +42,52 @@ class BoardTodoSyncStatus(str, Enum):
     FAILED = "failed"
 
 
+class BoardTodoAttemptType(str, Enum):
+    START = "start"
+    REQUEST_CHANGES = "request_changes"
+
+
+class BoardTodoAttemptStatus(str, Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class BoardTodoExecutionPolicy(str, Enum):
+    FORK_GIT_WORKTREE = "fork_git_worktree"
+    CURRENT_WORKSPACE = "current_workspace"
+
+
+class BoardTodoRuntimeTargetKind(str, Enum):
+    LOCAL_ROLE = "local_role"
+    ORCHESTRATION_PRESET = "orchestration_preset"
+
+
+class BoardTodoQueueKind(str, Enum):
+    START = "start"
+    REQUEST_CHANGES = "request_changes"
+
+
+class BoardTodoQueueStatus(str, Enum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class BoardTodoTemplateScope(str, Enum):
+    WORKSPACE = "workspace"
+    SOURCE = "source"
+
+
+class BoardTodoHandoffTemplateKind(str, Enum):
+    START = "start"
+    REQUEST_CHANGES = "request_changes"
+
+
 class BoardTodoStatusCounts(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -81,6 +127,13 @@ class BoardTodoItem(BaseModel):
     html_url: str | None = None
     session_id: OptionalIdentifierStr = None
     run_id: OptionalIdentifierStr = None
+    current_attempt_id: OptionalIdentifierStr = None
+    active_attempt_id: OptionalIdentifierStr = None
+    execution_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_kind: BoardTodoRuntimeTargetKind | None = None
+    runtime_target_id: str | None = None
+    queue_ticket_id: OptionalIdentifierStr = None
     run_status: str | None = None
     run_phase: str | None = None
     run_recoverable: bool = False
@@ -174,6 +227,9 @@ class BoardTodoStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     view_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_id: str | None = None
+    queue_if_full: bool = True
     final_prompt: str | None = None
     prompt: str | None = None
     session_mode: SessionMode | None = None
@@ -187,6 +243,9 @@ class BoardTodoPreviewStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     view_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_id: str | None = None
+    queue_if_full: bool = True
 
 
 class BoardTodoStartRoleOption(BaseModel):
@@ -205,6 +264,42 @@ class BoardTodoStartPresetOption(BaseModel):
     description: str = ""
 
 
+class BoardTodoRuntimeTargetOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_id: str = Field(min_length=1)
+    kind: BoardTodoRuntimeTargetKind
+    label: str = Field(min_length=1)
+    description: str = ""
+
+
+class BoardTodoExecutionWorkspacePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy: BoardTodoExecutionPolicy
+    workspace_id: OptionalIdentifierStr = None
+    source_workspace_id: RequiredIdentifierStr
+    display_name: str = Field(min_length=1)
+
+
+class BoardTodoConcurrencySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_workspace_active: int = Field(default=0, ge=0)
+    source_workspace_limit: int = Field(default=2, ge=1)
+    runtime_target_active: int = Field(default=0, ge=0)
+    runtime_target_limit: int = Field(default=1, ge=1)
+
+
+class BoardTodoQueuePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queue_if_full: bool = True
+    slot_available: bool = True
+    will_queue: bool = False
+    reason: str | None = None
+
+
 class BoardTodoPreviewStartResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -216,6 +311,16 @@ class BoardTodoPreviewStartResponse(BaseModel):
     template_kind: str = "start"
     template_source: str = "built_in"
     prompt: str
+    execution_policy: BoardTodoExecutionPolicy = (
+        BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+    )
+    execution_workspace_preview: BoardTodoExecutionWorkspacePreview | None = None
+    runtime_target_id: str | None = None
+    runtime_target_options: tuple[BoardTodoRuntimeTargetOption, ...] = ()
+    concurrency: BoardTodoConcurrencySnapshot = Field(
+        default_factory=BoardTodoConcurrencySnapshot
+    )
+    queue_preview: BoardTodoQueuePreview = Field(default_factory=BoardTodoQueuePreview)
     session_mode: SessionMode | None = None
     normal_root_role_id: OptionalIdentifierStr = None
     normal_mode_roles: tuple[BoardTodoStartRoleOption, ...] = ()
@@ -226,11 +331,191 @@ class BoardTodoPreviewStartResponse(BaseModel):
     diagnostics: tuple[str, ...] = ()
 
 
+class BoardTodoPreviewRequestChangesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    view_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_id: str | None = None
+    queue_if_full: bool = True
+    feedback: str = Field(min_length=1)
+
+
+class BoardTodoPreviewRequestChangesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    todo_id: RequiredIdentifierStr
+    board_workspace_id: RequiredIdentifierStr
+    view_workspace_id: RequiredIdentifierStr
+    is_fork_view: bool = False
+    forked_from_workspace_id: OptionalIdentifierStr = None
+    template_kind: str = "request_changes"
+    template_source: str = "built_in"
+    prompt: str
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    execution_workspace_preview: BoardTodoExecutionWorkspacePreview | None = None
+    runtime_target_id: str | None = None
+    runtime_target_options: tuple[BoardTodoRuntimeTargetOption, ...] = ()
+    concurrency: BoardTodoConcurrencySnapshot = Field(
+        default_factory=BoardTodoConcurrencySnapshot
+    )
+    queue_preview: BoardTodoQueuePreview = Field(default_factory=BoardTodoQueuePreview)
+    session_id: OptionalIdentifierStr = None
+    run_id: OptionalIdentifierStr = None
+    yolo: bool = True
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    diagnostics: tuple[str, ...] = ()
+
+
 class BoardTodoStatusUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    view_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_id: str | None = None
+    queue_if_full: bool = True
     feedback: str = Field(min_length=1)
+    final_prompt: str | None = None
+    prompt: str | None = None
     yolo: bool = True
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+
+
+class BoardTodoHandoffPrompt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_ref: RequiredIdentifierStr
+    todo_id: RequiredIdentifierStr
+    attempt_id: RequiredIdentifierStr
+    template_kind: str = Field(min_length=1)
+    template_source: str = Field(min_length=1)
+    final_prompt_snapshot: str = Field(min_length=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+class BoardTodoAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: RequiredIdentifierStr
+    todo_id: RequiredIdentifierStr
+    attempt_type: BoardTodoAttemptType
+    status: BoardTodoAttemptStatus = BoardTodoAttemptStatus.PENDING
+    board_workspace_id: OptionalIdentifierStr = None
+    initiated_from_workspace_id: OptionalIdentifierStr = None
+    source_workspace_id: OptionalIdentifierStr = None
+    execution_workspace_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy | None = None
+    runtime_target_kind: BoardTodoRuntimeTargetKind | None = None
+    runtime_target_id: str | None = None
+    queue_ticket_id: OptionalIdentifierStr = None
+    handoff_initiator: str = "human"
+    start_policy: str = "human_required"
+    yolo: bool = True
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    session_id: OptionalIdentifierStr = None
+    run_id: OptionalIdentifierStr = None
+    prompt_ref: OptionalIdentifierStr = None
+    summary: str | None = None
+    error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class BoardTodoExecutionQueueTicket(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queue_ticket_id: RequiredIdentifierStr
+    todo_id: RequiredIdentifierStr
+    attempt_id: RequiredIdentifierStr
+    prompt_ref: RequiredIdentifierStr
+    queue_kind: BoardTodoQueueKind
+    status: BoardTodoQueueStatus = BoardTodoQueueStatus.PENDING
+    board_workspace_id: RequiredIdentifierStr
+    source_workspace_id: RequiredIdentifierStr
+    initiated_from_workspace_id: OptionalIdentifierStr = None
+    execution_workspace_id: OptionalIdentifierStr = None
+    previous_run_id: OptionalIdentifierStr = None
+    execution_policy: BoardTodoExecutionPolicy = (
+        BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+    )
+    runtime_target_kind: BoardTodoRuntimeTargetKind | None = None
+    runtime_target_id: str | None = None
+    session_mode: SessionMode | None = None
+    normal_root_role_id: OptionalIdentifierStr = None
+    orchestration_preset_id: OptionalIdentifierStr = None
+    yolo: bool = True
+    thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
+    claim_token: str | None = None
+    claim_expires_at: datetime | None = None
+    claimed_by: str | None = None
+    failure_count: int = Field(default=0, ge=0)
+    diagnostics: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
+class BoardTodoHandoffTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: RequiredIdentifierStr
+    workspace_id: RequiredIdentifierStr
+    scope: BoardTodoTemplateScope
+    template_kind: BoardTodoHandoffTemplateKind
+    template: str = Field(min_length=1)
+    source_id: OptionalIdentifierStr = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @model_validator(mode="after")
+    def _validate_template_scope(self) -> BoardTodoHandoffTemplate:
+        if self.scope == BoardTodoTemplateScope.SOURCE and self.source_id is None:
+            raise ValueError("source handoff templates require source_id")
+        if (
+            self.scope == BoardTodoTemplateScope.WORKSPACE
+            and self.source_id is not None
+        ):
+            raise ValueError("workspace handoff templates cannot include source_id")
+        return self
+
+
+class BoardTodoHandoffTemplateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: RequiredIdentifierStr
+    template_kind: BoardTodoHandoffTemplateKind
+    template: str = Field(min_length=1)
+
+
+class BoardTodoHandoffTemplateSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: RequiredIdentifierStr
+    board_workspace_id: RequiredIdentifierStr
+    view_workspace_id: RequiredIdentifierStr
+    is_fork_view: bool = False
+    forked_from_workspace_id: OptionalIdentifierStr = None
+    templates: tuple[BoardTodoHandoffTemplate, ...] = ()
+
+
+class BoardTodoHandoffTemplateDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: bool = True
+    template_id: RequiredIdentifierStr
+
+
+class BoardTodoDiagnostic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    diagnostic_id: RequiredIdentifierStr
+    todo_id: RequiredIdentifierStr
+    workspace_id: RequiredIdentifierStr
+    kind: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    attempt_id: OptionalIdentifierStr = None
+    queue_ticket_id: OptionalIdentifierStr = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
 
 class BoardTodoMarkDoneRequest(BaseModel):

@@ -903,13 +903,17 @@
 .board-todo-start-modal {
     background: #ffffff;
     border: 1px solid rgba(15, 23, 42, 0.12);
-    border-radius: 8px;
-    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
     display: grid;
     grid-template-rows: auto minmax(0, 1fr) auto;
     max-height: calc(100dvh - 48px);
     overflow: hidden;
     width: min(760px, calc(100vw - 48px));
+}
+
+.board-todo-source-settings-modal {
+    width: min(960px, calc(100vw - 48px));
 }
 
 .board-todo-start-modal {
@@ -927,10 +931,14 @@
     padding: 16px 18px;
 }
 
+.board-todo-source-settings-header {
+    padding: 22px 28px;
+}
+
 .board-todo-source-settings-header h3,
 .board-todo-start-header h3 {
     color: #111827;
-    font-size: 16px;
+    font-size: 18px;
     line-height: 1.3;
     margin: 0;
 }
@@ -950,12 +958,23 @@
     padding: 16px 18px 18px;
 }
 
+.board-todo-source-settings-body {
+    display: grid;
+    gap: 18px;
+    padding: 22px 28px;
+}
+
 .board-todo-settings-section {
     border-bottom: 1px solid rgba(15, 23, 42, 0.1);
     display: grid;
     gap: 10px;
-    margin: 0 0 14px;
-    padding: 0 0 14px;
+    margin: 0;
+    padding: 0 0 18px;
+}
+
+.board-todo-settings-section:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
 }
 
 .board-todo-settings-view-row {
@@ -968,9 +987,22 @@
 .board-todo-settings-section-title,
 .board-todo-settings-section-head h4 {
     color: #111827;
-    font-size: 13px;
+    font-size: 15px;
     line-height: 1.3;
     margin: 0;
+}
+
+.board-todo-settings-section-head {
+    align-items: end;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.board-todo-settings-section-head span {
+    color: #64748b;
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 .board-todo-settings-view-toggle {
@@ -1004,18 +1036,119 @@
     display: flex;
     gap: 8px;
     justify-content: flex-end;
-    padding: 12px 18px;
+    padding: 16px 28px;
 }
 
 .board-todo-source-records {
-    border-top: 1px solid rgba(15, 23, 42, 0.1);
+    display: grid;
+    gap: 10px;
 }
 
 .board-todo-source-record {
     animation: none;
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 8px;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 16px 18px;
 }
 
-.board-todo-source-record .profile-card-actions {
+.board-todo-source-provider {
+    align-items: center;
+    background: #f8fafc;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 8px;
+    display: flex;
+    height: 40px;
+    justify-content: center;
+    width: 40px;
+}
+
+.board-todo-source-provider img {
+    display: block;
+    height: 22px;
+    width: 22px;
+}
+
+.board-todo-source-main {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+.board-todo-source-title-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+}
+
+.board-todo-source-title-row h4 {
+    color: #111827;
+    font-size: 16px;
+    line-height: 1.25;
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.board-todo-source-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.board-todo-source-chip {
+    align-items: center;
+    background: #f8fafc;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 5px;
+    color: #475569;
+    display: inline-flex;
+    font-size: 11px;
+    font-weight: 650;
+    height: 22px;
+    line-height: 1;
+    padding: 0 7px;
+}
+
+.board-todo-source-chip.is-enabled {
+    background: #ecfdf3;
+    border-color: #b7e4c7;
+    color: #166534;
+}
+
+.board-todo-source-chip.is-disabled {
+    background: #f8fafc;
+    color: #64748b;
+}
+
+.board-todo-source-repo,
+.board-todo-source-sync {
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.35;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.board-todo-source-sync {
+    color: #64748b;
+}
+
+.board-todo-source-sync-separator {
+    color: #94a3b8;
+    padding: 0 4px;
+}
+
+.board-todo-source-actions {
     align-items: center;
     display: flex;
     flex-wrap: wrap;
@@ -1058,6 +1191,46 @@
 
 .board-todo-source-empty {
     min-height: 160px;
+}
+
+.board-todo-source-settings-close {
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 8px;
+    color: #475569;
+    cursor: pointer;
+    display: inline-flex;
+    height: 34px;
+    justify-content: center;
+    padding: 0;
+    width: 34px;
+}
+
+.board-todo-source-settings-close:hover {
+    background: #f8fafc;
+    color: #111827;
+}
+
+.board-todo-source-settings-close:focus-visible {
+    outline: 2px solid rgba(37, 99, 235, 0.22);
+    outline-offset: 2px;
+}
+
+.board-todo-source-settings-close svg {
+    height: 16px;
+    width: 16px;
+}
+
+.board-todo-handoff-error {
+    background: rgba(185, 28, 28, 0.08);
+    border: 1px solid rgba(185, 28, 28, 0.18);
+    border-radius: 6px;
+    color: #991b1b;
+    font-size: 12px;
+    line-height: 1.4;
+    margin: 0 0 10px;
+    padding: 8px 10px;
 }
 
 .board-todo-start-composer.input-container {
@@ -1170,6 +1343,107 @@
     padding: 0;
     white-space: nowrap;
     width: 100%;
+}
+
+.board-todo-handoff-execution {
+    align-items: center;
+    border-top: 1px solid #e7ebef;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    margin-top: 12px;
+    padding-top: 12px;
+}
+
+.board-todo-handoff-execution .composer-preset-field {
+    min-width: 190px;
+}
+
+.board-todo-handoff-queue-toggle {
+    margin-left: auto;
+}
+
+.board-todo-handoff-meta {
+    color: #64748b;
+    display: flex;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    font-size: 12px;
+    gap: 8px 14px;
+}
+
+.board-todo-handoff-diagnostics {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.18);
+    border-radius: 6px;
+    color: #92400e;
+    flex-basis: 100%;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 8px 10px;
+}
+
+.board-todo-template-actions,
+.board-todo-template-source-list {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.board-todo-template-source-list {
+    align-items: stretch;
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 8px;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 10px;
+    overflow: hidden;
+}
+
+.board-todo-template-source-head,
+.board-todo-template-source-row {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(180px, 1.5fr) minmax(130px, 1fr) minmax(160px, 1fr);
+}
+
+.board-todo-template-source-head {
+    background: #f8fafc;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+    color: #475569;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1.2;
+    padding: 10px 14px;
+}
+
+.board-todo-template-source-row {
+    align-items: center;
+    background: #ffffff;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+    padding: 12px 14px;
+}
+
+.board-todo-template-source-row:last-child {
+    border-bottom: 0;
+}
+
+.board-todo-template-source-name {
+    color: #334155;
+    font-size: 13px;
+    font-weight: 650;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.board-todo-template-source-cell {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .board-todo-start-composer .composer-topology {
@@ -1404,6 +1678,7 @@ body:not(.light-theme) .board-todos-toggle,
 body:not(.light-theme) .board-todos-view-toggle,
 body:not(.light-theme) .board-todos-view-toggle button.is-active,
 body:not(.light-theme) .board-todos-column-icon-btn,
+body:not(.light-theme) .board-todo-source-settings-close,
 body:not(.light-theme) .board-todos-card-quick-actions button,
 body:not(.light-theme) .board-todos-icon-link,
 body:not(.light-theme) .board-todos-card-actions button,
@@ -1424,7 +1699,8 @@ body:not(.light-theme) .board-todo-start-composer .composer-mode-inline-select {
 body:not(.light-theme) .board-todos-workspace:hover,
 body:not(.light-theme) .board-todos-tool-btn:hover,
 body:not(.light-theme) .board-todos-toolbar-icon-btn:hover,
-body:not(.light-theme) .board-todos-toggle:hover {
+body:not(.light-theme) .board-todos-toggle:hover,
+body:not(.light-theme) .board-todo-source-settings-close:hover {
     background: var(--settings-row-hover-bg);
     border-color: var(--button-secondary-border);
 }
@@ -1469,11 +1745,20 @@ body:not(.light-theme) .board-todos-column.is-archived {
 
 body:not(.light-theme) .board-todos-card,
 body:not(.light-theme) .board-todos-skeleton-card,
+body:not(.light-theme) .board-todo-source-record,
+body:not(.light-theme) .board-todo-template-source-row,
 body:not(.light-theme) .board-todos-detail-body dl div,
 body:not(.light-theme) .board-todos-state {
     background: var(--bg-surface-muted);
     border-color: var(--border-color);
     box-shadow: none;
+}
+
+body:not(.light-theme) .board-todo-source-provider,
+body:not(.light-theme) .board-todo-source-chip,
+body:not(.light-theme) .board-todo-template-source-head {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
 }
 
 body:not(.light-theme) .board-todos-diagnostics span {
@@ -1493,7 +1778,8 @@ body:not(.light-theme) .board-todo-source-settings-footer,
 body:not(.light-theme) .board-todo-start-composer.input-container,
 body:not(.light-theme) .board-todo-start-composer .input-wrapper,
 body:not(.light-theme) .board-todos-source-group + .board-todos-source-group,
-body:not(.light-theme) .board-todo-source-records {
+body:not(.light-theme) .board-todo-settings-section,
+body:not(.light-theme) .board-todo-template-source-list {
     border-color: var(--border-color);
 }
 
@@ -1505,7 +1791,9 @@ body:not(.light-theme) .board-todo-start-composer .composer-mode-toggle,
 body:not(.light-theme) .board-todo-start-composer .composer-mode-title,
 body:not(.light-theme) .board-todos-view-toggle button.is-active,
 body:not(.light-theme) .board-todos-source-group-head > button:first-child,
-body:not(.light-theme) .board-todo-settings-section-title {
+body:not(.light-theme) .board-todo-settings-section-title,
+body:not(.light-theme) .board-todo-settings-section-head h4,
+body:not(.light-theme) .board-todo-source-title-row h4 {
     color: var(--text-primary);
 }
 
@@ -1538,9 +1826,26 @@ body:not(.light-theme) .board-todo-source-settings-status,
 body:not(.light-theme) .board-todo-start-composer .composer-topology-label,
 body:not(.light-theme) .board-todo-start-composer .composer-preset-label,
 body:not(.light-theme) .board-todo-start-composer .composer-mode-inline-label,
+body:not(.light-theme) .board-todo-settings-section-head span,
+body:not(.light-theme) .board-todo-source-repo,
+body:not(.light-theme) .board-todo-source-sync,
+body:not(.light-theme) .board-todo-template-source-head,
+body:not(.light-theme) .board-todo-template-source-name,
 body:not(.light-theme) .board-todos-source-group-head > button:first-child span:last-child,
 body:not(.light-theme) .board-todos-source-group-chevron {
     color: var(--text-secondary);
+}
+
+body:not(.light-theme) .board-todo-source-chip.is-enabled {
+    background: rgba(34, 197, 94, 0.14);
+    border-color: rgba(34, 197, 94, 0.28);
+    color: #86efac;
+}
+
+body:not(.light-theme) .board-todo-handoff-error {
+    background: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.22);
+    color: #fecaca;
 }
 
 body:not(.light-theme) .board-todos-run-badge {
@@ -1744,6 +2049,38 @@ body:not(.light-theme) .board-todos-skeleton-card em {
         height: calc(100dvh - 20px);
         max-height: calc(100dvh - 20px);
         width: 100%;
+    }
+
+    .board-todo-source-settings-header,
+    .board-todo-source-settings-body,
+    .board-todo-source-settings-footer {
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+
+    .board-todo-settings-section-head,
+    .board-todo-settings-view-row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .board-todo-settings-view-toggle {
+        width: 100%;
+    }
+
+    .board-todo-source-record {
+        align-items: start;
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .board-todo-source-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
+
+    .board-todo-template-source-head,
+    .board-todo-template-source-row {
+        grid-template-columns: 1fr;
     }
 
     .board-todo-start-composer .input-controls {

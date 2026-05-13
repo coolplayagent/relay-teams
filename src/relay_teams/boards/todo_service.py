@@ -14,12 +14,33 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from relay_teams.boards.todo_models import (
+    BoardTodoAttempt,
+    BoardTodoAttemptStatus,
+    BoardTodoAttemptType,
     BoardTodoArchiveRequest,
     BoardTodoBoardResponse,
+    BoardTodoConcurrencySnapshot,
+    BoardTodoDiagnostic,
     BoardTodoDeltaResponse,
+    BoardTodoExecutionPolicy,
+    BoardTodoExecutionQueueTicket,
+    BoardTodoExecutionWorkspacePreview,
+    BoardTodoHandoffPrompt,
+    BoardTodoHandoffTemplate,
+    BoardTodoHandoffTemplateDeleteResponse,
+    BoardTodoHandoffTemplateInput,
+    BoardTodoHandoffTemplateKind,
+    BoardTodoHandoffTemplateSettingsResponse,
+    BoardTodoQueueKind,
+    BoardTodoQueuePreview,
+    BoardTodoQueueStatus,
+    BoardTodoRuntimeTargetKind,
+    BoardTodoRuntimeTargetOption,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
     BoardTodoMarkDoneRequest,
+    BoardTodoPreviewRequestChangesRequest,
+    BoardTodoPreviewRequestChangesResponse,
     BoardTodoPreviewStartRequest,
     BoardTodoPreviewStartResponse,
     BoardTodoScope,
@@ -31,6 +52,7 @@ from relay_teams.boards.todo_models import (
     BoardTodoSourceProvider,
     BoardTodoSourceSettingsResponse,
     BoardTodoSourceType,
+    BoardTodoTemplateScope,
     BoardTodoSourceUpdateRequest,
     BoardTodoSourceView,
     BoardTodoStartRequest,
@@ -63,10 +85,37 @@ LOGGER = get_logger(__name__)
 _GITHUB_REMOTE_PATTERN = re.compile(
     r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$"
 )
+_SOURCE_WORKSPACE_ACTIVE_LIMIT = 2
+_RUNTIME_TARGET_ACTIVE_LIMIT = 1
+_QUEUE_WORKER_INTERVAL_SECONDS = 2.0
+_QUEUE_CLAIM_SECONDS = 60
+_ACTIVE_RUNTIME_STATUSES = {
+    RunRuntimeStatus.QUEUED,
+    RunRuntimeStatus.RUNNING,
+    RunRuntimeStatus.PAUSED,
+    RunRuntimeStatus.STOPPING,
+}
 
 
 class WorkspaceServiceLike(Protocol):
     async def get_workspace_async(self, workspace_id: str) -> WorkspaceRecord:
+        raise NotImplementedError
+
+    async def fork_workspace_async(
+        self,
+        source_workspace_id: str,
+        *,
+        name: str,
+        start_ref: str | None = None,
+    ) -> WorkspaceRecord:
+        raise NotImplementedError
+
+    async def delete_workspace_with_options_async(
+        self,
+        *,
+        workspace_id: str,
+        remove_directory: bool = False,
+    ) -> WorkspaceRecord:
         raise NotImplementedError
 
 
@@ -138,6 +187,15 @@ class SessionServiceLike(Protocol):
     async def get_session_async(self, session_id: str) -> SessionRecord:
         raise NotImplementedError
 
+    async def delete_session_async(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
 
 class SessionRunServiceLike(Protocol):
     async def create_run_async(
@@ -149,6 +207,9 @@ class SessionRunServiceLike(Protocol):
         raise NotImplementedError
 
     async def ensure_run_started_async(self, run_id: str) -> None:
+        raise NotImplementedError
+
+    async def stop_run_async(self, run_id: str) -> None:
         raise NotImplementedError
 
 
@@ -182,6 +243,31 @@ class BoardTodoService:
         self._get_shell_safety_policy_enabled = get_shell_safety_policy_enabled or (
             lambda: True
         )
+        self._queue_worker_task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        if self._queue_worker_task is not None:
+            return
+        self._queue_worker_task = asyncio.create_task(self._queue_worker_loop())
+
+    async def stop(self) -> None:
+        if self._queue_worker_task is None:
+            return
+        self._queue_worker_task.cancel()
+        try:
+            await self._queue_worker_task
+        except asyncio.CancelledError:
+            # Expected shutdown path after cancelling the background queue worker.
+            pass
+        self._queue_worker_task = None
+
+    async def _queue_worker_loop(self) -> None:
+        while True:
+            try:
+                await self.drain_queue_once()
+            except Exception as exc:
+                LOGGER.warning("Board TODO queue worker iteration failed: %s", exc)
+            await asyncio.sleep(_QUEUE_WORKER_INTERVAL_SECONDS)
 
     async def list_sources(
         self,
@@ -332,6 +418,79 @@ class BoardTodoService:
             raise ValueError("source has imported TODOs; disable it instead")
         await self._repository.delete_source_async(source_id)
         return BoardTodoSourceDeleteResponse(deleted=True, source_id=source_id)
+
+    async def list_handoff_templates(
+        self,
+        *,
+        workspace_id: str,
+    ) -> BoardTodoHandoffTemplateSettingsResponse:
+        scope = await self._resolve_board_scope(workspace_id)
+        return BoardTodoHandoffTemplateSettingsResponse(
+            workspace_id=scope.view_workspace_id,
+            board_workspace_id=scope.board_workspace_id,
+            view_workspace_id=scope.view_workspace_id,
+            is_fork_view=scope.is_fork_view,
+            forked_from_workspace_id=scope.forked_from_workspace_id,
+            templates=await self._repository.list_handoff_templates_async(
+                workspace_id=scope.board_workspace_id
+            ),
+        )
+
+    async def upsert_workspace_handoff_template(
+        self,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        scope = await self._resolve_board_scope(payload.workspace_id)
+        now = _utc_now()
+        return await self._repository.upsert_handoff_template_async(
+            BoardTodoHandoffTemplate(
+                template_id=_new_template_id(),
+                workspace_id=scope.board_workspace_id,
+                scope=BoardTodoTemplateScope.WORKSPACE,
+                template_kind=payload.template_kind,
+                template=payload.template.strip(),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def upsert_source_handoff_template(
+        self,
+        *,
+        source_id: str,
+        payload: BoardTodoHandoffTemplateInput,
+    ) -> BoardTodoHandoffTemplate:
+        source = await self._repository.require_source_async(source_id)
+        scope = await self._resolve_board_scope(payload.workspace_id)
+        if scope.board_workspace_id != source.workspace_id:
+            raise ValueError("source does not belong to the resolved board")
+        now = _utc_now()
+        return await self._repository.upsert_handoff_template_async(
+            BoardTodoHandoffTemplate(
+                template_id=_new_template_id(),
+                workspace_id=scope.board_workspace_id,
+                scope=BoardTodoTemplateScope.SOURCE,
+                template_kind=payload.template_kind,
+                source_id=source.source_id,
+                template=payload.template.strip(),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    async def delete_source_handoff_template(
+        self,
+        *,
+        template_id: str,
+    ) -> BoardTodoHandoffTemplateDeleteResponse:
+        template = await self._repository.require_handoff_template_async(template_id)
+        if template.scope != BoardTodoTemplateScope.SOURCE:
+            raise ValueError("only source handoff templates can be deleted")
+        await self._repository.delete_handoff_template_async(template_id=template_id)
+        return BoardTodoHandoffTemplateDeleteResponse(
+            deleted=True,
+            template_id=template_id,
+        )
 
     async def list_board(
         self,
@@ -652,13 +811,46 @@ class BoardTodoService:
         )
         if scope.board_workspace_id != item.workspace_id:
             raise ValueError("todo does not belong to the resolved board")
+        execution_policy = payload.execution_policy or _default_execution_policy(item)
+        runtime_target = _resolve_runtime_target(
+            runtime_target_id=payload.runtime_target_id,
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+        concurrency = await self._concurrency_snapshot(
+            source_workspace_id=item.workspace_id,
+            runtime_target_id=runtime_target.target_id,
+        )
+        template_source, prompt = await self._render_handoff_prompt(
+            item=item,
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            built_in_prompt=_build_start_prompt(item),
+            feedback=None,
+        )
         return BoardTodoPreviewStartResponse(
             todo_id=item.todo_id,
             board_workspace_id=scope.board_workspace_id,
             view_workspace_id=scope.view_workspace_id,
             is_fork_view=scope.is_fork_view,
             forked_from_workspace_id=scope.forked_from_workspace_id,
-            prompt=_build_start_prompt(item),
+            template_source=template_source,
+            prompt=prompt,
+            execution_policy=execution_policy,
+            execution_workspace_preview=_execution_workspace_preview(
+                item=item,
+                scope=scope,
+                execution_policy=execution_policy,
+            ),
+            runtime_target_id=runtime_target.target_id,
+            runtime_target_options=_runtime_target_options(
+                selected=runtime_target,
+            ),
+            concurrency=concurrency,
+            queue_preview=_queue_preview(
+                concurrency=concurrency,
+                queue_if_full=payload.queue_if_full,
+            ),
         )
 
     async def start_todo(
@@ -673,15 +865,92 @@ class BoardTodoService:
         prompt = (payload.final_prompt or payload.prompt or "").strip()
         if not prompt:
             raise ValueError("final_prompt is required")
-        execution_workspace_id = item.workspace_id
-        if payload.view_workspace_id is not None:
-            scope = await self._resolve_board_scope(payload.view_workspace_id)
-            if scope.board_workspace_id != item.workspace_id:
-                raise ValueError("view workspace does not belong to this board")
-            execution_workspace_id = scope.view_workspace_id
+        scope = await self._resolve_board_scope(
+            payload.view_workspace_id or item.workspace_id
+        )
+        if scope.board_workspace_id != item.workspace_id:
+            raise ValueError("view workspace does not belong to this board")
+        execution_policy = payload.execution_policy or _default_execution_policy(item)
+        runtime_target = _resolve_runtime_target(
+            runtime_target_id=payload.runtime_target_id,
+            session_mode=payload.session_mode,
+            normal_root_role_id=payload.normal_root_role_id,
+            orchestration_preset_id=payload.orchestration_preset_id,
+        )
+        requested_session_mode, session_normal_role_id, session_preset_id = (
+            _start_session_topology(
+                runtime_target=runtime_target,
+                session_mode=payload.session_mode,
+                normal_root_role_id=payload.normal_root_role_id,
+                orchestration_preset_id=payload.orchestration_preset_id,
+            )
+        )
         reserved = await self._repository.reserve_start_async(item)
+        attempt: BoardTodoAttempt | None = None
+        execution_workspace_id: str | None = None
+        run_id: str | None = None
+        session_id: str | None = None
         try:
-            requested_session_mode = payload.session_mode
+            attempt = await self._create_handoff_attempt(
+                item=reserved,
+                attempt_type=BoardTodoAttemptType.START,
+                final_prompt=prompt,
+                template_kind="start",
+                template_source=await self._template_source(
+                    item=item,
+                    template_kind=BoardTodoHandoffTemplateKind.START,
+                ),
+                scope=scope,
+                execution_policy=execution_policy,
+                runtime_target_kind=runtime_target.kind,
+                runtime_target_id=runtime_target.target_id,
+                yolo=payload.yolo,
+                thinking=payload.thinking,
+            )
+            reserved = await self._repository.update_async(
+                reserved.model_copy(
+                    update={
+                        "current_attempt_id": attempt.attempt_id,
+                        "active_attempt_id": attempt.attempt_id,
+                        "execution_policy": execution_policy,
+                        "runtime_target_kind": runtime_target.kind,
+                        "runtime_target_id": runtime_target.target_id,
+                        "last_status_reason": "Preparing board todo handoff",
+                    }
+                )
+            )
+            concurrency = await self._concurrency_snapshot(
+                source_workspace_id=item.workspace_id,
+                runtime_target_id=runtime_target.target_id,
+                excluded_todo_id=reserved.todo_id,
+            )
+            if _should_queue(concurrency) and payload.queue_if_full:
+                return await self._queue_handoff(
+                    reserved=reserved,
+                    attempt=attempt,
+                    queue_kind=BoardTodoQueueKind.START,
+                    scope=scope,
+                    execution_policy=execution_policy,
+                    runtime_target=runtime_target,
+                    session_mode=requested_session_mode,
+                    normal_root_role_id=session_normal_role_id,
+                    orchestration_preset_id=session_preset_id,
+                    yolo=payload.yolo,
+                    thinking=payload.thinking,
+                )
+            if _should_queue(concurrency):
+                raise ValueError("handoff concurrency limit reached")
+            execution_workspace_id = await self._prepare_execution_workspace(
+                item=reserved,
+                attempt_id=attempt.attempt_id,
+                scope=scope,
+                execution_policy=execution_policy,
+            )
+            attempt = await self._repository.update_attempt_async(
+                attempt.model_copy(
+                    update={"execution_workspace_id": execution_workspace_id}
+                )
+            )
             session = await self._session_service.create_session_async(
                 workspace_id=execution_workspace_id,
                 metadata={
@@ -689,49 +958,80 @@ class BoardTodoService:
                     "board_todo_title": reserved.title,
                 },
                 session_mode=requested_session_mode,
-                normal_root_role_id=(
-                    payload.normal_root_role_id
-                    if requested_session_mode == SessionMode.NORMAL
-                    else None
-                ),
-                orchestration_preset_id=(
-                    payload.orchestration_preset_id
-                    if requested_session_mode == SessionMode.ORCHESTRATION
-                    else None
-                ),
+                normal_root_role_id=session_normal_role_id,
+                orchestration_preset_id=session_preset_id,
             )
+            session_id = session.session_id
             run_session_mode = session.session_mode
+            target_role_id = None
+            if run_session_mode == SessionMode.NORMAL:
+                target_role_id = (
+                    payload.normal_root_role_id
+                    or _role_id_from_runtime_target(runtime_target.target_id)
+                    or session.normal_root_role_id
+                )
             run_id, _session_id = await self._create_and_start_run(
                 session_id=session.session_id,
                 prompt=prompt,
                 yolo=payload.yolo,
                 thinking=payload.thinking,
-                target_role_id=(
-                    payload.normal_root_role_id
-                    if requested_session_mode == SessionMode.NORMAL
-                    else session.normal_root_role_id
-                    if run_session_mode == SessionMode.NORMAL
-                    else None
-                ),
+                target_role_id=target_role_id,
                 session_mode=run_session_mode,
             )
+            current_reserved = await self._current_handoff_reserved_item_or_raise(
+                todo_id=reserved.todo_id,
+                attempt_id=attempt.attempt_id,
+            )
+            await self._mark_attempt_active(
+                attempt=attempt,
+                session_id=session.session_id,
+                run_id=run_id,
+            )
             return await self._repository.update_async(
-                reserved.model_copy(
+                current_reserved.model_copy(
                     update={
                         "status": BoardTodoStatus.IN_PROGRESS,
                         "session_id": session.session_id,
                         "run_id": run_id,
+                        "current_attempt_id": attempt.attempt_id,
+                        "active_attempt_id": attempt.attempt_id,
+                        "execution_workspace_id": execution_workspace_id,
+                        "execution_policy": execution_policy,
+                        "runtime_target_kind": runtime_target.kind,
+                        "runtime_target_id": runtime_target.target_id,
+                        "queue_ticket_id": None,
                         "last_status_reason": "Started from board todo item",
                     }
                 )
             )
-        except Exception:
-            await self._restore_failed_start_reservation(reserved)
+        except Exception as exc:
+            if run_id is not None:
+                await self._stop_handoff_run(run_id)
+            if session_id is not None:
+                await self._cleanup_created_start_session(session_id)
+            await self._cleanup_start_execution_workspace(
+                execution_policy=execution_policy,
+                execution_workspace_id=execution_workspace_id,
+            )
+            if attempt is not None:
+                await self._mark_attempt_failed(attempt=attempt, error=str(exc))
+                await self._record_diagnostic(
+                    item=reserved,
+                    kind="handoff_start_failed",
+                    message=str(exc),
+                    attempt_id=attempt.attempt_id,
+                )
+            await self._restore_failed_start_reservation(
+                reserved,
+                current_attempt_id=attempt.attempt_id if attempt is not None else None,
+            )
             raise
 
     async def _restore_failed_start_reservation(
         self,
         item: BoardTodoItem,
+        *,
+        current_attempt_id: str | None = None,
     ) -> None:
         try:
             current = await self._repository.require_async(item.todo_id)
@@ -739,11 +1039,20 @@ class BoardTodoService:
                 current.status == BoardTodoStatus.IN_PROGRESS
                 and current.session_id is None
                 and current.run_id is None
+                and current.active_attempt_id == current_attempt_id
+                and current.queue_ticket_id is None
             ):
                 await self._repository.update_async(
                     current.model_copy(
                         update={
                             "status": BoardTodoStatus.TODO,
+                            "current_attempt_id": current_attempt_id,
+                            "active_attempt_id": None,
+                            "execution_workspace_id": None,
+                            "execution_policy": None,
+                            "runtime_target_kind": None,
+                            "runtime_target_id": None,
+                            "queue_ticket_id": None,
                             "last_status_reason": "Start failed",
                         }
                     )
@@ -754,6 +1063,76 @@ class BoardTodoService:
                 item.todo_id,
                 exc,
             )
+
+    async def preview_request_changes_todo(
+        self,
+        *,
+        todo_id: str,
+        payload: BoardTodoPreviewRequestChangesRequest,
+    ) -> BoardTodoPreviewRequestChangesResponse:
+        item = await self._repository.require_async(todo_id)
+        if item.status != BoardTodoStatus.REVIEW:
+            raise ValueError("only review board items can preview request changes")
+        if item.session_id is None:
+            raise ValueError("board todo item is not bound to a session")
+        scope = await self._resolve_board_scope(
+            payload.view_workspace_id or item.workspace_id
+        )
+        if scope.board_workspace_id != item.workspace_id:
+            raise ValueError("todo does not belong to the resolved board")
+        execution_workspace_id = await self._request_changes_execution_workspace(item)
+        session = await self._session_service.get_session_async(
+            _require_session_id(item)
+        )
+        runtime_target = _request_changes_runtime_target(
+            runtime_target_id=payload.runtime_target_id,
+            item=item,
+            session=session,
+        )
+        _validate_runtime_target_matches_session(
+            runtime_target=runtime_target,
+            session=session,
+        )
+        concurrency = await self._concurrency_snapshot(
+            source_workspace_id=item.workspace_id,
+            runtime_target_id=runtime_target.target_id,
+        )
+        template_source, prompt = await self._render_handoff_prompt(
+            item=item,
+            template_kind=BoardTodoHandoffTemplateKind.REQUEST_CHANGES,
+            built_in_prompt=_build_request_changes_prompt(
+                item=item,
+                feedback=payload.feedback,
+            ),
+            feedback=payload.feedback,
+        )
+        return BoardTodoPreviewRequestChangesResponse(
+            todo_id=item.todo_id,
+            board_workspace_id=scope.board_workspace_id,
+            view_workspace_id=scope.view_workspace_id,
+            is_fork_view=scope.is_fork_view,
+            forked_from_workspace_id=scope.forked_from_workspace_id,
+            template_source=template_source,
+            prompt=prompt,
+            execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+            execution_workspace_preview=BoardTodoExecutionWorkspacePreview(
+                policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                workspace_id=execution_workspace_id,
+                source_workspace_id=item.workspace_id,
+                display_name=execution_workspace_id,
+            ),
+            runtime_target_id=runtime_target.target_id,
+            runtime_target_options=_runtime_target_options(
+                selected=runtime_target,
+            ),
+            concurrency=concurrency,
+            queue_preview=_queue_preview(
+                concurrency=concurrency,
+                queue_if_full=payload.queue_if_full,
+            ),
+            session_id=item.session_id,
+            run_id=item.run_id,
+        )
 
     async def request_changes(
         self,
@@ -766,40 +1145,142 @@ class BoardTodoService:
             raise ValueError("only review board items can request changes")
         if item.session_id is None:
             raise ValueError("board todo item is not bound to a session")
+        scope = await self._resolve_board_scope(
+            payload.view_workspace_id or item.workspace_id
+        )
+        if scope.board_workspace_id != item.workspace_id:
+            raise ValueError("view workspace does not belong to this board")
+        prompt = (payload.final_prompt or payload.prompt or "").strip()
+        if not prompt:
+            raise ValueError("final_prompt is required")
+        execution_workspace_id = await self._request_changes_execution_workspace(item)
+        session = await self._session_service.get_session_async(
+            _require_session_id(item)
+        )
+        runtime_target = _request_changes_runtime_target(
+            runtime_target_id=payload.runtime_target_id,
+            item=item,
+            session=session,
+        )
+        _validate_runtime_target_matches_session(
+            runtime_target=runtime_target,
+            session=session,
+        )
         reserved = await self._repository.reserve_request_changes_async(item)
+        attempt: BoardTodoAttempt | None = None
+        run_id: str | None = None
         try:
-            session = await self._session_service.get_session_async(
-                _require_session_id(reserved)
+            attempt = await self._create_handoff_attempt(
+                item=reserved,
+                attempt_type=BoardTodoAttemptType.REQUEST_CHANGES,
+                final_prompt=prompt,
+                template_kind="request_changes",
+                template_source=await self._template_source(
+                    item=item,
+                    template_kind=BoardTodoHandoffTemplateKind.REQUEST_CHANGES,
+                ),
+                scope=scope,
+                execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                runtime_target_kind=runtime_target.kind,
+                runtime_target_id=runtime_target.target_id,
+                yolo=payload.yolo,
+                thinking=payload.thinking,
+                execution_workspace_id=execution_workspace_id,
             )
+            reserved = await self._repository.update_async(
+                reserved.model_copy(
+                    update={
+                        "current_attempt_id": attempt.attempt_id,
+                        "active_attempt_id": attempt.attempt_id,
+                        "execution_workspace_id": execution_workspace_id,
+                        "execution_policy": BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                        "runtime_target_kind": runtime_target.kind,
+                        "runtime_target_id": runtime_target.target_id,
+                        "last_status_reason": "Preparing board todo request changes",
+                    }
+                )
+            )
+            concurrency = await self._concurrency_snapshot(
+                source_workspace_id=item.workspace_id,
+                runtime_target_id=runtime_target.target_id,
+                excluded_todo_id=reserved.todo_id,
+            )
+            if _should_queue(concurrency) and payload.queue_if_full:
+                return await self._queue_handoff(
+                    reserved=reserved,
+                    attempt=attempt,
+                    queue_kind=BoardTodoQueueKind.REQUEST_CHANGES,
+                    scope=scope,
+                    execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                    runtime_target=runtime_target,
+                    session_mode=None,
+                    normal_root_role_id=None,
+                    orchestration_preset_id=None,
+                    yolo=payload.yolo,
+                    thinking=payload.thinking,
+                    execution_workspace_id=execution_workspace_id,
+                    previous_run_id=item.run_id,
+                )
+            if _should_queue(concurrency):
+                raise ValueError("handoff concurrency limit reached")
             target_role_id = (
-                session.normal_root_role_id
+                _role_id_from_runtime_target(runtime_target.target_id)
+                or session.normal_root_role_id
                 if session.session_mode == SessionMode.NORMAL
                 else None
-            )
-            prompt = _build_request_changes_prompt(
-                item=reserved,
-                feedback=payload.feedback,
             )
             run_id, _session_id = await self._create_and_start_run(
                 session_id=_require_session_id(reserved),
                 prompt=prompt,
                 yolo=payload.yolo,
+                thinking=payload.thinking,
                 target_role_id=target_role_id,
                 session_mode=session.session_mode,
             )
+            current_reserved = await self._current_handoff_reserved_item_or_raise(
+                todo_id=reserved.todo_id,
+                attempt_id=attempt.attempt_id,
+            )
+            await self._mark_attempt_active(
+                attempt=attempt,
+                session_id=_require_session_id(reserved),
+                run_id=run_id,
+            )
             return await self._repository.update_async(
-                reserved.model_copy(
+                current_reserved.model_copy(
                     update={
                         "status": BoardTodoStatus.IN_PROGRESS,
                         "run_id": run_id,
+                        "current_attempt_id": attempt.attempt_id,
+                        "active_attempt_id": attempt.attempt_id,
+                        "execution_workspace_id": execution_workspace_id,
+                        "execution_policy": BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                        "runtime_target_kind": runtime_target.kind,
+                        "runtime_target_id": runtime_target.target_id,
+                        "queue_ticket_id": None,
                         "last_status_reason": "Changes requested by user",
                     }
                 )
             )
-        except Exception:
+        except Exception as exc:
+            if run_id is not None:
+                await self._stop_handoff_run(run_id)
+            if attempt is not None:
+                await self._mark_attempt_failed(attempt=attempt, error=str(exc))
+                await self._record_diagnostic(
+                    item=reserved,
+                    kind="handoff_request_changes_failed",
+                    message=str(exc),
+                    attempt_id=attempt.attempt_id,
+                )
             await self._restore_failed_request_changes_reservation(
                 reserved,
                 previous_run_id=item.run_id,
+                current_attempt_id=(
+                    attempt.attempt_id
+                    if attempt is not None
+                    else item.current_attempt_id
+                ),
             )
             raise
 
@@ -808,6 +1289,7 @@ class BoardTodoService:
         item: BoardTodoItem,
         *,
         previous_run_id: str | None,
+        current_attempt_id: str | None,
     ) -> None:
         try:
             current = await self._repository.require_async(item.todo_id)
@@ -821,6 +1303,9 @@ class BoardTodoService:
                         update={
                             "status": BoardTodoStatus.REVIEW,
                             "run_id": previous_run_id,
+                            "current_attempt_id": current_attempt_id,
+                            "active_attempt_id": None,
+                            "queue_ticket_id": None,
                             "last_status_reason": "Request changes failed",
                         }
                     )
@@ -831,6 +1316,879 @@ class BoardTodoService:
                 item.todo_id,
                 exc,
             )
+
+    async def _create_handoff_attempt(
+        self,
+        *,
+        item: BoardTodoItem,
+        attempt_type: BoardTodoAttemptType,
+        final_prompt: str,
+        template_kind: str,
+        template_source: str,
+        scope: BoardTodoScope,
+        execution_policy: BoardTodoExecutionPolicy,
+        runtime_target_kind: BoardTodoRuntimeTargetKind,
+        runtime_target_id: str,
+        yolo: bool,
+        thinking: RunThinkingConfig,
+        execution_workspace_id: str | None = None,
+    ) -> BoardTodoAttempt:
+        now = _utc_now()
+        attempt_id = _new_attempt_id()
+        prompt_ref = _new_prompt_ref()
+        attempt = await self._repository.create_attempt_async(
+            BoardTodoAttempt(
+                attempt_id=attempt_id,
+                todo_id=item.todo_id,
+                attempt_type=attempt_type,
+                status=BoardTodoAttemptStatus.PENDING,
+                board_workspace_id=scope.board_workspace_id,
+                initiated_from_workspace_id=scope.view_workspace_id,
+                source_workspace_id=item.workspace_id,
+                execution_workspace_id=execution_workspace_id,
+                execution_policy=execution_policy,
+                runtime_target_kind=runtime_target_kind,
+                runtime_target_id=runtime_target_id,
+                yolo=yolo,
+                thinking=thinking,
+                prompt_ref=prompt_ref,
+                created_at=now,
+            )
+        )
+        await self._repository.create_handoff_prompt_async(
+            BoardTodoHandoffPrompt(
+                prompt_ref=prompt_ref,
+                todo_id=item.todo_id,
+                attempt_id=attempt_id,
+                template_kind=template_kind,
+                template_source=template_source,
+                final_prompt_snapshot=final_prompt,
+                created_at=now,
+            )
+        )
+        return attempt
+
+    async def _template_source(
+        self,
+        *,
+        item: BoardTodoItem,
+        template_kind: BoardTodoHandoffTemplateKind,
+    ) -> str:
+        template = await self._repository.get_handoff_template_async(
+            workspace_id=item.workspace_id,
+            template_kind=template_kind,
+            source_id=item.source_id,
+        )
+        if template is None:
+            return "built_in"
+        if template.scope == BoardTodoTemplateScope.SOURCE:
+            return f"source:{template.source_id}"
+        return f"workspace:{template.workspace_id}"
+
+    async def _render_handoff_prompt(
+        self,
+        *,
+        item: BoardTodoItem,
+        template_kind: BoardTodoHandoffTemplateKind,
+        built_in_prompt: str,
+        feedback: str | None,
+    ) -> tuple[str, str]:
+        template = await self._repository.get_handoff_template_async(
+            workspace_id=item.workspace_id,
+            template_kind=template_kind,
+            source_id=item.source_id,
+        )
+        if template is None:
+            return "built_in", built_in_prompt
+        template_source = (
+            f"source:{template.source_id}"
+            if template.scope == BoardTodoTemplateScope.SOURCE
+            else f"workspace:{template.workspace_id}"
+        )
+        return template_source, _render_handoff_template(
+            template=template.template,
+            item=item,
+            feedback=feedback,
+        )
+
+    async def _concurrency_snapshot(
+        self,
+        *,
+        source_workspace_id: str,
+        runtime_target_id: str,
+        excluded_queue_ticket_id: str | None = None,
+        excluded_todo_id: str | None = None,
+        include_claimable_queue_tickets: bool = True,
+        capacity_before_ticket: BoardTodoExecutionQueueTicket | None = None,
+    ) -> BoardTodoConcurrencySnapshot:
+        source_active = 0
+        runtime_target_active = 0
+        items = await self._repository.list_by_workspace_async(
+            workspace_id=source_workspace_id,
+            include_archived=False,
+        )
+        for item in items:
+            if item.todo_id == excluded_todo_id:
+                continue
+            if item.status != BoardTodoStatus.IN_PROGRESS:
+                continue
+            if item.queue_ticket_id is not None:
+                if item.queue_ticket_id == excluded_queue_ticket_id:
+                    continue
+                ticket = await self._repository.get_queue_ticket_async(
+                    item.queue_ticket_id
+                )
+                if ticket is None and item.run_id is None:
+                    continue
+                if ticket is not None and ticket.status in (
+                    BoardTodoQueueStatus.CANCELLED,
+                    BoardTodoQueueStatus.COMPLETED,
+                    BoardTodoQueueStatus.FAILED,
+                ):
+                    if item.run_id is None:
+                        continue
+                if (
+                    ticket is not None
+                    and not include_claimable_queue_tickets
+                    and _queue_ticket_can_be_claimed(ticket)
+                    and item.run_id is None
+                ):
+                    continue
+                if (
+                    ticket is not None
+                    and capacity_before_ticket is not None
+                    and ticket.status == BoardTodoQueueStatus.CLAIMED
+                    and item.run_id is None
+                    and _queue_ticket_sorts_after(ticket, capacity_before_ticket)
+                ):
+                    continue
+            if item.run_id is None:
+                if item.queue_ticket_id is None and item.active_attempt_id is None:
+                    continue
+            else:
+                runtime = await self._run_runtime_repo.get_async(item.run_id)
+                if runtime is None or runtime.status not in _ACTIVE_RUNTIME_STATUSES:
+                    if item.queue_ticket_id is None:
+                        continue
+            source_active += 1
+            item_runtime_target_id = await self._runtime_target_id_for_capacity(item)
+            if (
+                item_runtime_target_id is None
+                or item_runtime_target_id == runtime_target_id
+            ):
+                runtime_target_active += 1
+        return BoardTodoConcurrencySnapshot(
+            source_workspace_active=source_active,
+            source_workspace_limit=_SOURCE_WORKSPACE_ACTIVE_LIMIT,
+            runtime_target_active=runtime_target_active,
+            runtime_target_limit=_RUNTIME_TARGET_ACTIVE_LIMIT,
+        )
+
+    async def _runtime_target_id_for_capacity(self, item: BoardTodoItem) -> str | None:
+        if item.runtime_target_id is not None:
+            return item.runtime_target_id
+        if item.session_id is None:
+            return None
+        try:
+            session = await self._session_service.get_session_async(item.session_id)
+        except KeyError:
+            return None
+        return _runtime_target_from_session(session).target_id
+
+    async def _queue_handoff(
+        self,
+        *,
+        reserved: BoardTodoItem,
+        attempt: BoardTodoAttempt,
+        queue_kind: BoardTodoQueueKind,
+        scope: BoardTodoScope,
+        execution_policy: BoardTodoExecutionPolicy,
+        runtime_target: BoardTodoRuntimeTargetOption,
+        session_mode: SessionMode | None,
+        normal_root_role_id: str | None,
+        orchestration_preset_id: str | None,
+        yolo: bool,
+        thinking: RunThinkingConfig,
+        execution_workspace_id: str | None = None,
+        previous_run_id: str | None = None,
+    ) -> BoardTodoItem:
+        if attempt.prompt_ref is None:
+            raise ValueError("handoff attempt is missing prompt snapshot")
+        queue_ticket = await self._repository.create_queue_ticket_async(
+            BoardTodoExecutionQueueTicket(
+                queue_ticket_id=_new_queue_ticket_id(),
+                todo_id=reserved.todo_id,
+                attempt_id=attempt.attempt_id,
+                prompt_ref=attempt.prompt_ref,
+                queue_kind=queue_kind,
+                status=BoardTodoQueueStatus.PENDING,
+                board_workspace_id=scope.board_workspace_id,
+                source_workspace_id=reserved.workspace_id,
+                initiated_from_workspace_id=scope.view_workspace_id,
+                execution_workspace_id=execution_workspace_id,
+                previous_run_id=previous_run_id,
+                execution_policy=execution_policy,
+                runtime_target_kind=runtime_target.kind,
+                runtime_target_id=runtime_target.target_id,
+                session_mode=session_mode,
+                normal_root_role_id=normal_root_role_id,
+                orchestration_preset_id=orchestration_preset_id,
+                yolo=yolo,
+                thinking=thinking,
+            )
+        )
+        await self._repository.update_attempt_async(
+            attempt.model_copy(
+                update={
+                    "status": BoardTodoAttemptStatus.ACTIVE,
+                    "queue_ticket_id": queue_ticket.queue_ticket_id,
+                }
+            )
+        )
+        return await self._repository.update_async(
+            reserved.model_copy(
+                update={
+                    "status": BoardTodoStatus.IN_PROGRESS,
+                    "run_id": None,
+                    "current_attempt_id": attempt.attempt_id,
+                    "active_attempt_id": attempt.attempt_id,
+                    "execution_workspace_id": execution_workspace_id,
+                    "execution_policy": execution_policy,
+                    "runtime_target_kind": runtime_target.kind,
+                    "runtime_target_id": runtime_target.target_id,
+                    "queue_ticket_id": queue_ticket.queue_ticket_id,
+                    "last_status_reason": "Queued for board todo handoff",
+                }
+            )
+        )
+
+    async def _prepare_execution_workspace(
+        self,
+        *,
+        item: BoardTodoItem,
+        attempt_id: str,
+        scope: BoardTodoScope,
+        execution_policy: BoardTodoExecutionPolicy,
+    ) -> str:
+        if execution_policy == BoardTodoExecutionPolicy.CURRENT_WORKSPACE:
+            return scope.view_workspace_id
+        workspace = await self._workspace_service.fork_workspace_async(
+            item.workspace_id,
+            name=_execution_workspace_name(item=item, attempt_id=attempt_id),
+        )
+        return workspace.workspace_id
+
+    async def _cleanup_start_execution_workspace(
+        self,
+        *,
+        execution_policy: BoardTodoExecutionPolicy,
+        execution_workspace_id: str | None,
+    ) -> None:
+        if (
+            execution_policy != BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+            or execution_workspace_id is None
+        ):
+            return
+        try:
+            await self._workspace_service.delete_workspace_with_options_async(
+                workspace_id=execution_workspace_id,
+                remove_directory=True,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to clean up board TODO execution workspace %s: %s",
+                execution_workspace_id,
+                exc,
+            )
+
+    async def _cleanup_created_start_session(self, session_id: str) -> None:
+        try:
+            await self._session_service.delete_session_async(
+                session_id,
+                force=True,
+                cascade=True,
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to clean up board TODO start session %s: %s",
+                session_id,
+                exc,
+            )
+
+    async def _cleanup_queued_start_before_run(
+        self,
+        *,
+        session_id: str,
+        execution_policy: BoardTodoExecutionPolicy,
+        execution_workspace_id: str | None,
+    ) -> None:
+        await self._cleanup_created_start_session(session_id)
+        await self._cleanup_start_execution_workspace(
+            execution_policy=execution_policy,
+            execution_workspace_id=execution_workspace_id,
+        )
+
+    async def _request_changes_execution_workspace(self, item: BoardTodoItem) -> str:
+        if item.execution_workspace_id is not None:
+            return item.execution_workspace_id
+        session = await self._session_service.get_session_async(
+            _require_session_id(item)
+        )
+        if session.workspace_id:
+            return session.workspace_id
+        raise ValueError("review item is missing execution workspace context")
+
+    async def drain_queue_once(self) -> int:
+        drained = 0
+        tickets = await self._repository.list_pending_queue_tickets_async(limit=None)
+        for ticket in tickets:
+            concurrency = await self._concurrency_snapshot(
+                source_workspace_id=ticket.source_workspace_id,
+                runtime_target_id=ticket.runtime_target_id or "",
+                excluded_queue_ticket_id=ticket.queue_ticket_id,
+                include_claimable_queue_tickets=False,
+            )
+            if _should_queue(concurrency):
+                continue
+            claimed = await self._claim_queue_ticket(ticket)
+            if claimed is None:
+                continue
+            concurrency = await self._concurrency_snapshot(
+                source_workspace_id=claimed.source_workspace_id,
+                runtime_target_id=claimed.runtime_target_id or "",
+                excluded_queue_ticket_id=claimed.queue_ticket_id,
+                include_claimable_queue_tickets=False,
+                capacity_before_ticket=claimed,
+            )
+            if _should_queue(concurrency):
+                await self._release_queue_ticket_claim(claimed)
+                continue
+            await self._execute_queue_ticket(claimed)
+            drained += 1
+        return drained
+
+    async def _claim_queue_ticket(
+        self,
+        ticket: BoardTodoExecutionQueueTicket,
+    ) -> BoardTodoExecutionQueueTicket | None:
+        now = _utc_now()
+        return await self._repository.claim_queue_ticket_async(
+            ticket=ticket,
+            claim_token=uuid4().hex,
+            claim_expires_at=now + timedelta(seconds=_QUEUE_CLAIM_SECONDS),
+            claimed_by="board-todo-queue-worker",
+            now=now,
+        )
+
+    async def _release_queue_ticket_claim(
+        self,
+        ticket: BoardTodoExecutionQueueTicket,
+    ) -> None:
+        released = await self._repository.release_queue_ticket_claim_async(ticket)
+        if released is None:
+            LOGGER.debug(
+                "Skipped releasing board TODO queue ticket %s because the claim is "
+                "no longer owned by this worker",
+                ticket.queue_ticket_id,
+            )
+
+    async def _renew_queue_claim(
+        self,
+        ticket: BoardTodoExecutionQueueTicket,
+    ) -> BoardTodoExecutionQueueTicket:
+        renewed = await self._repository.renew_queue_ticket_claim_async(
+            ticket=ticket,
+            claim_expires_at=_utc_now() + timedelta(seconds=_QUEUE_CLAIM_SECONDS),
+        )
+        if renewed is None:
+            raise ValueError("queue ticket claim is no longer owned by this worker")
+        return renewed
+
+    async def _execute_queue_ticket(
+        self,
+        ticket: BoardTodoExecutionQueueTicket,
+    ) -> None:
+        execution_workspace_id = ticket.execution_workspace_id
+        run_id: str | None = None
+        session_id: str | None = None
+        attached = False
+        stop_heartbeat = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            self._queue_claim_heartbeat(ticket=ticket, stop_event=stop_heartbeat)
+        )
+        try:
+            item = await self._current_queue_owned_item_or_cancel(
+                ticket=ticket,
+                reason="Queued handoff ticket no longer owns TODO item",
+            )
+            if item is None:
+                return
+            attempt = await self._repository.require_attempt_async(ticket.attempt_id)
+            prompt = await self._repository.require_handoff_prompt_async(
+                ticket.prompt_ref
+            )
+            if ticket.queue_kind == BoardTodoQueueKind.START:
+                execution_workspace_id = await self._prepare_execution_workspace(
+                    item=item,
+                    attempt_id=attempt.attempt_id,
+                    scope=BoardTodoScope(
+                        board_workspace_id=ticket.board_workspace_id,
+                        view_workspace_id=(
+                            ticket.initiated_from_workspace_id
+                            or ticket.board_workspace_id
+                        ),
+                    ),
+                    execution_policy=ticket.execution_policy,
+                )
+                ticket = await self._renew_queue_claim(ticket)
+                session = await self._session_service.create_session_async(
+                    workspace_id=execution_workspace_id,
+                    metadata={
+                        "board_todo_id": item.todo_id,
+                        "board_todo_title": item.title,
+                    },
+                    session_mode=ticket.session_mode,
+                    normal_root_role_id=(
+                        ticket.normal_root_role_id
+                        if ticket.session_mode == SessionMode.NORMAL
+                        else None
+                    ),
+                    orchestration_preset_id=(
+                        ticket.orchestration_preset_id
+                        if ticket.session_mode == SessionMode.ORCHESTRATION
+                        else None
+                    ),
+                )
+                session_id = session.session_id
+                ticket = await self._renew_queue_claim(ticket)
+                target_role_id = _target_role_id_for_run(
+                    session=session,
+                    ticket=ticket,
+                )
+                current_item = await self._current_queue_owned_item_or_cancel(
+                    ticket=ticket,
+                    reason="Queued handoff ticket no longer owns TODO item before run start",
+                )
+                if current_item is None:
+                    await self._cleanup_queued_start_before_run(
+                        session_id=session.session_id,
+                        execution_policy=ticket.execution_policy,
+                        execution_workspace_id=execution_workspace_id,
+                    )
+                    return
+                run_id, _session_id = await self._create_and_start_run(
+                    session_id=session.session_id,
+                    prompt=prompt.final_prompt_snapshot,
+                    yolo=ticket.yolo,
+                    thinking=ticket.thinking,
+                    target_role_id=target_role_id,
+                    session_mode=session.session_mode,
+                )
+                ticket = await self._renew_queue_claim(ticket)
+                current_item = await self._current_queue_owned_item_or_cancel(
+                    ticket=ticket,
+                    reason="Queued handoff ticket no longer owns TODO item before run attach",
+                )
+                if current_item is None:
+                    await self._stop_handoff_run(run_id)
+                    await self._cleanup_queued_start_before_run(
+                        session_id=session.session_id,
+                        execution_policy=ticket.execution_policy,
+                        execution_workspace_id=execution_workspace_id,
+                    )
+                    return
+                await self._mark_attempt_active(
+                    attempt=attempt,
+                    session_id=session.session_id,
+                    run_id=run_id,
+                )
+                await self._repository.update_async(
+                    current_item.model_copy(
+                        update={
+                            "status": BoardTodoStatus.IN_PROGRESS,
+                            "session_id": session.session_id,
+                            "run_id": run_id,
+                            "active_attempt_id": attempt.attempt_id,
+                            "execution_workspace_id": execution_workspace_id,
+                            "execution_policy": ticket.execution_policy,
+                            "runtime_target_kind": ticket.runtime_target_kind,
+                            "runtime_target_id": ticket.runtime_target_id,
+                            "queue_ticket_id": None,
+                            "last_status_reason": "Queued handoff started",
+                        }
+                    )
+                )
+                attached = True
+            else:
+                session = await self._session_service.get_session_async(
+                    _require_session_id(item)
+                )
+                ticket = await self._renew_queue_claim(ticket)
+                current_item = await self._current_queue_owned_item_or_cancel(
+                    ticket=ticket,
+                    reason="Queued request-changes ticket no longer owns TODO item before run start",
+                )
+                if current_item is None:
+                    return
+                run_id, _session_id = await self._create_and_start_run(
+                    session_id=session.session_id,
+                    prompt=prompt.final_prompt_snapshot,
+                    yolo=ticket.yolo,
+                    thinking=ticket.thinking,
+                    target_role_id=(
+                        _target_role_id_for_run(session=session, ticket=ticket)
+                    ),
+                    session_mode=session.session_mode,
+                )
+                ticket = await self._renew_queue_claim(ticket)
+                current_item = await self._current_queue_owned_item_or_cancel(
+                    ticket=ticket,
+                    reason="Queued request-changes ticket no longer owns TODO item before run attach",
+                )
+                if current_item is None:
+                    await self._stop_handoff_run(run_id)
+                    return
+                await self._mark_attempt_active(
+                    attempt=attempt,
+                    session_id=session.session_id,
+                    run_id=run_id,
+                )
+                await self._repository.update_async(
+                    current_item.model_copy(
+                        update={
+                            "status": BoardTodoStatus.IN_PROGRESS,
+                            "run_id": run_id,
+                            "active_attempt_id": attempt.attempt_id,
+                            "execution_workspace_id": ticket.execution_workspace_id,
+                            "execution_policy": ticket.execution_policy,
+                            "runtime_target_kind": ticket.runtime_target_kind,
+                            "runtime_target_id": ticket.runtime_target_id,
+                            "queue_ticket_id": None,
+                            "last_status_reason": "Queued request changes started",
+                        }
+                    )
+                )
+                attached = True
+            await self._repository.update_queue_ticket_async(
+                ticket.model_copy(update={"status": BoardTodoQueueStatus.COMPLETED})
+            )
+        except asyncio.CancelledError:
+            if attached:
+                raise
+            if run_id is not None:
+                await self._stop_handoff_run(run_id)
+            if ticket.queue_kind == BoardTodoQueueKind.START and session_id is not None:
+                await self._cleanup_created_start_session(session_id)
+            if ticket.queue_kind == BoardTodoQueueKind.START:
+                await self._cleanup_start_execution_workspace(
+                    execution_policy=ticket.execution_policy,
+                    execution_workspace_id=execution_workspace_id,
+                )
+            await self._fail_queue_ticket(ticket=ticket, error="queue worker stopped")
+            raise
+        except Exception as exc:
+            if attached:
+                LOGGER.warning(
+                    "Queued board TODO handoff %s attached run %s but failed final "
+                    "ticket bookkeeping: %s",
+                    ticket.queue_ticket_id,
+                    run_id,
+                    exc,
+                )
+                return
+            if run_id is not None:
+                await self._stop_handoff_run(run_id)
+            if ticket.queue_kind == BoardTodoQueueKind.START and session_id is not None:
+                await self._cleanup_created_start_session(session_id)
+            if ticket.queue_kind == BoardTodoQueueKind.START:
+                await self._cleanup_start_execution_workspace(
+                    execution_policy=ticket.execution_policy,
+                    execution_workspace_id=execution_workspace_id,
+                )
+            await self._fail_queue_ticket(ticket=ticket, error=str(exc))
+        finally:
+            stop_heartbeat.set()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                LOGGER.debug(
+                    "Board TODO queue claim heartbeat cancelled during cleanup for ticket %s",
+                    ticket.queue_ticket_id,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "Board TODO queue claim heartbeat failed during cleanup for ticket %s: %s",
+                    ticket.queue_ticket_id,
+                    exc,
+                )
+
+    async def _current_queue_owned_item_or_cancel(
+        self,
+        *,
+        ticket: BoardTodoExecutionQueueTicket,
+        reason: str,
+    ) -> BoardTodoItem | None:
+        try:
+            item = await self._repository.require_async(ticket.todo_id)
+        except KeyError:
+            await self._cancel_stale_queue_ticket(ticket=ticket, reason=reason)
+            return None
+        if not _queue_ticket_still_owns_item(ticket=ticket, item=item):
+            await self._cancel_stale_queue_ticket(ticket=ticket, reason=reason)
+            return None
+        return item
+
+    async def _current_handoff_reserved_item_or_raise(
+        self,
+        *,
+        todo_id: str,
+        attempt_id: str,
+    ) -> BoardTodoItem:
+        current = await self._repository.require_async(todo_id)
+        if (
+            current.status != BoardTodoStatus.IN_PROGRESS
+            or current.active_attempt_id != attempt_id
+            or current.queue_ticket_id is not None
+        ):
+            raise ValueError("board TODO handoff reservation is no longer current")
+        return current
+
+    async def _stop_handoff_run(self, run_id: str) -> None:
+        try:
+            await self._run_service.stop_run_async(run_id)
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to stop board TODO handoff run %s after handoff failure: %s",
+                run_id,
+                exc,
+            )
+
+    async def _queue_claim_heartbeat(
+        self,
+        *,
+        ticket: BoardTodoExecutionQueueTicket,
+        stop_event: asyncio.Event,
+    ) -> None:
+        interval = max(1.0, _QUEUE_CLAIM_SECONDS / 3)
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                try:
+                    renewed = await self._repository.renew_queue_ticket_claim_async(
+                        ticket=ticket,
+                        claim_expires_at=_utc_now()
+                        + timedelta(seconds=_QUEUE_CLAIM_SECONDS),
+                    )
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Failed to renew board TODO queue ticket %s claim: %s",
+                        ticket.queue_ticket_id,
+                        exc,
+                    )
+                    return
+                if renewed is None:
+                    LOGGER.warning(
+                        "Stopped queue claim heartbeat because ticket %s is no "
+                        "longer claimed by this worker",
+                        ticket.queue_ticket_id,
+                    )
+                    return
+
+    async def _cancel_stale_queue_ticket(
+        self,
+        *,
+        ticket: BoardTodoExecutionQueueTicket,
+        reason: str,
+    ) -> None:
+        diagnostics = (*ticket.diagnostics, reason)
+        await self._repository.update_queue_ticket_async(
+            ticket.model_copy(
+                update={
+                    "status": BoardTodoQueueStatus.CANCELLED,
+                    "diagnostics": diagnostics,
+                }
+            )
+        )
+        try:
+            attempt = await self._repository.require_attempt_async(ticket.attempt_id)
+            await self._repository.update_attempt_async(
+                attempt.model_copy(
+                    update={
+                        "status": BoardTodoAttemptStatus.CANCELLED,
+                        "error": reason,
+                        "finished_at": _utc_now(),
+                    }
+                )
+            )
+        except KeyError:
+            LOGGER.warning(
+                "Board TODO queue ticket %s references missing attempt %s",
+                ticket.queue_ticket_id,
+                ticket.attempt_id,
+            )
+
+    async def _fail_queue_ticket(
+        self,
+        *,
+        ticket: BoardTodoExecutionQueueTicket,
+        error: str,
+    ) -> None:
+        try:
+            item = await self._repository.require_async(ticket.todo_id)
+        except KeyError:
+            item = None
+        diagnostics = (*ticket.diagnostics, error)
+        failed_ticket = await self._repository.update_claimed_queue_ticket_async(
+            ticket.model_copy(
+                update={
+                    "status": BoardTodoQueueStatus.FAILED,
+                    "failure_count": ticket.failure_count + 1,
+                    "diagnostics": diagnostics,
+                }
+            )
+        )
+        if failed_ticket is None:
+            LOGGER.info(
+                "Skipping stale board TODO queue ticket failure for %s because the "
+                "claim is no longer current",
+                ticket.queue_ticket_id,
+            )
+            return
+        if item is not None and _queue_ticket_still_owns_item(ticket=ticket, item=item):
+            await self._record_diagnostic(
+                item=item,
+                kind="queue_run_creation_failed",
+                message=error,
+                attempt_id=failed_ticket.attempt_id,
+                queue_ticket_id=failed_ticket.queue_ticket_id,
+            )
+            try:
+                attempt = await self._repository.require_attempt_async(
+                    failed_ticket.attempt_id
+                )
+                await self._mark_attempt_failed(attempt=attempt, error=error)
+            except KeyError:
+                LOGGER.debug(
+                    "Skipping failure mark for missing board TODO attempt %s "
+                    "while failing queue ticket %s",
+                    failed_ticket.attempt_id,
+                    failed_ticket.queue_ticket_id,
+                )
+            restore_status = (
+                BoardTodoStatus.TODO
+                if failed_ticket.queue_kind == BoardTodoQueueKind.START
+                else BoardTodoStatus.REVIEW
+            )
+            restore_run_id = (
+                failed_ticket.previous_run_id
+                if failed_ticket.queue_kind == BoardTodoQueueKind.REQUEST_CHANGES
+                else None
+            )
+            stale_handoff_fields: dict[str, object] = {}
+            if failed_ticket.queue_kind == BoardTodoQueueKind.START:
+                stale_handoff_fields = {
+                    "current_attempt_id": None,
+                    "execution_workspace_id": None,
+                    "execution_policy": None,
+                    "runtime_target_kind": None,
+                    "runtime_target_id": None,
+                }
+            await self._repository.update_async(
+                item.model_copy(
+                    update={
+                        "status": restore_status,
+                        "run_id": restore_run_id,
+                        "active_attempt_id": None,
+                        "queue_ticket_id": None,
+                        "last_status_reason": "Queued handoff failed",
+                        **stale_handoff_fields,
+                    }
+                )
+            )
+        elif item is not None:
+            LOGGER.info(
+                "Skipping stale board TODO queue restore for ticket %s because TODO "
+                "%s no longer owns the ticket",
+                ticket.queue_ticket_id,
+                item.todo_id,
+            )
+
+    async def _record_diagnostic(
+        self,
+        *,
+        item: BoardTodoItem,
+        kind: str,
+        message: str,
+        attempt_id: str | None = None,
+        queue_ticket_id: str | None = None,
+    ) -> None:
+        await self._repository.create_diagnostic_async(
+            BoardTodoDiagnostic(
+                diagnostic_id=_new_diagnostic_id(),
+                todo_id=item.todo_id,
+                workspace_id=item.workspace_id,
+                kind=kind,
+                message=message,
+                attempt_id=attempt_id,
+                queue_ticket_id=queue_ticket_id,
+            )
+        )
+
+    async def _mark_attempt_active(
+        self,
+        *,
+        attempt: BoardTodoAttempt,
+        session_id: str,
+        run_id: str,
+    ) -> BoardTodoAttempt:
+        return await self._repository.update_attempt_async(
+            attempt.model_copy(
+                update={
+                    "status": BoardTodoAttemptStatus.ACTIVE,
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "started_at": attempt.started_at or _utc_now(),
+                }
+            )
+        )
+
+    async def _mark_attempt_failed(
+        self,
+        *,
+        attempt: BoardTodoAttempt,
+        error: str,
+    ) -> BoardTodoAttempt:
+        current = await self._repository.require_attempt_async(attempt.attempt_id)
+        return await self._repository.update_attempt_async(
+            current.model_copy(
+                update={
+                    "status": BoardTodoAttemptStatus.FAILED,
+                    "error": error,
+                    "finished_at": _utc_now(),
+                }
+            )
+        )
+
+    async def _mark_attempt_succeeded(
+        self,
+        attempt_id: str | None,
+    ) -> None:
+        if attempt_id is None:
+            return
+        try:
+            attempt = await self._repository.require_attempt_async(attempt_id)
+        except KeyError:
+            return
+        await self._repository.update_attempt_async(
+            attempt.model_copy(
+                update={
+                    "status": BoardTodoAttemptStatus.SUCCEEDED,
+                    "finished_at": _utc_now(),
+                }
+            )
+        )
 
     async def mark_done(
         self,
@@ -876,6 +2234,15 @@ class BoardTodoService:
             item.model_copy(
                 update={
                     "status": BoardTodoStatus.TODO,
+                    "session_id": None,
+                    "run_id": None,
+                    "current_attempt_id": None,
+                    "active_attempt_id": None,
+                    "execution_workspace_id": None,
+                    "execution_policy": None,
+                    "runtime_target_kind": None,
+                    "runtime_target_id": None,
+                    "queue_ticket_id": None,
                     "archived_at": None,
                     "last_status_reason": "Restored from archive",
                 }
@@ -1052,10 +2419,13 @@ class BoardTodoService:
         for item in items:
             if item.run_id != run_id:
                 continue
+            await self._mark_attempt_succeeded(item.active_attempt_id)
             await self._repository.update_async(
                 item.model_copy(
                     update={
                         "status": BoardTodoStatus.REVIEW,
+                        "active_attempt_id": None,
+                        "queue_ticket_id": None,
                         "last_status_reason": "Bound session run completed",
                     }
                 )
@@ -1102,17 +2472,42 @@ class BoardTodoService:
                         update={
                             "session_id": None,
                             "run_id": None,
+                            "active_attempt_id": None,
+                            "queue_ticket_id": None,
                             "last_status_reason": "Bound session deleted",
                         }
                     )
                 )
                 continue
+            if item.active_attempt_id is not None:
+                try:
+                    attempt = await self._repository.require_attempt_async(
+                        item.active_attempt_id
+                    )
+                    await self._mark_attempt_failed(
+                        attempt=attempt,
+                        error="Bound session deleted",
+                    )
+                except KeyError:
+                    LOGGER.debug(
+                        "Skipping missing board TODO attempt %s while deleting "
+                        "session %s for item %s",
+                        item.active_attempt_id,
+                        session_id,
+                        item.todo_id,
+                    )
             await self._repository.update_async(
                 item.model_copy(
                     update={
                         "status": BoardTodoStatus.TODO,
                         "session_id": None,
                         "run_id": None,
+                        "active_attempt_id": None,
+                        "execution_workspace_id": None,
+                        "execution_policy": None,
+                        "runtime_target_kind": None,
+                        "runtime_target_id": None,
+                        "queue_ticket_id": None,
                         "last_status_reason": "Bound session deleted",
                     }
                 )
@@ -1132,12 +2527,35 @@ class BoardTodoService:
                 continue
             runtime = await self._run_runtime_repo.get_async(item.run_id)
             if runtime is None:
+                if item.active_attempt_id is not None:
+                    try:
+                        attempt = await self._repository.require_attempt_async(
+                            item.active_attempt_id
+                        )
+                        await self._mark_attempt_failed(
+                            attempt=attempt,
+                            error="Bound session run no longer exists",
+                        )
+                    except KeyError:
+                        LOGGER.debug(
+                            "Skipping missing board TODO attempt %s while "
+                            "reconciling workspace %s for item %s",
+                            item.active_attempt_id,
+                            workspace_id,
+                            item.todo_id,
+                        )
                 await self._repository.update_async(
                     item.model_copy(
                         update={
                             "status": BoardTodoStatus.TODO,
                             "session_id": None,
                             "run_id": None,
+                            "active_attempt_id": None,
+                            "execution_workspace_id": None,
+                            "execution_policy": None,
+                            "runtime_target_kind": None,
+                            "runtime_target_id": None,
+                            "queue_ticket_id": None,
                             "last_status_reason": "Bound session run no longer exists",
                         }
                     )
@@ -1145,10 +2563,13 @@ class BoardTodoService:
                 continue
             if runtime.status != RunRuntimeStatus.COMPLETED:
                 continue
+            await self._mark_attempt_succeeded(item.active_attempt_id)
             await self._repository.update_async(
                 item.model_copy(
                     update={
                         "status": BoardTodoStatus.REVIEW,
+                        "active_attempt_id": None,
+                        "queue_ticket_id": None,
                         "last_status_reason": "Bound session run completed",
                     }
                 )
@@ -1593,7 +3014,11 @@ class BoardTodoService:
             ),
             source=InjectionSource.USER,
         )
-        await self._run_service.ensure_run_started_async(run_id)
+        try:
+            await self._run_service.ensure_run_started_async(run_id)
+        except Exception:
+            await self._stop_handoff_run(run_id)
+            raise
         return run_id, resolved_session_id
 
     async def _resolve_repository_full_name(
@@ -1627,6 +3052,324 @@ class BoardTodoService:
         if shared_token and shared_token not in tokens:
             tokens.append(shared_token)
         return tuple(tokens)
+
+
+def _default_execution_policy(item: BoardTodoItem) -> BoardTodoExecutionPolicy:
+    if item.execution_policy is not None:
+        return item.execution_policy
+    return BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+
+
+def _runtime_target_from_session(
+    session: SessionRecord,
+) -> BoardTodoRuntimeTargetOption:
+    return _resolve_runtime_target(
+        runtime_target_id=None,
+        session_mode=session.session_mode,
+        normal_root_role_id=session.normal_root_role_id,
+        orchestration_preset_id=session.orchestration_preset_id,
+    )
+
+
+def _request_changes_runtime_target(
+    *,
+    runtime_target_id: str | None,
+    item: BoardTodoItem,
+    session: SessionRecord,
+) -> BoardTodoRuntimeTargetOption:
+    if runtime_target_id is None and (
+        item.runtime_target_id is None and item.runtime_target_kind is None
+    ):
+        return _runtime_target_from_session(session)
+    return _resolve_runtime_target(
+        runtime_target_id=runtime_target_id,
+        session_mode=None,
+        normal_root_role_id=None,
+        orchestration_preset_id=None,
+        fallback_runtime_target_id=item.runtime_target_id,
+        fallback_runtime_target_kind=item.runtime_target_kind,
+    )
+
+
+def _resolve_runtime_target(
+    *,
+    runtime_target_id: str | None,
+    session_mode: SessionMode | None,
+    normal_root_role_id: str | None,
+    orchestration_preset_id: str | None,
+    fallback_runtime_target_id: str | None = None,
+    fallback_runtime_target_kind: BoardTodoRuntimeTargetKind | None = None,
+) -> BoardTodoRuntimeTargetOption:
+    explicit_target_id = str(runtime_target_id or "").strip()
+    if explicit_target_id and not (
+        explicit_target_id.startswith("preset:")
+        or explicit_target_id.startswith("role:")
+    ):
+        raise ValueError("runtime target id must start with role: or preset:")
+    raw_target_id = str(runtime_target_id or fallback_runtime_target_id or "").strip()
+    if raw_target_id.startswith("preset:"):
+        preset_id = raw_target_id.removeprefix("preset:").strip()
+        if not preset_id:
+            raise ValueError("runtime target preset id is required")
+        return BoardTodoRuntimeTargetOption(
+            target_id=f"preset:{preset_id}",
+            kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+            label=f"Preset: {preset_id}",
+        )
+    if raw_target_id.startswith("role:"):
+        role_id = raw_target_id.removeprefix("role:").strip()
+        if not role_id:
+            raise ValueError("runtime target role id is required")
+        return BoardTodoRuntimeTargetOption(
+            target_id=f"role:{role_id}",
+            kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            label=f"Role: {role_id}",
+        )
+    if fallback_runtime_target_kind == BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET:
+        preset_id = (fallback_runtime_target_id or "default").removeprefix("preset:")
+        return BoardTodoRuntimeTargetOption(
+            target_id=f"preset:{preset_id}",
+            kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+            label=f"Preset: {preset_id}",
+        )
+    if fallback_runtime_target_kind == BoardTodoRuntimeTargetKind.LOCAL_ROLE:
+        role_id = (fallback_runtime_target_id or "main_agent").removeprefix("role:")
+        return BoardTodoRuntimeTargetOption(
+            target_id=f"role:{role_id}",
+            kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            label=f"Role: {role_id}",
+        )
+    if session_mode == SessionMode.ORCHESTRATION:
+        preset_id = orchestration_preset_id or "default"
+        return BoardTodoRuntimeTargetOption(
+            target_id=f"preset:{preset_id}",
+            kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+            label=f"Preset: {preset_id}",
+        )
+    role_id = normal_root_role_id or "main_agent"
+    return BoardTodoRuntimeTargetOption(
+        target_id=f"role:{role_id}",
+        kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+        label=f"Role: {role_id}",
+    )
+
+
+def _runtime_target_options(
+    *,
+    selected: BoardTodoRuntimeTargetOption | None = None,
+) -> tuple[BoardTodoRuntimeTargetOption, ...]:
+    options = [
+        BoardTodoRuntimeTargetOption(
+            target_id="role:main_agent",
+            kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            label="Main Agent",
+        ),
+        BoardTodoRuntimeTargetOption(
+            target_id="preset:default",
+            kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+            label="Default orchestration",
+        ),
+    ]
+    if selected is not None and all(
+        option.target_id != selected.target_id for option in options
+    ):
+        options.insert(0, selected)
+    return tuple(options)
+
+
+def _execution_workspace_preview(
+    *,
+    item: BoardTodoItem,
+    scope: BoardTodoScope,
+    execution_policy: BoardTodoExecutionPolicy,
+) -> BoardTodoExecutionWorkspacePreview:
+    if execution_policy == BoardTodoExecutionPolicy.CURRENT_WORKSPACE:
+        return BoardTodoExecutionWorkspacePreview(
+            policy=execution_policy,
+            workspace_id=scope.view_workspace_id,
+            source_workspace_id=item.workspace_id,
+            display_name=scope.view_workspace_id,
+        )
+    return BoardTodoExecutionWorkspacePreview(
+        policy=execution_policy,
+        workspace_id=None,
+        source_workspace_id=item.workspace_id,
+        display_name="New git worktree fork",
+    )
+
+
+def _queue_preview(
+    *,
+    concurrency: BoardTodoConcurrencySnapshot,
+    queue_if_full: bool,
+) -> BoardTodoQueuePreview:
+    slot_available = not _should_queue(concurrency)
+    reason = None
+    if not slot_available:
+        reason = "handoff concurrency limit reached"
+    return BoardTodoQueuePreview(
+        queue_if_full=queue_if_full,
+        slot_available=slot_available,
+        will_queue=not slot_available and queue_if_full,
+        reason=reason,
+    )
+
+
+def _should_queue(concurrency: BoardTodoConcurrencySnapshot) -> bool:
+    return (
+        concurrency.source_workspace_active >= concurrency.source_workspace_limit
+        or concurrency.runtime_target_active >= concurrency.runtime_target_limit
+    )
+
+
+def _start_session_topology(
+    *,
+    runtime_target: BoardTodoRuntimeTargetOption,
+    session_mode: SessionMode | None,
+    normal_root_role_id: str | None,
+    orchestration_preset_id: str | None,
+) -> tuple[SessionMode | None, str | None, str | None]:
+    if runtime_target.kind == BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET:
+        if session_mode not in (None, SessionMode.ORCHESTRATION):
+            raise ValueError("runtime target preset requires orchestration mode")
+        preset_id = runtime_target.target_id.removeprefix("preset:")
+        if orchestration_preset_id is not None and orchestration_preset_id != preset_id:
+            raise ValueError("orchestration preset must match runtime target")
+        return (
+            SessionMode.ORCHESTRATION,
+            None,
+            preset_id,
+        )
+    if runtime_target.kind == BoardTodoRuntimeTargetKind.LOCAL_ROLE:
+        if session_mode not in (None, SessionMode.NORMAL):
+            raise ValueError("runtime target role requires normal mode")
+        role_id = runtime_target.target_id.removeprefix("role:")
+        if (
+            normal_root_role_id is not None
+            and normal_root_role_id.removeprefix("role:") != role_id
+        ):
+            raise ValueError("normal root role must match runtime target")
+        return (
+            SessionMode.NORMAL,
+            role_id,
+            None,
+        )
+    return (
+        session_mode,
+        normal_root_role_id if session_mode == SessionMode.NORMAL else None,
+        (
+            orchestration_preset_id
+            if session_mode == SessionMode.ORCHESTRATION
+            else None
+        ),
+    )
+
+
+def _validate_runtime_target_matches_session(
+    *,
+    runtime_target: BoardTodoRuntimeTargetOption,
+    session: SessionRecord,
+) -> None:
+    if (
+        session.session_mode == SessionMode.NORMAL
+        and runtime_target.kind != BoardTodoRuntimeTargetKind.LOCAL_ROLE
+    ):
+        raise ValueError("normal sessions require a role runtime target")
+    if (
+        session.session_mode == SessionMode.ORCHESTRATION
+        and runtime_target.kind != BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET
+    ):
+        raise ValueError("orchestration sessions require a preset runtime target")
+    if session.session_mode == SessionMode.ORCHESTRATION:
+        requested_preset_id = runtime_target.target_id.removeprefix("preset:")
+        session_preset_id = session.orchestration_preset_id or "default"
+        if requested_preset_id != session_preset_id:
+            raise ValueError("orchestration preset must match the existing session")
+
+
+def _queue_ticket_can_be_claimed(ticket: BoardTodoExecutionQueueTicket) -> bool:
+    if ticket.status == BoardTodoQueueStatus.PENDING:
+        return True
+    if ticket.status != BoardTodoQueueStatus.CLAIMED:
+        return False
+    if ticket.claim_expires_at is None:
+        return False
+    return ticket.claim_expires_at <= _utc_now()
+
+
+def _queue_ticket_sorts_after(
+    ticket: BoardTodoExecutionQueueTicket,
+    reference: BoardTodoExecutionQueueTicket,
+) -> bool:
+    return (ticket.created_at, ticket.queue_ticket_id) > (
+        reference.created_at,
+        reference.queue_ticket_id,
+    )
+
+
+def _queue_ticket_still_owns_item(
+    *,
+    ticket: BoardTodoExecutionQueueTicket,
+    item: BoardTodoItem,
+) -> bool:
+    return (
+        item.status == BoardTodoStatus.IN_PROGRESS
+        and item.queue_ticket_id == ticket.queue_ticket_id
+        and item.active_attempt_id == ticket.attempt_id
+    )
+
+
+def _render_handoff_template(
+    *,
+    template: str,
+    item: BoardTodoItem,
+    feedback: str | None,
+) -> str:
+    values = {
+        "todo.id": item.todo_id,
+        "todo.title": item.title,
+        "todo.body": item.body,
+        "todo.url": item.html_url or "",
+        "todo.repository": item.repository_full_name or "",
+        "todo.issue_number": str(item.issue_number or ""),
+        "workspace.board_id": item.workspace_id,
+        "handoff.feedback": feedback or "",
+    }
+    rendered = template
+    for key, value in values.items():
+        rendered = rendered.replace("{{ " + key + " }}", value)
+        rendered = rendered.replace("{{" + key + "}}", value)
+    return rendered.strip()
+
+
+def _execution_workspace_name(*, item: BoardTodoItem, attempt_id: str) -> str:
+    suffix = attempt_id.removeprefix("battempt_")[:10]
+    source = item.repository_full_name or item.workspace_id
+    safe_source = re.sub(r"[^a-zA-Z0-9_-]+", "-", source).strip("-").lower()
+    return f"{safe_source}-todo-{item.todo_id.removeprefix('btodo_')[:8]}-{suffix}"
+
+
+def _target_role_id_for_run(
+    *,
+    session: SessionRecord,
+    ticket: BoardTodoExecutionQueueTicket,
+) -> str | None:
+    if session.session_mode != SessionMode.NORMAL:
+        return None
+    if ticket.normal_root_role_id is not None:
+        return ticket.normal_root_role_id
+    if ticket.runtime_target_id is not None and ticket.runtime_target_id.startswith(
+        "role:"
+    ):
+        return ticket.runtime_target_id.removeprefix("role:")
+    return session.normal_root_role_id
+
+
+def _role_id_from_runtime_target(runtime_target_id: str | None) -> str | None:
+    if runtime_target_id is None or not runtime_target_id.startswith("role:"):
+        return None
+    role_id = runtime_target_id.removeprefix("role:").strip()
+    return role_id or None
 
 
 def _board_response(
@@ -2006,6 +3749,26 @@ def _new_todo_id() -> str:
 
 def _new_source_id() -> str:
     return f"bsrc_{uuid4().hex[:12]}"
+
+
+def _new_attempt_id() -> str:
+    return f"battempt_{uuid4().hex[:12]}"
+
+
+def _new_prompt_ref() -> str:
+    return f"bprompt_{uuid4().hex[:12]}"
+
+
+def _new_template_id() -> str:
+    return f"btemplate_{uuid4().hex[:12]}"
+
+
+def _new_queue_ticket_id() -> str:
+    return f"bqueue_{uuid4().hex[:12]}"
+
+
+def _new_diagnostic_id() -> str:
+    return f"bdiag_{uuid4().hex[:12]}"
 
 
 def _normalize_repository_full_name(value: str | None) -> str | None:

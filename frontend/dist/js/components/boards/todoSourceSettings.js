@@ -5,8 +5,12 @@
 import {
     createBoardTodoSource,
     deleteBoardTodoSource,
+    deleteSourceBoardTodoHandoffTemplate,
+    fetchBoardTodoHandoffTemplates,
     fetchBoardTodoSources,
     updateBoardTodoSource,
+    upsertSourceBoardTodoHandoffTemplate,
+    upsertWorkspaceBoardTodoHandoffTemplate,
 } from '../../core/api.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { showConfirmDialog, showFormDialog, showToast } from '../../utils/feedback.js';
@@ -36,6 +40,7 @@ function createSourceSettingsDialog({ workspaceId, displayMode, onDisplayModeCha
     overlay.setAttribute('role', 'presentation');
     const state = {
         settings: null,
+        templates: null,
         sourcesChanged: false,
         displayMode: normalizeDisplayMode(displayMode),
         loading: true,
@@ -51,7 +56,12 @@ function createSourceSettingsDialog({ workspaceId, displayMode, onDisplayModeCha
         state.error = '';
         render();
         try {
-            state.settings = await fetchBoardTodoSources({ workspaceId });
+            const [settings, templates] = await Promise.all([
+                fetchBoardTodoSources({ workspaceId }),
+                fetchBoardTodoHandoffTemplates({ workspaceId }),
+            ]);
+            state.settings = settings;
+            state.templates = templates;
         } catch (error) {
             state.error = error?.message || String(error);
         } finally {
@@ -97,6 +107,12 @@ function createSourceSettingsDialog({ workspaceId, displayMode, onDisplayModeCha
                         void handleToggleSource({ workspaceId, sourceId, state, render, load });
                     } else if (actionName === 'delete') {
                         void handleDeleteSource({ sourceId, state, load });
+                    } else if (actionName === 'template-workspace') {
+                        void handleWorkspaceTemplate({ workspaceId, kind: action.dataset.kind, state, load });
+                    } else if (actionName === 'template-source') {
+                        void handleSourceTemplate({ workspaceId, sourceId, kind: action.dataset.kind, state, load });
+                    } else if (actionName === 'template-delete') {
+                        void handleDeleteTemplate({ templateId: action.dataset.templateId, state, load });
                     }
                 });
                 render();
@@ -117,12 +133,13 @@ function renderDialog(state) {
                     <h3 id="board-todo-source-settings-title">${escapeHtml(t('board_todos.settings.title'))}</h3>
                     <p>${escapeHtml(sourceSettingsSummary(settings, sources))}</p>
                 </div>
-                <button class="board-todos-column-icon-btn" type="button" data-board-todo-source-action="close" aria-label="${escapeHtml(t('settings.action.cancel'))}">x</button>
+                <button class="board-todo-source-settings-close" type="button" data-board-todo-source-action="close" aria-label="${escapeHtml(t('settings.action.cancel'))}">${renderCloseIcon()}</button>
             </header>
             <div class="board-todo-source-settings-body">
                 ${renderDisplayModeSettings(state.displayMode)}
                 ${renderSourceSettingsStatus(state)}
                 ${renderSourceList(sources, state.loading)}
+                ${renderTemplateSettings(state, sources)}
             </div>
             <footer class="board-todo-source-settings-footer">
                 <button class="board-todos-tool-btn" type="button" data-board-todo-source-action="add">${escapeHtml(t('board_todos.sources.add'))}</button>
@@ -191,20 +208,31 @@ function renderSourceList(sources, loading) {
     }
     if (!sources.length) {
         return `
-            <div class="settings-empty-state board-todo-source-empty">
-                <h4>${escapeHtml(t('board_todos.sources.empty_title'))}</h4>
-                <p>${escapeHtml(t('board_todos.sources.empty_copy'))}</p>
-            </div>
+            <section class="board-todo-settings-section board-todo-source-list-section" aria-labelledby="board-todo-source-list-title">
+                <div class="board-todo-settings-section-head">
+                    <h4 id="board-todo-source-list-title">${escapeHtml(t('board_todos.sources.list_title'))}</h4>
+                </div>
+                <div class="settings-empty-state board-todo-source-empty">
+                    <h4>${escapeHtml(t('board_todos.sources.empty_title'))}</h4>
+                    <p>${escapeHtml(t('board_todos.sources.empty_copy'))}</p>
+                </div>
+            </section>
         `;
     }
     return `
-        <div class="profile-records board-todo-source-records">
-            ${sources.map((entry, index) => renderSourceRecord(entry, index)).join('')}
-        </div>
+        <section class="board-todo-settings-section board-todo-source-list-section" aria-labelledby="board-todo-source-list-title">
+            <div class="board-todo-settings-section-head">
+                <h4 id="board-todo-source-list-title">${escapeHtml(t('board_todos.sources.list_title'))}</h4>
+                <span>${escapeHtml(formatMessage('board_todos.sources.summary', { count: sources.length }))}</span>
+            </div>
+            <div class="board-todo-source-records">
+                ${sources.map(entry => renderSourceRecord(entry)).join('')}
+            </div>
+        </section>
     `;
 }
 
-function renderSourceRecord(entry, index) {
+function renderSourceRecord(entry) {
     const source = entry.source || {};
     const state = entry.state || null;
     const sourceId = String(source.source_id || '').trim();
@@ -215,32 +243,29 @@ function renderSourceRecord(entry, index) {
         ? formatDateTime(state.last_sync_finished_at)
         : t('board_todos.value.none');
     return `
-        <div class="profile-record profile-card board-todo-source-record" data-source-id="${escapeHtml(sourceId)}" style="--profile-index:${index};">
-            <div class="profile-record-main">
-                <div class="profile-record-heading">
-                    <div class="profile-card-heading">
-                        <div class="profile-card-title-row">
-                            <h4>${escapeHtml(source.display_name || repository)}</h4>
-                            <div class="profile-card-chips">
-                                <span class="profile-card-chip">${escapeHtml(enabled ? t('settings.field.enabled') : t('settings.roles.disabled'))}</span>
-                                <span class="profile-card-chip">${escapeHtml(t('board_todos.sources.github'))}</span>
-                            </div>
-                        </div>
-                        <div class="profile-record-summary" title="${escapeHtml(repository)}">
-                            <span class="profile-record-summary-primary">${escapeHtml(repository)}</span>
-                        </div>
-                        <div class="profile-record-summary" title="${escapeHtml(syncStatus)}">
-                            <span class="profile-record-summary-primary">${escapeHtml(formatMessage('board_todos.sources.sync_status', { status: syncStatus }))}</span>
-                            <span class="profile-record-summary-separator">/</span>
-                            <span class="profile-record-summary-secondary">${escapeHtml(finishedAt)}</span>
-                        </div>
+        <div class="board-todo-source-record" data-source-id="${escapeHtml(sourceId)}">
+            <div class="board-todo-source-provider" aria-hidden="true">
+                <img src="/assets/connectors/github.svg" alt="">
+            </div>
+            <div class="board-todo-source-main">
+                <div class="board-todo-source-title-row">
+                    <h4>${escapeHtml(source.display_name || repository)}</h4>
+                    <div class="board-todo-source-chips">
+                        <span class="board-todo-source-chip ${enabled ? 'is-enabled' : 'is-disabled'}">${escapeHtml(enabled ? t('settings.field.enabled') : t('settings.roles.disabled'))}</span>
+                        <span class="board-todo-source-chip">${escapeHtml(t('board_todos.sources.github'))}</span>
                     </div>
                 </div>
-                <div class="profile-card-actions">
-                    <button class="board-todo-source-inline-action" type="button" data-board-todo-source-action="toggle" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(enabled ? t('board_todos.sources.disable') : t('board_todos.sources.enable'))}</button>
-                    <button class="board-todo-source-inline-action" type="button" data-board-todo-source-action="edit" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(t('settings.action.edit'))}</button>
-                    <button class="board-todo-source-inline-action is-danger" type="button" data-board-todo-source-action="delete" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                <div class="board-todo-source-repo" title="${escapeHtml(repository)}">${escapeHtml(repository)}</div>
+                <div class="board-todo-source-sync" title="${escapeHtml(syncStatus)}">
+                    <span>${escapeHtml(formatMessage('board_todos.sources.sync_status', { status: syncStatus }))}</span>
+                    <span class="board-todo-source-sync-separator">/</span>
+                    <span>${escapeHtml(finishedAt)}</span>
                 </div>
+            </div>
+            <div class="board-todo-source-actions">
+                <button class="board-todo-source-inline-action" type="button" data-board-todo-source-action="toggle" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(enabled ? t('board_todos.sources.disable') : t('board_todos.sources.enable'))}</button>
+                <button class="board-todo-source-inline-action" type="button" data-board-todo-source-action="edit" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(t('settings.action.edit'))}</button>
+                <button class="board-todo-source-inline-action is-danger" type="button" data-board-todo-source-action="delete" data-source-id="${escapeHtml(sourceId)}">${escapeHtml(t('settings.action.delete'))}</button>
             </div>
         </div>
     `;
@@ -265,6 +290,104 @@ async function handleAddSource({ workspaceId, state, render, load }) {
     } catch (error) {
         showSourceMutationError({ error, state, render });
     }
+}
+
+function renderTemplateSettings(state, sources) {
+    if (state.loading) {
+        return '';
+    }
+    return `
+        <section class="board-todo-settings-section board-todo-handoff-template-settings">
+            <div class="board-todo-settings-section-head">
+                <h4>${escapeHtml(t('board_todos.templates.title'))}</h4>
+                <span>${escapeHtml(t('board_todos.templates.description'))}</span>
+            </div>
+            <div class="board-todo-template-actions">
+                ${renderTemplateButton({
+                    action: 'template-workspace',
+                    kind: 'start',
+                    label: t('board_todos.templates.workspace_start'),
+                })}
+                ${renderTemplateButton({
+                    action: 'template-workspace',
+                    kind: 'request_changes',
+                    label: t('board_todos.templates.workspace_request_changes'),
+                })}
+            </div>
+            ${sources.length ? `
+                <div class="board-todo-template-source-list" role="table" aria-label="${escapeHtml(t('board_todos.templates.source_overrides'))}">
+                    <div class="board-todo-template-source-head" role="row">
+                        <span role="columnheader">${escapeHtml(t('board_todos.templates.source'))}</span>
+                        <span role="columnheader">${escapeHtml(t('board_todos.templates.start'))}</span>
+                        <span role="columnheader">${escapeHtml(t('board_todos.templates.request_changes'))}</span>
+                    </div>
+                    ${sources.map(entry => renderSourceTemplateRow(entry, state)).join('')}
+                </div>
+            ` : ''}
+        </section>
+    `;
+}
+
+function renderSourceTemplateRow(entry, state) {
+    const source = entry.source || {};
+    const sourceId = String(source.source_id || '').trim();
+    const displayName = String(source.display_name || source.repository_full_name || sourceId);
+    return `
+        <div class="board-todo-template-source-row" role="row">
+            <span class="board-todo-template-source-name" role="cell">${escapeHtml(displayName)}</span>
+            <div class="board-todo-template-source-cell" role="cell">
+                ${renderSourceTemplateCell({ state, sourceId, kind: 'start', label: t('board_todos.templates.start') })}
+            </div>
+            <div class="board-todo-template-source-cell" role="cell">
+                ${renderSourceTemplateCell({
+                    state,
+                    sourceId,
+                    kind: 'request_changes',
+                    label: t('board_todos.templates.request_changes'),
+                })}
+            </div>
+        </div>
+    `;
+}
+
+function renderSourceTemplateCell({ state, sourceId, kind, label }) {
+    const template = findTemplate(state.templates, { scope: 'source', sourceId, kind });
+    return `
+        ${renderTemplateButton({
+            action: 'template-source',
+            kind,
+            sourceId,
+            label,
+        })}
+        ${template ? `
+            <button
+                class="board-todo-source-inline-action is-danger"
+                type="button"
+                data-board-todo-source-action="template-delete"
+                data-template-id="${escapeHtml(template.template_id)}"
+            >${escapeHtml(t('settings.action.delete'))}</button>
+        ` : ''}
+    `;
+}
+
+function renderTemplateButton({ action, kind, label, sourceId = '' }) {
+    return `
+        <button
+            class="board-todo-source-inline-action"
+            type="button"
+            data-board-todo-source-action="${escapeHtml(action)}"
+            data-kind="${escapeHtml(kind)}"
+            ${sourceId ? `data-source-id="${escapeHtml(sourceId)}"` : ''}
+        >${escapeHtml(label)}</button>
+    `;
+}
+
+function renderCloseIcon() {
+    return `
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+            <path d="M4.3 4.3 8 8m3.7 3.7L8 8m0 0 3.7-3.7M8 8l-3.7 3.7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.7"/>
+        </svg>
+    `;
 }
 
 async function handleEditSource({ workspaceId, sourceId, state, render, load }) {
@@ -334,6 +457,60 @@ async function handleDeleteSource({ sourceId, state, load }) {
     }
 }
 
+async function handleWorkspaceTemplate({ workspaceId, kind, state, load }) {
+    const values = await templateFormValues(
+        findTemplate(state.templates, { scope: 'workspace', kind })?.template || '',
+    );
+    if (!values) {
+        return;
+    }
+    try {
+        await upsertWorkspaceBoardTodoHandoffTemplate({
+            workspace_id: workspaceId,
+            template_kind: normalizeTemplateKind(kind),
+            template: values.template,
+        });
+        showToast({ tone: 'success', message: t('board_todos.templates.saved') });
+        await load();
+    } catch (error) {
+        showSourceMutationError({ error, state, render: () => {} });
+    }
+}
+
+async function handleSourceTemplate({ workspaceId, sourceId, kind, state, load }) {
+    const values = await templateFormValues(
+        findTemplate(state.templates, { scope: 'source', sourceId, kind })?.template || '',
+    );
+    if (!values) {
+        return;
+    }
+    try {
+        await upsertSourceBoardTodoHandoffTemplate(sourceId, {
+            workspace_id: workspaceId,
+            template_kind: normalizeTemplateKind(kind),
+            template: values.template,
+        });
+        showToast({ tone: 'success', message: t('board_todos.templates.saved') });
+        await load();
+    } catch (error) {
+        showSourceMutationError({ error, state, render: () => {} });
+    }
+}
+
+async function handleDeleteTemplate({ templateId, state, load }) {
+    const safeTemplateId = String(templateId || '').trim();
+    if (!safeTemplateId) {
+        return;
+    }
+    try {
+        await deleteSourceBoardTodoHandoffTemplate(safeTemplateId);
+        showToast({ tone: 'success', message: t('board_todos.templates.saved') });
+        await load();
+    } catch (error) {
+        showToast({ tone: 'danger', message: error?.message || String(error) });
+    }
+}
+
 function showSourceMutationError({ error, state, render }) {
     const message = error?.message || String(error);
     state.error = message;
@@ -341,6 +518,29 @@ function showSourceMutationError({ error, state, render }) {
     showToast({
         tone: 'danger',
         message,
+    });
+}
+
+async function templateFormValues(template = '') {
+    return showFormDialog({
+        title: t('board_todos.templates.edit_title'),
+        confirmLabel: t('settings.action.save'),
+        fields: [
+            {
+                id: 'template',
+                label: t('board_todos.templates.template'),
+                type: 'textarea',
+                rows: 10,
+                value: template,
+            },
+        ],
+        submitHandler: payload => {
+            const value = String(payload?.template || '').trim();
+            if (!value) {
+                throw new Error(t('board_todos.error.prompt_required'));
+            }
+            return { template: value };
+        },
     });
 }
 
@@ -388,6 +588,24 @@ function validateSourceForm(payload) {
 function sourceEntries(settings) {
     return (Array.isArray(settings?.sources) ? settings.sources : [])
         .filter(entry => String(entry?.source?.kind || '') === 'github_issues');
+}
+
+function templateEntries(settings) {
+    return Array.isArray(settings?.templates) ? settings.templates : [];
+}
+
+function findTemplate(settings, { scope, sourceId = '', kind }) {
+    const normalizedKind = normalizeTemplateKind(kind);
+    const normalizedSourceId = String(sourceId || '').trim();
+    return templateEntries(settings).find(template => (
+        String(template?.scope || '') === scope
+        && String(template?.template_kind || '') === normalizedKind
+        && String(template?.source_id || '').trim() === normalizedSourceId
+    ));
+}
+
+function normalizeTemplateKind(kind) {
+    return String(kind || '').trim() === 'request_changes' ? 'request_changes' : 'start';
 }
 
 function normalizeDisplayMode(value) {
