@@ -653,6 +653,18 @@ function bindMemoryEvolutionControls() {
     }
 }
 
+function isSelectedMemoryContext(workspaceId, memoryId) {
+    const selected = memoryState.selectedEntry;
+    return memoryState.selectedId === memoryId
+        && String(selected?.id || '').trim() === memoryId
+        && String(selected?.workspace_id || '').trim() === workspaceId;
+}
+
+function isSelectedDraftContext(workspaceId, memoryId, draftId) {
+    return isSelectedMemoryContext(workspaceId, memoryId)
+        && String(memoryState.evolutionDraft?.draft_id || '').trim() === draftId;
+}
+
 async function createSelectedMemoryEvolutionDraft(target) {
     const entry = memoryState.selectedEntry;
     const workspaceId = String(entry?.workspace_id || '').trim();
@@ -680,6 +692,9 @@ async function createSelectedMemoryEvolutionDraft(target) {
             description: entry.content?.title || '',
             objective: entry.content?.body || '',
         });
+        if (!isSelectedMemoryContext(workspaceId, memoryId)) {
+            return;
+        }
         memoryState = {
             ...memoryState,
             evolutionDraft: draft,
@@ -689,6 +704,9 @@ async function createSelectedMemoryEvolutionDraft(target) {
         };
         renderMemoryContent();
     } catch (error) {
+        if (!isSelectedMemoryContext(workspaceId, memoryId)) {
+            return;
+        }
         memoryState = {
             ...memoryState,
             evolutionBusy: false,
@@ -701,9 +719,11 @@ async function createSelectedMemoryEvolutionDraft(target) {
 
 async function applySelectedMemoryEvolutionDraft() {
     const draft = memoryState.evolutionDraft;
+    const entry = memoryState.selectedEntry;
+    const memoryId = String(entry?.id || '').trim();
     const workspaceId = String(draft?.workspace_id || '').trim();
     const draftId = String(draft?.draft_id || '').trim();
-    if (!workspaceId || !draftId) {
+    if (!workspaceId || !draftId || !memoryId) {
         return;
     }
     memoryState = {
@@ -715,6 +735,9 @@ async function applySelectedMemoryEvolutionDraft() {
     renderMemoryContent();
     try {
         const applied = await applyMemoryEvolutionDraft(workspaceId, draftId, {});
+        if (!isSelectedDraftContext(workspaceId, memoryId, draftId)) {
+            return;
+        }
         memoryState = {
             ...memoryState,
             evolutionDraft: applied,
@@ -724,6 +747,9 @@ async function applySelectedMemoryEvolutionDraft() {
         };
         renderMemoryContent();
     } catch (error) {
+        if (!isSelectedDraftContext(workspaceId, memoryId, draftId)) {
+            return;
+        }
         memoryState = {
             ...memoryState,
             evolutionBusy: false,

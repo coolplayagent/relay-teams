@@ -31,7 +31,10 @@ from relay_teams.memory.models import (
     RejectMemoryEvolutionDraftRequest,
     UpdateMemoryEntryRequest,
 )
-from relay_teams.memory.evolution_service import MemoryEvolutionService
+from relay_teams.memory.evolution_service import (
+    MemoryEvolutionConflictError,
+    MemoryEvolutionService,
+)
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.validation import RequiredIdentifierStr
 
@@ -202,8 +205,10 @@ async def apply_memory_evolution_draft(
     payload = body or ApplyMemoryEvolutionDraftRequest()
     try:
         draft = await service.apply_draft_async(workspace_id, draft_id, payload)
-    except ValueError as exc:
+    except MemoryEvolutionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if draft is None:
         raise HTTPException(status_code=404, detail="Memory evolution draft not found")
     return draft
@@ -222,8 +227,10 @@ async def reject_memory_evolution_draft(
     payload = body or RejectMemoryEvolutionDraftRequest()
     try:
         draft = await service.reject_draft_async(workspace_id, draft_id, payload)
-    except ValueError as exc:
+    except MemoryEvolutionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if draft is None:
         raise HTTPException(status_code=404, detail="Memory evolution draft not found")
     return draft

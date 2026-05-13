@@ -69,6 +69,17 @@ def test_memory_view_exposes_evolution_controls() -> None:
     assert ":apply" in api_source
 
 
+def test_memory_evolution_ignores_stale_async_responses() -> None:
+    source = Path("frontend/dist/js/components/memoryView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function isSelectedMemoryContext(workspaceId, memoryId)" in source
+    assert "function isSelectedDraftContext(workspaceId, memoryId, draftId)" in source
+    assert "if (!isSelectedMemoryContext(workspaceId, memoryId))" in source
+    assert "if (!isSelectedDraftContext(workspaceId, memoryId, draftId))" in source
+
+
 def test_memory_architecture_i18n_keys_exist() -> None:
     source = Path("frontend/dist/js/utils/i18n.js").read_text(encoding="utf-8")
 

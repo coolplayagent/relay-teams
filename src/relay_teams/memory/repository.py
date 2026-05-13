@@ -545,6 +545,42 @@ class MemoryBankRepository(SharedSqliteRepository):
         )
         return draft
 
+    async def claim_evolution_draft_apply_async(
+        self,
+        *,
+        draft_id: str,
+        updated_at: datetime,
+    ) -> MemoryEvolutionDraft | None:
+        async def op(conn: aiosqlite.Connection) -> MemoryEvolutionDraft | None:
+            cursor = await conn.execute(
+                """UPDATE memory_evolution_drafts
+                SET status=?, updated_at=?
+                WHERE draft_id=? AND status=?""",
+                (
+                    MemoryEvolutionStatus.APPLYING.value,
+                    updated_at.isoformat(),
+                    draft_id,
+                    MemoryEvolutionStatus.DRAFT.value,
+                ),
+            )
+            affected = cursor.rowcount
+            await cursor.close()
+            if affected == 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM memory_evolution_drafts WHERE draft_id=?",
+                (draft_id,),
+            )
+            if row is None:
+                return None
+            return _row_to_evolution_draft(row)
+
+        return await self._run_async_write(
+            operation_name="claim_memory_evolution_draft_apply_async",
+            operation=op,
+        )
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------

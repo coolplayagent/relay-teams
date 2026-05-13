@@ -422,6 +422,7 @@ class MemoryEvolutionTarget(str, Enum):
 
 class MemoryEvolutionStatus(str, Enum):
     DRAFT = "draft"
+    APPLYING = "applying"
     APPLIED = "applied"
     REJECTED = "rejected"
     SUPERSEDED = "superseded"

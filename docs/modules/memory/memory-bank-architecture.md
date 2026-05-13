@@ -138,7 +138,9 @@ No background path silently writes skills. Draft application is a user or API
 mutation, and source memory metadata records the applied draft and skill ref.
 Draft creation derives `workspace_id` from the API path and validates the target
 skill identifiers before persisting the draft, so invalid drafts do not fail
-later during skill application.
+later during skill application. Draft application atomically claims a draft
+before writing the skill, preventing concurrent apply requests from creating
+multiple skill outputs from one draft.
 
 ## API Surface
 

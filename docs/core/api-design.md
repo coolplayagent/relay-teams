@@ -4161,7 +4161,8 @@ Lists Memory Bank evolution drafts for one workspace.
 
 Query fields:
 - `target`: optional `skill` or `sop_skill`.
-- `status`: optional `draft`, `applied`, `rejected`, or `superseded`.
+- `status`: optional `draft`, `applying`, `applied`, `rejected`, or
+  `superseded`.
 - `limit`: page size `1..100`, default `20`.
 - `offset`: default `0`.
 
@@ -4184,7 +4185,8 @@ Request: `ApplyMemoryEvolutionDraftRequest`
 - `instructions`: optional final `SKILL.md` body override.
 
 Response: `MemoryEvolutionDraft` with `status=applied` and `applied_skill_ref`.
-Returns `409` when the draft is no longer in `draft` status.
+Returns `400` for invalid apply payloads and `409` when the draft is no longer
+in `draft` status or another apply request has already claimed it.
 
 ### `POST /workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject`
 

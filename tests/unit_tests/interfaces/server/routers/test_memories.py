@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from relay_teams.interfaces.server.routers.memories import router
+from relay_teams.memory.evolution_service import MemoryEvolutionConflictError
 from relay_teams.memory.models import (
     MemoryContent,
     MemoryConsolidationResult,
@@ -519,7 +520,7 @@ class TestMemoryEvolutionDrafts:
     def test_apply_evolution_draft_returns_409_for_service_error(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         evolution_svc.apply_draft_async = AsyncMock(
-            side_effect=ValueError("not applicable")
+            side_effect=MemoryEvolutionConflictError("not applicable")
         )
 
         response = client.post(
@@ -529,6 +530,20 @@ class TestMemoryEvolutionDrafts:
 
         assert response.status_code == 409
         assert "not applicable" in response.json()["detail"]
+
+    def test_apply_evolution_draft_returns_400_for_invalid_payload(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(
+            side_effect=ValueError("instructions must be non-empty")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply",
+            json={},
+        )
+
+        assert response.status_code == 400
+        assert "instructions must be non-empty" in response.json()["detail"]
 
     def test_apply_evolution_draft_returns_404_when_missing(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
@@ -565,7 +580,7 @@ class TestMemoryEvolutionDrafts:
     def test_reject_evolution_draft_returns_409_for_service_error(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         evolution_svc.reject_draft_async = AsyncMock(
-            side_effect=ValueError("not rejectable")
+            side_effect=MemoryEvolutionConflictError("not rejectable")
         )
 
         response = client.post(
@@ -575,6 +590,20 @@ class TestMemoryEvolutionDrafts:
 
         assert response.status_code == 409
         assert "not rejectable" in response.json()["detail"]
+
+    def test_reject_evolution_draft_returns_400_for_invalid_payload(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(
+            side_effect=ValueError("invalid rejection")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject",
+            json={},
+        )
+
+        assert response.status_code == 400
+        assert "invalid rejection" in response.json()["detail"]
 
     def test_reject_evolution_draft_returns_404_when_missing(self) -> None:
         client, _, evolution_svc = _client_with_evolution()

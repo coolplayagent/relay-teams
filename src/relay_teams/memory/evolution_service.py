@@ -28,6 +28,10 @@ LOGGER = get_logger(__name__)
 _MAX_MEMORY_METADATA_KEYS = 20
 
 
+class MemoryEvolutionConflictError(ValueError):
+    pass
+
+
 class MemoryEvolutionService:
     def __init__(
         self,
@@ -99,9 +103,8 @@ class MemoryEvolutionService:
             return None
         if draft.status != MemoryEvolutionStatus.DRAFT:
             message = f"Memory evolution draft is not applicable: {draft.status.value}"
-            raise ValueError(message)
+            raise MemoryEvolutionConflictError(message)
 
-        now = datetime.now(tz=timezone.utc)
         skill_id = (request.skill_id or draft.skill_id).strip()
         runtime_name = (request.runtime_name or draft.runtime_name).strip()
         description = (
@@ -122,16 +125,36 @@ class MemoryEvolutionService:
             )
             raise ValueError(message)
 
-        saved = await asyncio.to_thread(
-            self._skill_service.save_skill,
-            skill_id,
-            ClawHubSkillWriteRequest(
-                runtime_name=runtime_name,
-                description=description,
-                instructions=instructions,
-                files=(),
-            ),
+        now = datetime.now(tz=timezone.utc)
+        claimed = await self._repo.claim_evolution_draft_apply_async(
+            draft_id=draft.draft_id,
+            updated_at=now,
         )
+        if claimed is None:
+            message = "Memory evolution draft is not applicable: already claimed"
+            raise MemoryEvolutionConflictError(message)
+        draft = claimed
+
+        try:
+            saved = await asyncio.to_thread(
+                self._skill_service.save_skill,
+                skill_id,
+                ClawHubSkillWriteRequest(
+                    runtime_name=runtime_name,
+                    description=description,
+                    instructions=instructions,
+                    files=(),
+                ),
+            )
+        except Exception:
+            reverted = draft.model_copy(
+                update={
+                    "status": MemoryEvolutionStatus.DRAFT,
+                    "updated_at": datetime.now(tz=timezone.utc),
+                }
+            )
+            await self._repo.update_evolution_draft_async(draft=reverted)
+            raise
         applied_ref = saved.ref or runtime_name
         applied = draft.model_copy(
             update={
@@ -165,7 +188,7 @@ class MemoryEvolutionService:
             return None
         if draft.status != MemoryEvolutionStatus.DRAFT:
             message = f"Memory evolution draft is not rejectable: {draft.status.value}"
-            raise ValueError(message)
+            raise MemoryEvolutionConflictError(message)
         now = datetime.now(tz=timezone.utc)
         rejected = draft.model_copy(
             update={

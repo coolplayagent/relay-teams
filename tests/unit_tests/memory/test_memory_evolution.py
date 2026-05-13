@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from relay_teams.memory.evolution_service import MemoryEvolutionService
+from relay_teams.memory.evolution_service import (
+    MemoryEvolutionConflictError,
+    MemoryEvolutionService,
+)
 from relay_teams.memory.models import (
     ApplyMemoryEvolutionDraftRequest,
     CreateMemoryEntryRequest,
@@ -14,6 +18,7 @@ from relay_teams.memory.models import (
     MemoryContent,
     MemoryEntryKind,
     MemoryEntryStatus,
+    MemoryEvolutionDraft,
     MemoryEvolutionDraftQuery,
     MemoryEvolutionStatus,
     MemoryEvolutionTarget,
@@ -436,6 +441,52 @@ class TestMemoryEvolutionService:
         assert len(source.metadata) == 20
         assert source.metadata["evolution_draft_id"] == draft.draft_id
         assert source.metadata["evolution_skill_ref"] == "metadata-sop"
+
+    async def test_apply_draft_allows_only_one_concurrent_claim(
+        self, tmp_path: Path
+    ) -> None:
+        memory_service, evolution_service, reload_recorder = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="concurrent-apply",
+                runtime_name="concurrent-apply",
+            )
+        )
+
+        results = await asyncio.gather(
+            evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(),
+            ),
+            evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(
+                    skill_id="concurrent-apply-other",
+                    runtime_name="concurrent-apply-other",
+                ),
+            ),
+            return_exceptions=True,
+        )
+
+        applied: list[MemoryEvolutionDraft] = []
+        conflicts: list[MemoryEvolutionConflictError] = []
+        for result in results:
+            if isinstance(result, MemoryEvolutionConflictError):
+                conflicts.append(result)
+            elif isinstance(result, BaseException):
+                raise result
+            elif result is not None:
+                applied.append(result)
+        assert len(applied) == 1
+        assert len(conflicts) == 1
+        assert applied[0].status == MemoryEvolutionStatus.APPLIED
+        assert reload_recorder.count == 1
 
     async def test_apply_draft_rejects_blank_instructions(self, tmp_path: Path) -> None:
         memory_service, evolution_service, _ = _build_services(tmp_path)
