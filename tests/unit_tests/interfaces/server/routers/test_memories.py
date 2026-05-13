@@ -397,6 +397,52 @@ class TestMemoryEvolutionDrafts:
         call_req = evolution_svc.create_draft_async.call_args[0][0]
         assert call_req.workspace_id == "ws-1"
 
+    def test_create_evolution_draft_allows_path_derived_workspace(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 201
+        call_req = evolution_svc.create_draft_async.call_args[0][0]
+        assert call_req.workspace_id == "ws-1"
+
+    def test_create_evolution_draft_rejects_invalid_skill_id(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "   ",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 422
+        evolution_svc.create_draft_async.assert_not_awaited()
+
+    def test_create_evolution_draft_rejects_invalid_runtime_name(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "bad/runtime",
+            },
+        )
+
+        assert response.status_code == 422
+        evolution_svc.create_draft_async.assert_not_awaited()
+
     def test_create_evolution_draft_returns_400_for_service_error(self) -> None:
         client, _, evolution_svc = _client_with_evolution()
         evolution_svc.create_draft_async = AsyncMock(

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from relay_teams.logger import get_logger
@@ -40,6 +41,11 @@ class MemoryEvolutionService:
     async def create_draft_async(
         self, request: CreateMemoryEvolutionDraftRequest
     ) -> MemoryEvolutionDraft:
+        workspace_id = request.workspace_id.strip()
+        if not workspace_id:
+            message = "workspace_id is required when creating a memory evolution draft"
+            raise ValueError(message)
+        request = request.model_copy(update={"workspace_id": workspace_id})
         source_entries = await self._load_active_source_entries_async(request)
         now = datetime.now(tz=timezone.utc)
         description = request.description.strip() or _default_description(
@@ -56,12 +62,12 @@ class MemoryEvolutionService:
         )
         draft = MemoryEvolutionDraft(
             draft_id=generate_memory_evolution_draft_id(),
-            workspace_id=request.workspace_id,
+            workspace_id=workspace_id,
             source_memory_ids=request.source_memory_ids,
             target=request.target,
             status=MemoryEvolutionStatus.DRAFT,
-            skill_id=request.skill_id.strip(),
-            runtime_name=request.runtime_name.strip(),
+            skill_id=request.skill_id,
+            runtime_name=request.runtime_name,
             description=description,
             instructions=instructions,
             created_at=now,
@@ -116,7 +122,8 @@ class MemoryEvolutionService:
             )
             raise ValueError(message)
 
-        saved = self._skill_service.save_skill(
+        saved = await asyncio.to_thread(
+            self._skill_service.save_skill,
             skill_id,
             ClawHubSkillWriteRequest(
                 runtime_name=runtime_name,

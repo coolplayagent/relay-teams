@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -426,10 +427,24 @@ class MemoryEvolutionStatus(str, Enum):
     SUPERSEDED = "superseded"
 
 
+_CLAW_HUB_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _normalize_claw_hub_identifier(value: str, *, field_name: str) -> str:
+    normalized = value.strip()
+    if not _CLAW_HUB_IDENTIFIER_PATTERN.fullmatch(normalized):
+        message = (
+            f"{field_name} must start with an alphanumeric character and only use "
+            "letters, digits, dot, underscore, or hyphen"
+        )
+        raise ValueError(message)
+    return normalized
+
+
 class CreateMemoryEvolutionDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: str = ""
     source_memory_ids: tuple[str, ...] = Field(min_length=1, max_length=50)
     target: MemoryEvolutionTarget = MemoryEvolutionTarget.SOP_SKILL
     skill_id: str = Field(min_length=1, max_length=128)
@@ -456,6 +471,19 @@ class CreateMemoryEvolutionDraftRequest(BaseModel):
             cleaned.append(normalized)
         return tuple(cleaned)
 
+    @field_validator("skill_id")
+    @classmethod
+    def _validate_skill_id(cls, skill_id: str) -> str:
+        return _normalize_claw_hub_identifier(skill_id, field_name="skill_id")
+
+    @field_validator("runtime_name")
+    @classmethod
+    def _validate_runtime_name(cls, runtime_name: str) -> str:
+        return _normalize_claw_hub_identifier(
+            runtime_name,
+            field_name="runtime_name",
+        )
+
 
 class ApplyMemoryEvolutionDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -464,6 +492,26 @@ class ApplyMemoryEvolutionDraftRequest(BaseModel):
     runtime_name: str | None = Field(default=None, min_length=1, max_length=128)
     description: str | None = None
     instructions: str | None = None
+
+    @field_validator("skill_id")
+    @classmethod
+    def _validate_optional_skill_id(cls, skill_id: str | None) -> str | None:
+        if skill_id is None:
+            return None
+        return _normalize_claw_hub_identifier(skill_id, field_name="skill_id")
+
+    @field_validator("runtime_name")
+    @classmethod
+    def _validate_optional_runtime_name(
+        cls,
+        runtime_name: str | None,
+    ) -> str | None:
+        if runtime_name is None:
+            return None
+        return _normalize_claw_hub_identifier(
+            runtime_name,
+            field_name="runtime_name",
+        )
 
 
 class RejectMemoryEvolutionDraftRequest(BaseModel):

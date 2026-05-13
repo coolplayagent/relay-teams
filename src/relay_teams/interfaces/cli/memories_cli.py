@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 import json
+from urllib.parse import urlencode
 
 import typer
 
@@ -63,11 +64,12 @@ def build_memories_app(
             params["scope"] = scope
         if role_id is not None:
             params["role_id"] = role_id
+        path = _path_with_query(f"/api/workspaces/{workspace_id}/memories", params)
         payload = request_json(
             base_url,
             "GET",
-            f"/api/workspaces/{workspace_id}/memories",
-            params if params else None,
+            path,
+            None,
         )
         response = _require_object_response(
             payload, f"/api/workspaces/{workspace_id}/memories"
@@ -357,11 +359,15 @@ def build_memories_app(
             params["target"] = target
         if status is not None:
             params["status"] = status
+        path = _path_with_query(
+            f"/api/workspaces/{workspace_id}/memories/evolutions",
+            params,
+        )
         payload = request_json(
             base_url,
             "GET",
-            f"/api/workspaces/{workspace_id}/memories/evolutions",
-            params if params else None,
+            path,
+            None,
         )
         response = _require_object_response(
             payload, f"/api/workspaces/{workspace_id}/memories/evolutions"
@@ -494,6 +500,12 @@ def _render_memories_table(payload: dict[str, object]) -> str:
             + score
         )
     return "\n".join(lines)
+
+
+def _path_with_query(path: str, params: dict[str, object]) -> str:
+    if not params:
+        return path
+    return f"{path}?{urlencode(params)}"
 
 
 def _render_entry_detail(payload: dict[str, object]) -> str:

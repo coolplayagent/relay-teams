@@ -4140,16 +4140,20 @@ Creates a reviewable Memory Bank evolution draft. This does not mutate the
 runtime skill directory.
 
 Request: `CreateMemoryEvolutionDraftRequest`
-- `workspace_id`: path-derived.
+- `workspace_id`: path-derived; clients may omit it from the JSON body.
 - `source_memory_ids[]`: active Memory Bank entry IDs in the same workspace.
 - `target`: `skill` or `sop_skill`, default `sop_skill`.
-- `skill_id`: target app-scoped skill directory ID.
-- `runtime_name`: runtime skill name written into `SKILL.md`.
+- `skill_id`: target app-scoped skill directory ID. Must start with an
+  alphanumeric character and only use letters, digits, dot, underscore, or
+  hyphen.
+- `runtime_name`: runtime skill name written into `SKILL.md`. Uses the same
+  identifier rules as `skill_id`.
 - `description`: optional skill description override.
 - `objective`: optional rendering guidance for the draft body.
 
 Response: `MemoryEvolutionDraft`. Returns `400` for missing, inactive, or
-cross-workspace source memory entries.
+cross-workspace source memory entries. Invalid request identifiers return
+`422`.
 
 ### `GET /workspaces/{workspace_id}/memories/evolutions`
 

@@ -108,6 +108,15 @@ class TestMemoryEvolutionRepository:
 
 
 class TestMemoryEvolutionModels:
+    async def test_workspace_id_can_be_path_derived(self) -> None:
+        request = CreateMemoryEvolutionDraftRequest(
+            source_memory_ids=("mem-1",),
+            skill_id="review-loop-sop",
+            runtime_name="review-loop-sop",
+        )
+
+        assert request.workspace_id == ""
+
     async def test_source_memory_ids_reject_blank_values(self) -> None:
         with pytest.raises(ValidationError, match="non-empty"):
             CreateMemoryEvolutionDraftRequest(
@@ -116,6 +125,28 @@ class TestMemoryEvolutionModels:
                 skill_id="review-loop-sop",
                 runtime_name="review-loop-sop",
             )
+
+    async def test_skill_ids_are_stripped_and_validated(self) -> None:
+        request = CreateMemoryEvolutionDraftRequest(
+            workspace_id="ws-evo",
+            source_memory_ids=("mem-1",),
+            skill_id=" review-loop-sop ",
+            runtime_name=" review-loop-sop ",
+        )
+
+        assert request.skill_id == "review-loop-sop"
+        assert request.runtime_name == "review-loop-sop"
+
+        with pytest.raises(ValidationError, match="skill_id must start"):
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=("mem-1",),
+                skill_id="bad/skill",
+                runtime_name="review-loop-sop",
+            )
+
+        with pytest.raises(ValidationError, match="runtime_name must start"):
+            ApplyMemoryEvolutionDraftRequest(runtime_name=" ")
 
     async def test_source_memory_ids_reject_duplicates_after_trim(self) -> None:
         with pytest.raises(ValidationError, match="Duplicate source memory id"):
@@ -228,6 +259,22 @@ class TestMemoryEvolutionService:
                     target=MemoryEvolutionTarget.SKILL,
                     skill_id="missing-skill",
                     runtime_name="missing-skill",
+                )
+            )
+
+    async def test_create_requires_workspace_id_in_service(
+        self, tmp_path: Path
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+
+        with pytest.raises(ValueError, match="workspace_id is required"):
+            await evolution_service.create_draft_async(
+                CreateMemoryEvolutionDraftRequest(
+                    source_memory_ids=(memory_id,),
+                    target=MemoryEvolutionTarget.SKILL,
+                    skill_id="missing-workspace-skill",
+                    runtime_name="missing-workspace-skill",
                 )
             )
 

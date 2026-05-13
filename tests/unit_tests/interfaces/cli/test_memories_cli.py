@@ -52,8 +52,9 @@ class _FakeRequestJson:
         body: dict[str, object] | None,
     ) -> dict[str, object]:
         self.calls.append((base_url, method, path, body))
-        if "/memories/evolutions" in path:
-            if method == "GET" and path.endswith("/evolutions"):
+        normalized_path = path.split("?", maxsplit=1)[0]
+        if "/memories/evolutions" in normalized_path:
+            if method == "GET" and normalized_path.endswith("/evolutions"):
                 return {
                     "items": [
                         {
@@ -87,14 +88,14 @@ class _FakeRequestJson:
             }
         if method == "DELETE":
             return {"ok": True}
-        if path.endswith("/consolidate"):
+        if normalized_path.endswith("/consolidate"):
             return {
                 "source_entry_count": 3,
                 "consolidated_entry_count": 2,
                 "superseded_entry_ids": ("mem-a", "mem-b"),
                 "new_entry_ids": ("mem-c", "mem-d"),
             }
-        if method == "POST" and path.endswith("/memories"):
+        if method == "POST" and normalized_path.endswith("/memories"):
             # Create endpoint returns a single entry
             return {
                 "id": "mem-new01",
@@ -111,7 +112,11 @@ class _FakeRequestJson:
                 "tags": [],
                 "content": {"title": "Created", "body": "Created body"},
             }
-        if method == "GET" and "/memories/" in path and path.count("/") == 5:
+        if (
+            method == "GET"
+            and "/memories/" in normalized_path
+            and normalized_path.count("/") == 5
+        ):
             # Single-entry GET
             return {
                 "id": "mem-det01",
@@ -239,9 +244,11 @@ class TestListCommand:
             ],
         )
         assert r.exit_code == 0
-        _, _, _, body = fake_req.calls[0]
-        # request_json sends query params via the body dict for GET
-        assert body is not None
+        _, _, path, body = fake_req.calls[0]
+        assert body is None
+        assert "tier=persistent" in path
+        assert "scope=workspace" in path
+        assert "role_id=role-1" in path
 
 
 # ---------------------------------------------------------------------------
@@ -568,10 +575,10 @@ class TestEvolveCommand:
         assert "mem-evo-001" in r.output
         _, method, path, body = fake_req.calls[0]
         assert method == "GET"
-        assert path == "/api/workspaces/ws-1/memories/evolutions"
-        assert isinstance(body, dict)
-        assert body["target"] == "sop_skill"
-        assert body["status"] == "draft"
+        assert path.startswith("/api/workspaces/ws-1/memories/evolutions?")
+        assert body is None
+        assert "target=sop_skill" in path
+        assert "status=draft" in path
 
     def test_evolve_list_json_output(self) -> None:
         app_obj, _, _ = _build_app()
