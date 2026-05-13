@@ -62,6 +62,8 @@ _WECHAT_ACCOUNT_ID = "wx-account-1"
 _WECHAT_PEER_ID = "wx-peer-1"
 _DISCORD_ACCOUNT_ID = "discord-account-1"
 _DISCORD_CHANNEL_ID = "discord-channel-1"
+_IM_SEND_TOOLS = ("im_send",)
+_IM_SEND_AND_ASK_TOOLS = ("im_send", "ask_question")
 
 
 def _make_session(
@@ -495,6 +497,26 @@ def _discord_gateway_session(
     )
 
 
+def _xiaoluban_gateway_session(
+    *,
+    session_id: str = _SESSION_ID,
+    account_id: str = "xlb-account-1",
+) -> GatewaySessionRecord:
+    return GatewaySessionRecord(
+        gateway_session_id="gws-xiaoluban-1",
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=f"xiaoluban:{account_id}:workspace-1:session-1",
+        internal_session_id=session_id,
+        peer_user_id="xiaoluban-user-1",
+        peer_chat_id="xiaoluban-chat-1",
+        channel_state={
+            "account_id": account_id,
+            "sender": "xiaoluban-user-1",
+            "receiver": "xiaoluban-chat-1",
+        },
+    )
+
+
 async def test_resolver_returns_im_tool_for_feishu_session() -> None:
     resolver = _build_context_resolver(
         sessions=_default_sessions(),
@@ -505,7 +527,7 @@ async def test_resolver_returns_im_tool_for_feishu_session() -> None:
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("im_send",)
+    assert resolved == _IM_SEND_AND_ASK_TOOLS
 
 
 async def test_resolver_returns_im_tool_for_wechat_session() -> None:
@@ -518,7 +540,7 @@ async def test_resolver_returns_im_tool_for_wechat_session() -> None:
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("im_send",)
+    assert resolved == _IM_SEND_AND_ASK_TOOLS
 
 
 async def test_resolver_returns_im_tool_for_discord_session() -> None:
@@ -531,7 +553,20 @@ async def test_resolver_returns_im_tool_for_discord_session() -> None:
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("im_send",)
+    assert resolved == _IM_SEND_AND_ASK_TOOLS
+
+
+async def test_resolver_returns_ask_tool_for_xiaoluban_session() -> None:
+    resolver = _build_context_resolver(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _xiaoluban_gateway_session()},
+    )
+
+    resolved = resolver.resolve_implicit_tools(
+        ToolResolutionContext(session_id=_SESSION_ID)
+    )
+
+    assert resolved == ("ask_question",)
 
 
 async def test_resolver_returns_no_tool_without_im_context() -> None:
@@ -547,7 +582,7 @@ async def test_resolver_returns_no_tool_without_im_context() -> None:
     assert resolved == ()
 
 
-async def test_resolver_returns_im_tool_for_automation_session_binding() -> None:
+async def test_resolver_returns_send_tool_for_automation_session_binding() -> None:
     resolver = _build_context_resolver(
         sessions={_SESSION_ID: _automation_session()},
         configs=_default_configs(),
@@ -558,7 +593,7 @@ async def test_resolver_returns_im_tool_for_automation_session_binding() -> None
         ToolResolutionContext(session_id=_SESSION_ID)
     )
 
-    assert resolved == ("im_send",)
+    assert resolved == _IM_SEND_TOOLS
 
 
 async def test_resolver_returns_no_tool_for_automation_session_without_binding() -> (

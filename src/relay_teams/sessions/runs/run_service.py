@@ -1671,9 +1671,15 @@ class SessionRunService:
         if cancellation_requested:
             raise asyncio.CancelledError
 
-    async def stream_run_events(self, run_id: str, after_event_id: int = 0):
+    async def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
+    ):
         queue = self._run_event_hub.subscribe(run_id)
-        terminal_reached = False
+        final_terminal_reached = False
         try:
             replay_high_watermark = 0
             if after_event_id >= 0 and self._event_log is not None:
@@ -1706,12 +1712,13 @@ class SessionRunService:
                     replay_high_watermark = max(replay_high_watermark, row_id)
                     yield replay_event
                     if event_type in (
-                        RunEventType.RUN_PAUSED,
                         RunEventType.RUN_COMPLETED,
                         RunEventType.RUN_FAILED,
                         RunEventType.RUN_STOPPED,
                     ):
-                        terminal_reached = True
+                        final_terminal_reached = True
+                        return
+                    if stop_on_pause and event_type == RunEventType.RUN_PAUSED:
                         return
 
             while True:
@@ -1724,16 +1731,17 @@ class SessionRunService:
                     continue
                 yield event
                 if event.event_type in (
-                    RunEventType.RUN_PAUSED,
                     RunEventType.RUN_COMPLETED,
                     RunEventType.RUN_FAILED,
                     RunEventType.RUN_STOPPED,
                 ):
-                    terminal_reached = True
+                    final_terminal_reached = True
+                    break
+                if stop_on_pause and event.event_type == RunEventType.RUN_PAUSED:
                     break
         finally:
             self._run_event_hub.unsubscribe(run_id, queue)
-            if terminal_reached:
+            if final_terminal_reached:
                 self._run_event_hub.unsubscribe_all(run_id)
 
     async def stream_multiplexed_run_events(
@@ -2497,6 +2505,13 @@ class SessionRunService:
         self, run_id: str
     ) -> list[dict[str, JsonValue]]:
         return await self._interaction_service.list_user_questions_async(run_id)
+
+    async def list_user_questions_by_session_async(
+        self, session_id: str
+    ) -> list[dict[str, JsonValue]]:
+        return await self._interaction_service.list_user_questions_by_session_async(
+            session_id
+        )
 
     def answer_user_question(
         self,

@@ -19,6 +19,7 @@ from relay_teams.gateway.feishu.models import (
     FeishuTriggerRuntimeConfig,
     TriggerProcessingResult,
 )
+from relay_teams.gateway.user_questions import UserQuestionAnswerStatus
 from relay_teams.logger import get_logger, log_event
 
 if TYPE_CHECKING:
@@ -43,7 +44,8 @@ class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
         self,
         trigger_id: str,
-    ) -> FeishuTriggerRuntimeConfig | None: ...
+    ) -> FeishuTriggerRuntimeConfig | None:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuMessagePoolServiceLike(Protocol):
@@ -55,7 +57,33 @@ class FeishuMessagePoolServiceLike(Protocol):
         raw_body: str,
         headers: dict[str, str],
         remote_addr: str | None,
-    ) -> TriggerProcessingResult: ...
+    ) -> TriggerProcessingResult:
+        raise NotImplementedError  # pragma: no cover
+
+    def answer_pending_user_question(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> UserQuestionAnswerStatus:
+        raise NotImplementedError  # pragma: no cover
+
+    def has_message_record(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+    ) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+    def record_consumed_user_question_answer(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        normalized: FeishuNormalizedMessage,
+        reason: str,
+    ) -> None:
+        raise NotImplementedError  # pragma: no cover
 
     def get_chat_summary(
         self,
@@ -64,7 +92,8 @@ class FeishuMessagePoolServiceLike(Protocol):
         tenant_key: str,
         chat_id: str,
         preview_limit: int = 3,
-    ) -> FeishuChatQueueSummary: ...
+    ) -> FeishuChatQueueSummary:
+        raise NotImplementedError  # pragma: no cover
 
     def clear_chat(
         self,
@@ -72,7 +101,8 @@ class FeishuMessagePoolServiceLike(Protocol):
         trigger_id: str,
         tenant_key: str,
         chat_id: str,
-    ) -> FeishuChatQueueClearResult: ...
+    ) -> FeishuChatQueueClearResult:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuTriggerHandler:
@@ -153,21 +183,81 @@ class FeishuTriggerHandler:
                 ignored=True,
                 reason="sender_is_bot",
             )
-        trigger_rule = runtime_config.source.trigger_rule
-        if (
-            trigger_rule == "mention_only"
-            and chat_type == "group"
-            and not normalized.mentioned
-        ):
+        if not normalized.trigger_text.strip():
             return TriggerProcessingResult(
                 status="ignored",
                 trigger_id=runtime_config.trigger_id,
                 trigger_name=runtime_config.trigger_name,
                 event_id=normalized.event_id,
                 ignored=True,
-                reason="mention_required",
+                reason="empty_trigger_text",
             )
+        if self._message_pool_service.has_message_record(
+            runtime_config=runtime_config,
+            normalized=normalized,
+        ):
+            return TriggerProcessingResult(
+                status="accepted",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=normalized.event_id,
+                duplicate=True,
+            )
+        answer_status = self._message_pool_service.answer_pending_user_question(
+            runtime_config=runtime_config,
+            normalized=normalized,
+        )
+        if answer_status == UserQuestionAnswerStatus.INVALID_REPLY:
+            self._message_pool_service.record_consumed_user_question_answer(
+                runtime_config=runtime_config,
+                normalized=normalized,
+                reason="invalid_user_question_answer",
+            )
+            self._send_command_response(
+                chat_id=normalized.chat_id,
+                chat_type=normalized.chat_type,
+                message_id=normalized.message_id,
+                text="请按问题数量逐行回答后再发送。",
+                runtime_config=runtime_config,
+            )
+            return TriggerProcessingResult(
+                status="answered",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=normalized.event_id,
+                reason="invalid_user_question_answer",
+            )
+        if answer_status == UserQuestionAnswerStatus.ANSWERED:
+            self._message_pool_service.record_consumed_user_question_answer(
+                runtime_config=runtime_config,
+                normalized=normalized,
+                reason="user_question_answer",
+            )
+            self._send_command_response(
+                chat_id=normalized.chat_id,
+                chat_type=normalized.chat_type,
+                message_id=normalized.message_id,
+                text="已收到回答，正在继续处理。",
+                runtime_config=runtime_config,
+            )
+            return TriggerProcessingResult(
+                status="answered",
+                trigger_id=runtime_config.trigger_id,
+                trigger_name=runtime_config.trigger_name,
+                event_id=normalized.event_id,
+                reason="user_question_answer",
+            )
+        trigger_rule = runtime_config.source.trigger_rule
         if trigger_rule == "mention_only" and chat_type == "group":
+            if not normalized.mentioned:
+                return TriggerProcessingResult(
+                    status="ignored",
+                    trigger_id=runtime_config.trigger_id,
+                    trigger_name=runtime_config.trigger_name,
+                    event_id=normalized.event_id,
+                    ignored=True,
+                    reason="mention_required",
+                )
             if not _mention_targets_app(
                 mention_names=normalized.mention_names,
                 app_name=runtime_config.source.app_name,
@@ -180,15 +270,6 @@ class FeishuTriggerHandler:
                     ignored=True,
                     reason="mention_not_for_app",
                 )
-        if not normalized.trigger_text.strip():
-            return TriggerProcessingResult(
-                status="ignored",
-                trigger_id=runtime_config.trigger_id,
-                trigger_name=runtime_config.trigger_name,
-                event_id=normalized.event_id,
-                ignored=True,
-                reason="empty_trigger_text",
-            )
         command_result = self._im_session_command_service.handle_feishu_command(
             runtime_config=runtime_config,
             message=normalized,

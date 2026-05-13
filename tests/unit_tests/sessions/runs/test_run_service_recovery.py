@@ -289,6 +289,12 @@ class _InteractionDelegateSpy:
         self.calls.append(f"questions:{run_id}")
         return [{"run_id": run_id, "status": "pending"}]
 
+    async def list_user_questions_by_session_async(
+        self, session_id: str
+    ) -> list[dict[str, JsonValue]]:
+        self.calls.append(f"session-questions:{session_id}")
+        return [{"session_id": session_id, "status": "pending"}]
+
 
 def _media_role_registry() -> RoleRegistry:
     registry = RoleRegistry()
@@ -450,6 +456,51 @@ def test_run_service_compatibility_facade_delegates_to_split_services(
         "persist-shell:none:approved",
         "questions:run-interaction",
     ]
+
+
+@pytest.mark.asyncio
+async def test_list_user_questions_by_session_async_delegates_to_interactions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_service_session_questions.db")
+    interactions = _InteractionDelegateSpy()
+    monkeypatch.setattr(manager, "_interaction_service", interactions)
+
+    result = await manager.list_user_questions_by_session_async("session-1")
+
+    assert result == [{"session_id": "session-1", "status": "pending"}]
+    assert interactions.calls == ["session-questions:session-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_interactions_list_user_questions_by_session_async_reads_repo(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path / "run_interactions_session_questions.db")
+    repo = manager._require_user_question_repo()
+    repo.upsert_requested(
+        question_id="question-1",
+        run_id="run-1",
+        session_id="session-1",
+        task_id="task-1",
+        instance_id="instance-1",
+        role_id="Coordinator",
+        tool_name="ask_question",
+        questions=(
+            UserQuestionPrompt(
+                question="Pick one",
+                options=(UserQuestionOption(label="Only", description="Only"),),
+            ),
+        ),
+    )
+
+    result = await manager._interaction_service.list_user_questions_by_session_async(
+        "session-1"
+    )
+
+    assert result[0]["question_id"] == "question-1"
+    assert result[0]["session_id"] == "session-1"
 
 
 def test_prepare_intent_resolves_topology_with_policy_override(tmp_path: Path) -> None:

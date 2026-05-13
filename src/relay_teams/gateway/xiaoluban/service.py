@@ -19,6 +19,14 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
     GatewaySessionIngressService,
 )
+from relay_teams.gateway.user_questions import (
+    UserQuestionAnswerStatus,
+    answer_pending_user_question_for_session_status_async,
+    answer_pending_user_question_status,
+    format_user_question_request,
+    is_user_question_requested,
+    parse_user_question_event,
+)
 from relay_teams.gateway.xiaoluban.account_repository import XiaolubanAccountRepository
 from relay_teams.gateway.xiaoluban.client import XiaolubanClient
 from relay_teams.gateway.xiaoluban.models import (
@@ -105,6 +113,8 @@ class XiaolubanGatewayService:
         )
         self._im_terminal_suppressed_run_ids: dict[str, float] = {}
         self._im_terminal_suppression_lock = threading.Lock()
+        self._im_question_notice_keys: set[str] = set()
+        self._im_question_notice_lock = threading.Lock()
         self._pending_im_replies: dict[str, _IMReplyContext] = {}
         self._pending_im_replies_lock = threading.Lock()
         self._im_poller_started = False
@@ -491,7 +501,7 @@ class XiaolubanGatewayService:
 
     # NOTE: Xiaoluban IM forwarding URLs have a platform-enforced length limit.
     # Adding ?auth= pushes URLs past that limit, breaking the forwarding command.
-    # DO NOT add auth tokens to the callback URL — this is intentionally omitted.
+    # DO NOT add auth tokens to the callback URL; this is intentionally omitted.
     def get_im_callback_auth_token(self, account_id: str) -> str:
         account = self._repository.get_account(account_id)
         if account.status != XiaolubanAccountStatus.ENABLED:
@@ -985,6 +995,77 @@ class XiaolubanGatewayService:
             receiver_uid=reply_target,
         )
 
+    def _find_im_gateway_session(
+        self,
+        external_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        gateway_session_service = self._gateway_session_service
+        if gateway_session_service is None:
+            return None
+        for gateway_session in gateway_session_service.list_all():
+            if (
+                gateway_session.channel_type == GatewayChannelType.XIAOLUBAN
+                and gateway_session.external_session_id == external_session_id
+            ):
+                return gateway_session
+        return None
+
+    async def _try_answer_im_user_question(
+        self,
+        *,
+        account_id: str,
+        workspace_id: str,
+        gateway_session: GatewaySessionRecord,
+        text: str,
+        reply_target: str,
+    ) -> bool:
+        active_run_id = await asyncio.to_thread(
+            self._active_run_id, gateway_session.internal_session_id
+        )
+        if active_run_id is None:
+            (
+                answer_status,
+                active_run_id,
+            ) = await self._try_answer_user_question_for_session_async(
+                session_id=gateway_session.internal_session_id,
+                text=text,
+            )
+            if active_run_id is None:
+                return False
+        else:
+            answer_status = await asyncio.to_thread(
+                self._try_answer_user_question,
+                run_id=active_run_id,
+                text=text,
+            )
+        if answer_status == UserQuestionAnswerStatus.NOT_PENDING:
+            return False
+        if answer_status == UserQuestionAnswerStatus.ANSWERED:
+            await asyncio.to_thread(
+                self._register_im_reply,
+                account_id=account_id,
+                gateway_session_id=gateway_session.gateway_session_id,
+                workspace_id=workspace_id,
+                session_id=gateway_session.internal_session_id,
+                run_id=active_run_id,
+                reply_target=reply_target,
+            )
+            await asyncio.to_thread(self._ensure_poller_started)
+            status = "answered"
+            body = "已收到回答，正在继续处理。"
+        else:
+            status = "invalid_answer"
+            body = "请按问题数量逐行回答后再发送。"
+        await self.send_notification_message(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            session_id=gateway_session.internal_session_id,
+            status=status,
+            body=body,
+            receiver_uid=reply_target,
+        )
+        return True
+
     async def _handle_im_inbound(
         self,
         account_id: str,
@@ -1026,6 +1107,27 @@ class XiaolubanGatewayService:
             )
             return
         if text.startswith("/"):
+            external_session_id = await asyncio.to_thread(
+                self._resolve_effective_external_session_id,
+                account_id,
+                message,
+                workspace_id,
+            )
+            existing_gateway_session = await asyncio.to_thread(
+                self._find_im_gateway_session,
+                external_session_id,
+            )
+            if (
+                existing_gateway_session is not None
+                and await self._try_answer_im_user_question(
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    gateway_session=existing_gateway_session,
+                    text=text,
+                    reply_target=reply_target,
+                )
+            ):
+                return
             result = await self._try_handle_command(
                 account_id=account_id,
                 message=message,
@@ -1095,6 +1197,14 @@ class XiaolubanGatewayService:
                 "external_session_id": external_session_id,
             },
         )
+        if await self._try_answer_im_user_question(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            gateway_session=gateway_session,
+            text=text,
+            reply_target=reply_target,
+        ):
+            return
         active_run_id = await asyncio.to_thread(
             self._active_run_id, gateway_session.internal_session_id
         )
@@ -1280,6 +1390,24 @@ class XiaolubanGatewayService:
             pending = list(self._pending_im_replies.items())
         for run_id, ctx in pending:
             try:
+                question_key, question_text = self._user_question_text_for_run(run_id)
+                if question_text:
+                    should_send_question = False
+                    with self._im_question_notice_lock:
+                        if question_key not in self._im_question_notice_keys:
+                            should_send_question = True
+                    if should_send_question:
+                        await self.send_notification_message(
+                            account_id=ctx.account_id,
+                            workspace_id=ctx.workspace_id,
+                            session_id=ctx.session_id,
+                            status="input_required",
+                            body=question_text,
+                            receiver_uid=ctx.reply_target,
+                        )
+                        with self._im_question_notice_lock:
+                            self._im_question_notice_keys.add(question_key)
+                        continue
                 terminal_text = self._terminal_text_for_run(run_id)
                 if not terminal_text:
                     continue
@@ -1330,6 +1458,91 @@ class XiaolubanGatewayService:
         )
         with self._pending_im_replies_lock:
             self._pending_im_replies[run_id] = ctx
+
+    def _try_answer_user_question(
+        self,
+        *,
+        run_id: str,
+        text: str,
+    ) -> UserQuestionAnswerStatus:
+        run_service = self._run_service
+        if run_service is None:
+            return UserQuestionAnswerStatus.NOT_PENDING
+        try:
+            return answer_pending_user_question_status(
+                run_service=run_service,
+                run_id=run_id,
+                text=text,
+            )
+        except (KeyError, RuntimeError, ValueError, AttributeError) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="gateway.xiaoluban.user_question.answer_failed",
+                message="Failed to answer pending Xiaoluban user question",
+                payload={"run_id": run_id, "error": str(exc)},
+                exc_info=exc,
+            )
+            return UserQuestionAnswerStatus.NOT_PENDING
+
+    async def _try_answer_user_question_for_session_async(
+        self,
+        *,
+        session_id: str,
+        text: str,
+    ) -> tuple[UserQuestionAnswerStatus, str | None]:
+        run_service = self._run_service
+        if run_service is None:
+            return UserQuestionAnswerStatus.NOT_PENDING, None
+        try:
+            return await answer_pending_user_question_for_session_status_async(
+                run_service=run_service,
+                session_id=session_id,
+                text=text,
+            )
+        except (KeyError, RuntimeError, ValueError) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="gateway.xiaoluban.user_question.session_answer_failed",
+                message="Failed to answer pending Xiaoluban user question by session",
+                payload={"session_id": session_id, "error": str(exc)},
+                exc_info=exc,
+            )
+            return UserQuestionAnswerStatus.NOT_PENDING, None
+
+    def _user_question_text_for_run(self, run_id: str) -> tuple[str, str]:
+        if self._event_log is None:
+            return "", ""
+        for row in reversed(self._event_log.list_by_trace_with_ids(run_id)):
+            try:
+                event_type = RunEventType(str(row["event_type"]))
+            except ValueError:
+                continue
+            if event_type != RunEventType.USER_QUESTION_REQUESTED:
+                continue
+            event_id = row.get("id")
+            event_key = f"{run_id}:{event_id}" if isinstance(event_id, int) else run_id
+            payload_json = str(row["payload_json"] or "{}")
+            parsed = parse_user_question_event(payload_json)
+            if parsed is None:
+                continue
+            question_id, questions = parsed
+            run_service = self._run_service
+            if run_service is None:
+                return "", ""
+            if not is_user_question_requested(
+                run_service=run_service,
+                run_id=run_id,
+                question_id=question_id,
+            ):
+                continue
+            text = format_user_question_request(
+                question_id=question_id,
+                questions=questions,
+            )
+            return event_key, text
+        return "", ""
 
     def _terminal_text_for_run(self, run_id: str) -> str:
         if self._event_log is None:

@@ -644,6 +644,16 @@ class RunInteractionService:
             for item in await repo.list_by_run_async(run_id)
         ]
 
+    async def list_user_questions_by_session_async(
+        self,
+        session_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        repo = self._require_user_question_repo()
+        return [
+            cast(dict[str, JsonValue], item.model_dump(mode="json"))
+            for item in await repo.list_by_session_async(session_id)
+        ]
+
     def answer_user_question(
         self,
         *,

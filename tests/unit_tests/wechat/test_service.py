@@ -39,11 +39,15 @@ from relay_teams.gateway.wechat.models import (
 )
 from relay_teams.gateway.wechat.secret_store import WeChatSecretStore
 from relay_teams.gateway.wechat.service import WeChatGatewayService
+from relay_teams.gateway.user_questions import UserQuestionAnswerStatus
 from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import RunEvent, RunResult
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
+)
 from relay_teams.sessions.session_models import SessionMode
 
 _RECEIPT_CREATED = "\u6536\u5230\uff0c\u6b63\u5728\u5904\u7406\u3002"
@@ -311,6 +315,269 @@ async def test_await_terminal_and_reply_sends_pause_notice_without_clearing_bind
     assert snapshot.last_outbound_at is not None
     assert snapshot.last_event_at == snapshot.last_outbound_at
     assert "run-1" not in service._watched_runs
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_and_reply_sends_user_question_notice() -> None:
+    service, gateway_session_service, run_service, im_tool_service, _ = _build_service(
+        events=(
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload={
+                    "question_id": "question-1",
+                    "questions": [
+                        {
+                            "question": "Pick a target",
+                            "options": [{"label": "Ship"}, {"label": "Wait"}],
+                        }
+                    ],
+                },
+            ),
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "waiting for user input"},
+            ),
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_COMPLETED,
+                payload={"output": "done"},
+            ),
+        )
+    )
+    run_service.user_questions = [_user_question_record()]
+    service._watched_runs.add("run-1")
+
+    await service._await_terminal_and_reply(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        run_id="run-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+    )
+
+    assert "Pick a target" in str(im_tool_service.send_text_calls[0]["text"])
+    assert im_tool_service.send_text_calls[1]["text"] == "done"
+    assert len(im_tool_service.send_text_calls) == 2
+    assert gateway_session_service.bind_calls == [("gws-1", None)]
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_uses_live_stream_after_question_pause_without_event_id() -> (
+    None
+):
+    class NoEventIdRunService(_FakeRunService):
+        def __init__(self) -> None:
+            super().__init__(())
+            self.offsets: list[int] = []
+            self.stop_on_pause_values: list[bool] = []
+
+        async def stream_run_events(
+            self,
+            run_id: str,
+            after_event_id: int = 0,
+            *,
+            stop_on_pause: bool = True,
+        ) -> AsyncIterator[RunEvent]:
+            self.offsets.append(after_event_id)
+            self.stop_on_pause_values.append(stop_on_pause)
+            yield _event(
+                run_id=run_id,
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload={
+                    "question_id": "question-1",
+                    "questions": [
+                        {
+                            "question": "Pick one",
+                            "options": [{"label": "Ship"}],
+                        }
+                    ],
+                },
+            ).model_copy(update={"event_id": None})
+            yield _event(
+                run_id=run_id,
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "waiting for user input"},
+            ).model_copy(update={"event_id": None})
+            yield _event(
+                run_id=run_id,
+                event_type=RunEventType.RUN_COMPLETED,
+                payload={"output": "done"},
+            ).model_copy(update={"event_id": None})
+
+    run_service = NoEventIdRunService()
+    service, _gateway_session_service, _unused_run_service, im_tool_service, _ = (
+        _build_service(events=())
+    )
+    service._run_service = cast(SessionRunService, run_service)
+    run_service.user_questions = [_user_question_record()]
+    service._watched_runs.add("run-1")
+
+    await service._await_terminal_and_reply(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        run_id="run-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+    )
+
+    assert run_service.offsets == [0]
+    assert run_service.stop_on_pause_values == [False]
+    assert "Pick one" in str(im_tool_service.send_text_calls[0]["text"])
+    assert im_tool_service.send_text_calls[1]["text"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_await_terminal_and_reply_sends_later_pause_after_question_pause() -> (
+    None
+):
+    service, gateway_session_service, run_service, im_tool_service, _ = _build_service(
+        events=(
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.USER_QUESTION_REQUESTED,
+                payload={
+                    "question_id": "question-1",
+                    "questions": [
+                        {
+                            "question": "Pick a target",
+                            "options": [{"label": "Ship"}, {"label": "Wait"}],
+                        }
+                    ],
+                },
+            ),
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "waiting for user input"},
+            ),
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_PAUSED,
+                payload={"error_message": "stream interrupted"},
+            ),
+            _event(
+                run_id="run-1",
+                event_type=RunEventType.RUN_COMPLETED,
+                payload={"output": "done"},
+            ),
+        )
+    )
+    run_service.user_questions = [_user_question_record()]
+    service._watched_runs.add("run-1")
+
+    await service._await_terminal_and_reply(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        run_id="run-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+    )
+
+    assert "Pick a target" in str(im_tool_service.send_text_calls[0]["text"])
+    assert (
+        im_tool_service.send_text_calls[1]["text"]
+        == "Run paused: stream interrupted\nSend resume to continue."
+    )
+    assert len(im_tool_service.send_text_calls) == 2
+    assert gateway_session_service.bind_calls == []
+
+
+def test_handle_message_answers_pending_user_question() -> None:
+    service, gateway_session_service, run_service, im_tool_service, command_service = (
+        _build_service(
+            events=(),
+            command_response="[Session Commands]",
+            has_active_run=True,
+        )
+    )
+    watcher_calls: list[dict[str, object]] = []
+    service._start_run_watcher = lambda **kwargs: watcher_calls.append(kwargs)
+    run_service.user_questions = [
+        {
+            "question_id": "question-1",
+            "run_id": "run-1",
+            "session_id": "session-1",
+            "task_id": "task-1",
+            "instance_id": "instance-1",
+            "role_id": "role-1",
+            "tool_name": "ask_question",
+            "questions": [
+                {
+                    "question": "Pick a target",
+                    "options": [{"label": "Ship"}, {"label": "Wait"}],
+                }
+            ],
+            "status": "requested",
+            "answers": [],
+            "created_at": "2026-05-12T00:00:00+00:00",
+            "updated_at": "2026-05-12T00:00:00+00:00",
+            "resolved_at": None,
+        }
+    ]
+
+    service._handle_message(
+        _account(),
+        WeChatInboundMessage(
+            message_id=1001,
+            from_user_id="wx-peer-1",
+            item_list=(_text_item("Ship"),),
+        ),
+    )
+
+    assert len(run_service.created_intents) == 0
+    assert run_service.answered_questions[0][0] == "run-1"
+    assert run_service.answered_questions[0][1] == "question-1"
+    assert run_service.answered_questions[0][2].answers[0].selections[0].label == "Ship"
+    assert command_service.calls == []
+    assert im_tool_service.send_text_calls[0]["text"] == "已收到回答，正在继续处理。"
+    assert watcher_calls == []
+    assert gateway_session_service.bind_calls == []
+    consumed = service._inbound_queue_repo.get_by_message_key(
+        account_id="wx-account-1",
+        peer_user_id="wx-peer-1",
+        message_key="mid:1001",
+    )
+    assert consumed.status == WeChatInboundQueueStatus.COMPLETED
+    assert consumed.run_id is None
+
+    run_service.user_questions = []
+    service._session_service = cast(
+        SessionService,
+        _FakeSessionService(has_active_run=False),
+    )
+    service._handle_message(
+        _account(),
+        WeChatInboundMessage(
+            message_id=1001,
+            from_user_id="wx-peer-1",
+            item_list=(_text_item("/help"),),
+        ),
+    )
+
+    assert len(run_service.answered_questions) == 1
+    assert len(im_tool_service.send_text_calls) == 1
+    assert command_service.calls == []
+
+
+def test_wechat_question_answer_failure_returns_not_pending() -> None:
+    (
+        service,
+        _gateway_session_service,
+        run_service,
+        _im_tool_service,
+        _command_service,
+    ) = _build_service(events=(), has_active_run=True)
+    run_service.user_questions = [_user_question_record()]
+    run_service.answer_error = RuntimeError("answer failed")
+
+    status = service._try_answer_user_question(
+        run_id="run-1",
+        text="Ship",
+    )
+
+    assert status == UserQuestionAnswerStatus.NOT_PENDING
 
 
 @pytest.mark.asyncio
@@ -1051,6 +1318,22 @@ class _FakeInboundQueueRepo:
     def get(self, inbound_queue_id: str) -> WeChatInboundQueueRecord | None:
         return self.records.get(inbound_queue_id)
 
+    def get_by_message_key(
+        self,
+        *,
+        account_id: str,
+        peer_user_id: str,
+        message_key: str,
+    ) -> WeChatInboundQueueRecord:
+        for record in self.records.values():
+            if (
+                record.account_id == account_id
+                and record.peer_user_id == peer_user_id
+                and record.message_key == message_key
+            ):
+                return record
+        raise KeyError(message_key)
+
     def get_latest_by_run_id(self, run_id: str) -> WeChatInboundQueueRecord | None:
         matches = [
             record
@@ -1169,15 +1452,29 @@ class _FakeRunService:
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self.created_intents: list[dict[str, str | bool]] = []
         self.ensured_run_ids: list[str] = []
+        self.user_questions: list[dict[str, JsonValue]] = []
+        self.answered_questions: list[
+            tuple[str, str, UserQuestionAnswerSubmission]
+        ] = []
+        self.answer_error: Exception | None = None
 
     @property
     def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
         return self._event_loop
 
-    async def stream_run_events(self, run_id: str) -> AsyncIterator[RunEvent]:
-        for event in self._events:
+    async def stream_run_events(
+        self,
+        run_id: str,
+        after_event_id: int = 0,
+        *,
+        stop_on_pause: bool = True,
+    ) -> AsyncIterator[RunEvent]:
+        _ = stop_on_pause
+        for index, event in enumerate(self._events, start=1):
+            if index <= after_event_id:
+                continue
             assert event.run_id == run_id
-            yield event
+            yield event.model_copy(update={"event_id": index})
 
     def create_run(self, intent: object) -> tuple[str, str]:
         session_id = cast(str, getattr(intent, "session_id"))
@@ -1199,6 +1496,22 @@ class _FakeRunService:
 
     def ensure_run_started(self, run_id: str) -> None:
         self.ensured_run_ids.append(run_id)
+
+    def list_user_questions(self, run_id: str) -> list[dict[str, JsonValue]]:
+        _ = run_id
+        return self.user_questions
+
+    def answer_user_question(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        if self.answer_error is not None:
+            raise self.answer_error
+        self.answered_questions.append((run_id, question_id, answers))
+        return {"run_id": run_id, "question_id": question_id}
 
 
 class _FakeSessionService:
@@ -1308,6 +1621,33 @@ def _event(
         payload_json=json.dumps(payload, ensure_ascii=False),
         occurred_at=datetime.now(tz=timezone.utc),
     )
+
+
+def _user_question_record(
+    *,
+    question_id: str = "question-1",
+    run_id: str = "run-1",
+) -> dict[str, JsonValue]:
+    return {
+        "question_id": question_id,
+        "run_id": run_id,
+        "session_id": "session-1",
+        "task_id": "task-1",
+        "instance_id": "instance-1",
+        "role_id": "role-1",
+        "tool_name": "ask_question",
+        "questions": [
+            {
+                "question": "Pick a target",
+                "options": [{"label": "Ship"}, {"label": "Wait"}],
+            }
+        ],
+        "status": "requested",
+        "answers": [],
+        "created_at": "2026-05-12T00:00:00+00:00",
+        "updated_at": "2026-05-12T00:00:00+00:00",
+        "resolved_at": None,
+    }
 
 
 def test_wechat_account_update_input_rejects_empty_patch() -> None:

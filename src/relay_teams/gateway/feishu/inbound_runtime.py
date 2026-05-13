@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Protocol
+
+from pydantic import JsonValue
 
 from relay_teams.gateway.feishu.models import (
     FEISHU_METADATA_CHAT_ID_KEY,
@@ -22,6 +25,12 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
     GatewaySessionIngressService,
 )
+from relay_teams.gateway.user_questions import (
+    UserQuestionAnswerStatus,
+    answer_pending_user_question_for_session_status_async,
+    answer_pending_user_question_status_async,
+    is_user_question_requested_async,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import content_parts_from_text
 from relay_teams.providers.token_usage_repo import SessionTokenUsage
@@ -31,6 +40,9 @@ from relay_teams.sessions.external_session_binding_repository import (
 )
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.user_question_models import (
+    UserQuestionAnswerSubmission,
+)
 from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_SOURCE_ICON_KEY,
     SESSION_METADATA_SOURCE_KIND_KEY,
@@ -57,35 +69,67 @@ class SessionServiceLike(Protocol):
         session_mode: SessionMode | None = None,
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
-    ) -> SessionRecord: ...
+    ) -> SessionRecord:
+        raise NotImplementedError  # pragma: no cover
 
-    def get_session(self, session_id: str) -> SessionRecord: ...
+    def get_session(self, session_id: str) -> SessionRecord:
+        raise NotImplementedError  # pragma: no cover
 
-    def sync_session_metadata(
-        self, session_id: str, metadata: dict[str, str]
-    ) -> None: ...
+    async def get_session_async(self, session_id: str) -> SessionRecord:
+        raise NotImplementedError  # pragma: no cover
 
-    def get_session_messages(self, session_id: str) -> list[dict[str, object]]: ...
+    def sync_session_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
+        raise NotImplementedError  # pragma: no cover
 
-    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage: ...
+    def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
+        raise NotImplementedError  # pragma: no cover
 
-    def clear_session_messages(self, session_id: str) -> int: ...
+    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
+        raise NotImplementedError  # pragma: no cover
+
+    def clear_session_messages(self, session_id: str) -> int:
+        raise NotImplementedError  # pragma: no cover
 
 
 class RunServiceLike(Protocol):
-    def create_run(self, intent: IntentInput) -> tuple[str, str]: ...
+    def create_run(self, intent: IntentInput) -> tuple[str, str]:
+        raise NotImplementedError  # pragma: no cover
 
-    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]: ...
+    def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
+        raise NotImplementedError  # pragma: no cover
 
     async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
-    def ensure_run_started(self, run_id: str) -> None: ...
+    def ensure_run_started(self, run_id: str) -> None:
+        raise NotImplementedError  # pragma: no cover
 
     async def ensure_run_started_async(self, run_id: str) -> None:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
-    def stop_run(self, run_id: str) -> None: ...
+    def stop_run(self, run_id: str) -> None:
+        raise NotImplementedError  # pragma: no cover
+
+    async def list_user_questions_async(
+        self,
+        run_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def list_user_questions_by_session_async(
+        self,
+        session_id: str,
+    ) -> list[dict[str, JsonValue]]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def answer_user_question_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+        answers: UserQuestionAnswerSubmission,
+    ) -> dict[str, JsonValue]:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuClientLike(Protocol):
@@ -94,7 +138,8 @@ class FeishuClientLike(Protocol):
         *,
         chat_id: str,
         environment: FeishuEnvironment | None = None,
-    ) -> str | None: ...
+    ) -> str | None:
+        raise NotImplementedError  # pragma: no cover
 
     async def resolve_user_name(
         self,
@@ -102,7 +147,8 @@ class FeishuClientLike(Protocol):
         open_id: str,
         chat_id: str | None = None,
         environment: FeishuEnvironment | None = None,
-    ) -> str | None: ...
+    ) -> str | None:
+        raise NotImplementedError  # pragma: no cover
 
 
 class FeishuInboundRuntime:
@@ -206,6 +252,59 @@ class FeishuInboundRuntime:
 
     def stop_run(self, run_id: str) -> None:
         self._run_service.stop_run(run_id)
+
+    async def answer_pending_user_question_async(
+        self,
+        *,
+        runtime_config: FeishuTriggerRuntimeConfig,
+        message: FeishuNormalizedMessage,
+        message_created_at: datetime | None = None,
+    ) -> UserQuestionAnswerStatus:
+        binding = await self._external_session_binding_repo.get_binding_async(
+            platform=FEISHU_PLATFORM,
+            trigger_id=runtime_config.trigger_id,
+            tenant_key=message.tenant_key,
+            external_chat_id=message.chat_id,
+        )
+        if binding is None:
+            return UserQuestionAnswerStatus.NOT_PENDING
+        session_id = binding.session_id
+        try:
+            await self._session_service.get_session_async(session_id)
+        except KeyError:
+            return UserQuestionAnswerStatus.NOT_PENDING
+        if self._session_ingress_service is None:
+            (
+                status,
+                _run_id,
+            ) = await answer_pending_user_question_for_session_status_async(
+                run_service=self._run_service,
+                session_id=session_id,
+                text=message.trigger_text,
+                message_created_at=message_created_at,
+            )
+            return status
+        run_id = await self._session_ingress_service.active_run_id_async(session_id)
+        if run_id is None:
+            return UserQuestionAnswerStatus.NOT_PENDING
+        return await answer_pending_user_question_status_async(
+            run_service=self._run_service,
+            run_id=run_id,
+            text=message.trigger_text,
+            message_created_at=message_created_at,
+        )
+
+    async def is_user_question_requested_async(
+        self,
+        *,
+        run_id: str,
+        question_id: str,
+    ) -> bool:
+        return await is_user_question_requested_async(
+            run_service=self._run_service,
+            run_id=run_id,
+            question_id=question_id,
+        )
 
     def _create_session(
         self,
