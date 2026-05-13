@@ -63,6 +63,15 @@ def test_memory_view_renders_skill_draft_workflow() -> None:
     assert "function reloadSkillDraftRowsIfActive()" in source
     assert "memoryState.activeTab !== 'skill-drafts'" in source
     assert "data-draft-instructions]')?.value || '').trimEnd()" in source
+    assert "function renderSkillDraftStatusPanel()" in source
+    assert "memory-draft-status-panel" in source
+    assert "draftOperation" in source
+    assert "generate_running" in source
+    assert "apply_result" in source
+    assert "applied_ref" in source
+    assert "function renderSkillDraftLifecycle(draft)" in source
+    assert "validation_error_count" in source
+    assert "validation_warning_count" in source
     assert "scopeKind: memoryState.draftScopeKind" in source
     assert (
         "draftKind: memoryState.draftKind === 'auto' ? '' : memoryState.draftKind"
@@ -74,6 +83,9 @@ def test_memory_view_renders_skill_draft_workflow() -> None:
     assert "/api/memories/skill-drafts:generate" in api_source
     assert "memory-draft-shell" in css_source
     assert "memory-draft-editor" in css_source
+    assert "memory-draft-status-row" in css_source
+    assert "memory-draft-result-row" in css_source
+    assert "memory-draft-lifecycle" in css_source
 
 
 def test_memory_detail_exposes_lifecycle_fields() -> None:
@@ -106,10 +118,27 @@ def test_memory_architecture_i18n_keys_exist() -> None:
         "feature.memory.entries_tab",
         "feature.memory.skill_drafts_tab",
         "feature.memory.drafts.generate",
+        "feature.memory.drafts.generate_running",
+        "feature.memory.drafts.generate_result",
         "feature.memory.drafts.validate",
+        "feature.memory.drafts.validate_running",
+        "feature.memory.drafts.validate_result",
         "feature.memory.drafts.validate_failed",
         "feature.memory.drafts.apply",
+        "feature.memory.drafts.apply_running",
+        "feature.memory.drafts.apply_result",
+        "feature.memory.drafts.apply_in_progress",
+        "feature.memory.drafts.reject",
+        "feature.memory.drafts.reject_running",
+        "feature.memory.drafts.reject_done",
+        "feature.memory.drafts.applied_ref",
         "feature.memory.drafts.reject_failed",
+        "feature.memory.drafts.status_total",
+        "feature.memory.drafts.status_idle",
+        "feature.memory.drafts.status_idle_detail",
+        "feature.memory.drafts.lifecycle_created",
+        "feature.memory.drafts.lifecycle_validated",
+        "feature.memory.drafts.lifecycle_applied",
     ]:
         assert source.count(f"'{key}'") == 2
 
