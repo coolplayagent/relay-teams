@@ -59,11 +59,15 @@ class PluginMarketplaceService:
             policy = install_policy or load_plugin_marketplace_install_policy(
                 app_config_dir
             )
+            clawhub_cursor, clawhub_fetch_all = _clawhub_full_load_options(
+                cursor=cursor,
+                fetch_all=fetch_all,
+            )
             index = ClawHubMarketplaceProvider().load_index(
                 source=source,
                 limit=limit,
-                cursor="",
-                fetch_all=True,
+                cursor=clawhub_cursor,
+                fetch_all=clawhub_fetch_all,
                 include_versions=include_details,
             )
             if not include_details:
@@ -111,12 +115,15 @@ class PluginMarketplaceService:
             policy = install_policy or load_plugin_marketplace_install_policy(
                 app_config_dir
             )
+            index = ClawHubMarketplaceProvider().search_index(
+                source=source,
+                query=normalized_query,
+                include_versions=include_details,
+            )
+            if not include_details:
+                return index
             return apply_install_policy_to_index(
-                index=ClawHubMarketplaceProvider().search_index(
-                    source=source,
-                    query=normalized_query,
-                    include_versions=include_details,
-                ),
+                index=index,
                 provider=source.provider,
                 policy=policy,
             )
@@ -136,3 +143,9 @@ class PluginMarketplaceService:
                 or lowered_query in plugin.description.lower()
             ),
         )
+
+
+def _clawhub_full_load_options(*, cursor: str, fetch_all: bool) -> tuple[str, bool]:
+    if cursor.strip() or not fetch_all:
+        return "", True
+    return cursor, fetch_all

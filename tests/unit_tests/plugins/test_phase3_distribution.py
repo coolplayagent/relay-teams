@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
+import sys
 import tarfile
 import zipfile
 
@@ -1720,6 +1723,7 @@ def test_clawhub_marketplace_provider_searches_packages(
 
     assert [entry.name for entry in index.plugins] == ["market-plugin"]
     assert index.plugins[0].latest == "1.0.1"
+    assert not index.plugins[0].versions[0].unsupported_reason
 
 
 def test_clawhub_marketplace_provider_blank_search_loads_index(
@@ -2878,6 +2882,44 @@ def test_http_archive_install_extracts_safe_tar(tmp_path: Path) -> None:
 
     assert installed.name == "quality"
     assert (installed.root_dir / "app" / "plugin.json").exists()
+
+
+def test_extract_zip_archive_preserves_executable_mode(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows chmod does not preserve POSIX executable bits")
+    archive_path = tmp_path / "quality.zip"
+    script = zipfile.ZipInfo("quality/bin/run.sh")
+    script.external_attr = 0o755 << 16
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(script, "#!/bin/sh\n")
+
+    plugin_installers._extract_archive(
+        archive_path=archive_path,
+        target_dir=tmp_path / "target",
+    )
+
+    extracted = tmp_path / "target" / "quality" / "bin" / "run.sh"
+    assert stat.S_IMODE(extracted.stat().st_mode) == 0o755
+
+
+def test_extract_tar_archive_preserves_executable_mode(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows chmod does not preserve POSIX executable bits")
+    archive_path = tmp_path / "quality.tar"
+    payload = b"#!/bin/sh\n"
+    script = tarfile.TarInfo("quality/bin/run.sh")
+    script.mode = 0o755
+    script.size = len(payload)
+    with tarfile.open(archive_path, "w") as archive:
+        archive.addfile(script, io.BytesIO(payload))
+
+    plugin_installers._extract_archive(
+        archive_path=archive_path,
+        target_dir=tmp_path / "target",
+    )
+
+    extracted = tmp_path / "target" / "quality" / "bin" / "run.sh"
+    assert stat.S_IMODE(extracted.stat().st_mode) == 0o755
 
 
 def test_archive_digest_helpers_handle_supported_and_invalid_values(

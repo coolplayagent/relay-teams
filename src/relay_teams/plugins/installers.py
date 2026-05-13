@@ -315,6 +315,7 @@ def _extract_zip_archive(*, archive: zipfile.ZipFile, target_dir: Path) -> None:
         except ValueError as exc:
             raise ValueError(f"Plugin archive path is unsafe: {item.filename}") from exc
         archive.extract(item, target_dir)
+        _apply_archive_mode(path=destination, mode=item.external_attr >> 16)
 
 
 def _extract_tar_archive(*, archive: tarfile.TarFile, target_dir: Path) -> None:
@@ -342,10 +343,16 @@ def _extract_tar_archive(*, archive: tarfile.TarFile, target_dir: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         with extracted, destination.open("wb") as target:
             shutil.copyfileobj(extracted, target)
+        _apply_archive_mode(path=destination, mode=item.mode)
 
 
 def _zip_info_is_symlink(item: zipfile.ZipInfo) -> bool:
     return stat.S_IFMT(item.external_attr >> 16) == stat.S_IFLNK
+
+
+def _apply_archive_mode(*, path: Path, mode: int) -> None:
+    if mode and path.is_file():
+        path.chmod(stat.S_IMODE(mode))
 
 
 def _archive_plugin_root(extract_dir: Path) -> Path:
