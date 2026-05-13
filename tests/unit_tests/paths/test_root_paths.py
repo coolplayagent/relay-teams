@@ -419,14 +419,68 @@ def test_resolve_start_dir_uses_parent_for_file_path(tmp_path: Path) -> None:
     assert resolved == nested_dir.resolve()
 
 
-def test_find_git_marker_root_uses_parent_for_file_path(tmp_path: Path) -> None:
+def test_find_git_marker_root_uses_parent_for_file_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
     (repo_dir / ".git").mkdir()
     file_path = repo_dir / "source.py"
     file_path.write_text("", encoding="utf-8")
 
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: str,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (check, capture_output, text, timeout)
+        assert command == ["git", "rev-parse", "--show-toplevel"]
+        assert cwd == str(repo_dir.resolve())
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=f"{repo_dir}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(root_paths.subprocess, "run", fake_run)
+
     assert root_paths._find_git_marker_root(file_path) == repo_dir.resolve()
+
+
+def test_find_git_marker_root_rejects_invalid_git_marker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / ".git").write_text("not a git marker", encoding="utf-8")
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: str,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = (command, cwd, check, capture_output, text, timeout)
+        return subprocess.CompletedProcess(
+            args=["git", "rev-parse", "--show-toplevel"],
+            returncode=1,
+            stdout="",
+            stderr="fatal: not a git repository",
+        )
+
+    monkeypatch.setattr(root_paths.subprocess, "run", fake_run)
+
+    assert root_paths._find_git_marker_root(repo_dir) is None
 
 
 def test_find_git_marker_root_returns_none_without_marker(tmp_path: Path) -> None:

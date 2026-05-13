@@ -2395,6 +2395,9 @@ def test_clawhub_marketplace_provider_helper_edge_cases() -> None:
         "Unsupported ClawHub package family: native-extension"
     )
     assert empty_decoded == {"code-plugin": "[]"}
+    assert clawhub_marketplace_provider._warnings_for_package({}, digest="abc") == (
+        "ClawHub scan status is missing.",
+    )
 
 
 def test_clawhub_marketplace_provider_validates_bad_payloads() -> None:

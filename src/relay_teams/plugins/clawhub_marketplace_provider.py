@@ -492,7 +492,9 @@ def _warnings_for_package(
     if _bool_field(raw, "executesCode"):
         warnings.append("ClawHub package executes code.")
     scan_status = _optional_string(raw, "scanStatus")
-    if scan_status and scan_status not in {"clean", "benign", "approved"}:
+    if not scan_status:
+        warnings.append("ClawHub scan status is missing.")
+    elif scan_status not in {"clean", "benign", "approved"}:
         warnings.append(f"ClawHub scan status is {scan_status}.")
     artifact_kind = _optional_string(raw, "artifactKind")
     if artifact_kind == "legacy-zip":

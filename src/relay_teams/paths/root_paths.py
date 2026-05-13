@@ -93,9 +93,31 @@ def _find_git_marker_root(start_dir: Path) -> Path | None:
     for candidate in candidates:
         if candidate.name == ".pytest-tmp":
             return None
-        if (candidate / ".git").exists():
+        if (candidate / ".git").exists() and _is_valid_git_worktree_root(candidate):
             return candidate.resolve()
     return None
+
+
+def _is_valid_git_worktree_root(candidate: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            list(_GIT_TOPLEVEL_CMD),
+            cwd=str(candidate.resolve()),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except OSError:
+        return False
+    except subprocess.TimeoutExpired:
+        return False
+    if completed.returncode != 0:
+        return False
+    raw_stdout = completed.stdout.strip()
+    if not raw_stdout:
+        return False
+    return Path(raw_stdout).expanduser().resolve() == candidate.resolve()
 
 
 def get_project_config_dir(project_root: Path | None = None) -> Path:
