@@ -8,9 +8,13 @@
 
 .user-prompt-summary {
     display: grid;
+    grid-template-areas:
+        "marker title"
+        "marker preview";
     grid-template-columns: auto minmax(0, 1fr);
     column-gap: 0.6rem;
     row-gap: 0.15rem;
+    align-items: start;
     padding: 0.5rem 0.75rem;
     cursor: pointer;
     list-style: none;
@@ -27,6 +31,7 @@
     color: var(--text-secondary);
     transform: rotate(0deg);
     transition: transform 0.16s ease;
+    grid-area: marker;
     grid-row: 1 / span 2;
     margin-top: 0.1rem;
 }
@@ -36,6 +41,8 @@
 }
 
 .user-prompt-title {
+    grid-area: title;
+    min-width: 0;
     color: var(--text-primary);
     font-weight: 600;
     white-space: nowrap;
@@ -44,6 +51,8 @@
 }
 
 .user-prompt-preview {
+    grid-area: preview;
+    min-width: 0;
     color: var(--text-secondary);
     white-space: pre-wrap;
     overflow: hidden;

@@ -56,9 +56,11 @@ function renderTokenBadge(panelEl, instanceId, runUsage) {
         }
     }
     badgeEl.innerHTML = html;
-    if (getActiveInstanceId() === instanceId) {
-        const railBadge = document.getElementById('subagent-rail-token-badge');
-        if (railBadge) railBadge.innerHTML = html;
+    if (String(getActiveInstanceId() || '') === String(instanceId || '')) {
+        const railTokenBadge = document.getElementById('subagent-rail-token-badge');
+        if (railTokenBadge) {
+            railTokenBadge.innerHTML = html;
+        }
     }
 }
 

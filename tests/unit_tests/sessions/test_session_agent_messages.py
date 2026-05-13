@@ -12,6 +12,8 @@ from pydantic_ai.messages import (
 )
 
 from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.agent_runtimes.instances.instance_repository import (
@@ -161,6 +163,93 @@ def test_get_agent_messages_preserves_parallel_tool_calls_and_args(
     assert [part["tool_call_id"] for part in result_parts] == [
         "call-search-1",
         "call-fetch-1",
+    ]
+
+
+def test_get_agent_messages_appends_missing_terminal_subagent_result(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_agent_messages_terminal_result.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    run_id = "subagent_run_1"
+    instance_id = "inst-1"
+    task_id = "task-1"
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id="session-1",
+        instance_id=instance_id,
+        role_id="researcher",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id="session-1",
+            trace_id=run_id,
+            role_id="researcher",
+            objective="Investigate tools.",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(
+        task_id,
+        TaskStatus.COMPLETED,
+        assigned_instance_id=instance_id,
+        result="Final report written to tmp/tools-exploration.md.",
+    )
+
+    message_repo = MessageRepository(db_path)
+    message_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id=instance_id,
+        task_id=task_id,
+        trace_id=run_id,
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="write_tmp",
+                        args={"path": "tools-exploration.md"},
+                        tool_call_id="call-write-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="write_tmp",
+                        tool_call_id="call-write-1",
+                        content={"ok": True},
+                    )
+                ]
+            ),
+        ],
+    )
+
+    timeline = service.get_agent_messages("session-1", instance_id)
+
+    assert [entry["entry_type"] for entry in timeline] == [
+        "message",
+        "message",
+        "terminal_result",
+    ]
+    terminal_message = cast(dict[str, object], timeline[2]["message"])
+    terminal_parts = cast(list[dict[str, object]], terminal_message["parts"])
+    assert timeline[2]["role"] == "assistant"
+    assert timeline[2]["role_id"] == "researcher"
+    assert terminal_parts == [
+        {
+            "part_kind": "text",
+            "content": "Final report written to tmp/tools-exploration.md.",
+        }
     ]
 
 

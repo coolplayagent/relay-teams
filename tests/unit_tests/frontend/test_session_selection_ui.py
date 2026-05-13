@@ -333,6 +333,84 @@ console.log(JSON.stringify({
     assert payload["subagentSelectedEvents"] == ["inst-sub-1"]
 
 
+def test_select_subagent_from_other_session_skips_main_hydration(
+    tmp_path: Path,
+) -> None:
+    payload = _run_session_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+
+const { state } = await import("./mockState.mjs");
+const { selectSubagentSession } = await import("./session.mjs");
+state.currentSessionId = "session-a";
+
+await selectSubagentSession("session-b", {
+    instanceId: "inst-sub-2",
+    roleId: "explorer",
+    runId: "subagent_run_2",
+    title: "Explore B",
+    status: "running",
+});
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    currentSessionId: state.currentSessionId,
+    currentSessionMode: state.currentSessionMode,
+    openSubagentSessionCalls: globalThis.__openSubagentSessionCalls,
+    openSubagentSessionArgs: globalThis.__openSubagentSessionArgs,
+    fetchCalls: globalThis.__fetchCalls,
+    hydrateCalls: globalThis.__hydrateCalls,
+    activatedEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-session-activated")
+        .map(event => event.detail.sessionId),
+    selectedEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-session-selected")
+        .map(event => event.detail.sessionId),
+    subagentSelectedEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-subagent-session-selected")
+        .map(event => event.detail.instanceId),
+    operationCalls: globalThis.__streamOperationCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["currentSessionId"] == "session-b"
+    assert payload["currentSessionMode"] == "normal"
+    assert payload["openSubagentSessionCalls"] == 1
+    assert payload["openSubagentSessionArgs"] == [
+        {
+            "sessionId": "session-b",
+            "instanceId": "inst-sub-2",
+            "roleId": "explorer",
+            "runId": "subagent_run_2",
+        }
+    ]
+    assert payload["fetchCalls"] == ["session-b"]
+    assert payload["hydrateCalls"] == []
+    assert payload["activatedEvents"] == ["session-b"]
+    assert payload["selectedEvents"] == []
+    assert payload["subagentSelectedEvents"] == ["inst-sub-2"]
+    assert payload["operationCalls"] == [
+        {"name": "detachActive", "currentSessionId": "session-a"},
+        {
+            "name": "detachSubagents",
+            "sessionId": "session-a",
+            "currentSessionId": "session-a",
+        },
+        {
+            "name": "prepareForeground",
+            "sessionId": "session-b",
+            "currentSessionId": "session-b",
+        },
+    ]
+
+
 def test_select_session_from_active_subagent_shows_main_loading_placeholder(
     tmp_path: Path,
 ) -> None:
@@ -603,6 +681,10 @@ def _run_session_script(tmp_path: Path, runner_source: str) -> dict[str, object]
 export function clearAllPanels() {
     globalThis.__clearAllPanelsCalls += 1;
 }
+
+export function closeAgentPanel() {
+    globalThis.__closeAgentPanelCalls += 1;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -690,6 +772,8 @@ export function markSubagentRailLoading(sessionId) {
     )
     mock_subagent_sessions_path.write_text(
         """
+import { state } from "./mockState.mjs";
+
 export function clearActiveSubagentSession() {
     globalThis.__clearActiveSubagentSessionCalls += 1;
 }
@@ -710,8 +794,16 @@ export async function ensureSessionSubagents(sessionId, options = {}) {
     return [];
 }
 
-export async function openSubagentSession() {
+export async function openSubagentSession(sessionId, record) {
     globalThis.__openSubagentSessionCalls += 1;
+    const active = {
+        sessionId,
+        instanceId: String(record?.instanceId || record?.instance_id || ""),
+        roleId: String(record?.roleId || record?.role_id || ""),
+        runId: String(record?.runId || record?.run_id || ""),
+    };
+    state.activeSubagentSession = active;
+    globalThis.__openSubagentSessionArgs.push(active);
     return undefined;
 }
 """.strip(),
@@ -802,6 +894,7 @@ export const state = {
     selectedRoleId: null,
     agentViews: {},
     activeView: "main",
+    currentSessionMode: "orchestration",
 };
 
 export function applyCurrentSessionRecord(record) {
@@ -857,7 +950,7 @@ export function detachForegroundSubmission() {
     )
     mock_dom_path.write_text(
         """
-function createSessionItem(sessionId, workspaceId) {
+function createSessionItem(sessionId, workspaceId, sessionMode = "normal") {
     let className = sessionId === "session-a"
         ? "session-item has-run-indicator-unread"
         : "session-item";
@@ -869,6 +962,9 @@ function createSessionItem(sessionId, workspaceId) {
             }
             if (name === "data-workspace-id") {
                 return workspaceId;
+            }
+            if (name === "data-session-mode") {
+                return sessionMode;
             }
             return null;
         },
@@ -891,8 +987,8 @@ function createSessionItem(sessionId, workspaceId) {
 }
 
 const sessionItems = [
-    createSessionItem("session-a", "workspace-a"),
-    createSessionItem("session-b", "workspace-b"),
+    createSessionItem("session-a", "workspace-a", "orchestration"),
+    createSessionItem("session-b", "workspace-b", "normal"),
 ];
 const listeners = new Map();
 
@@ -1034,6 +1130,7 @@ globalThis.__appliedRecords = [];
 globalThis.__contextPreviewCalls = 0;
 globalThis.__tokenUsageRefreshCalls = 0;
 globalThis.__clearAllPanelsCalls = 0;
+globalThis.__closeAgentPanelCalls = 0;
 globalThis.__clearContextIndicatorsCalls = 0;
 globalThis.__clearContextIndicatorOptions = [];
 globalThis.__clearAllStreamStateCalls = 0;
@@ -1049,6 +1146,7 @@ globalThis.__clearActiveSubagentSessionCalls = 0;
 globalThis.__ensureSubagentCalls = [];
 globalThis.__expandedSubagentSessionIds = new Set();
 globalThis.__openSubagentSessionCalls = 0;
+globalThis.__openSubagentSessionArgs = [];
 globalThis.__fetchCalls = [];
 globalThis.__viewedTerminalRuns = [];
 globalThis.__hydrateCalls = [];

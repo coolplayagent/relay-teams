@@ -10,12 +10,15 @@ import {
 } from './request.js';
 
 export async function fetchSessions(options = {}) {
+    const params = new URLSearchParams();
     if (options.forceRefresh === true) {
+        params.set('force_refresh', 'true');
         invalidateManagedRequests('sessions:list');
     }
+    const query = params.toString();
     return requestJsonManaged(
         'sessions:list',
-        '/api/sessions',
+        `/api/sessions${query ? `?${query}` : ''}`,
         { signal: options.signal },
         'Failed to fetch sessions',
         { ttlMs: 500 },
@@ -102,6 +105,7 @@ export async function fetchSessionRounds(
         timeline = false,
         summary = false,
         signal = undefined,
+        forceRefresh = false,
     } = {},
 ) {
     const params = new URLSearchParams();
@@ -114,6 +118,10 @@ export async function fetchSessionRounds(
         params.set('summary', 'true');
     }
     if (cursorRunId) params.set('cursor_run_id', cursorRunId);
+    if (forceRefresh === true) {
+        params.set('force_refresh', 'true');
+        invalidateManagedRequests(`sessions:${sessionId}:rounds:`);
+    }
     const query = params.toString();
     const data = await requestJsonManaged(
         `sessions:${sessionId}:rounds:${query}`,
@@ -147,9 +155,15 @@ export async function fetchSessionRound(sessionId, runId, options = {}) {
 }
 
 export async function fetchSessionRecovery(sessionId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.forceRefresh === true) {
+        params.set('force_refresh', 'true');
+        invalidateManagedRequests(`sessions:${sessionId}:recovery`);
+    }
+    const query = params.toString();
     return requestJsonManaged(
         `sessions:${sessionId}:recovery`,
-        `/api/sessions/${sessionId}/recovery`,
+        `/api/sessions/${sessionId}/recovery${query ? `?${query}` : ''}`,
         { signal: options.signal },
         'Failed to fetch session recovery state',
         {
@@ -167,9 +181,15 @@ export function invalidateSessionRecovery(sessionId) {
 }
 
 export async function fetchSessionAgents(sessionId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.forceRefresh === true) {
+        params.set('force_refresh', 'true');
+        invalidateManagedRequests(`sessions:${sessionId}:agents`);
+    }
+    const query = params.toString();
     return requestJsonManaged(
         `sessions:${sessionId}:agents`,
-        `/api/sessions/${sessionId}/agents`,
+        `/api/sessions/${sessionId}/agents${query ? `?${query}` : ''}`,
         { signal: options.signal },
         'Failed to fetch session agents',
         {
@@ -181,9 +201,15 @@ export async function fetchSessionAgents(sessionId, options = {}) {
 }
 
 export async function fetchSessionSubagents(sessionId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.forceRefresh === true) {
+        params.set('force_refresh', 'true');
+        invalidateManagedRequests(`sessions:${sessionId}:subagents`);
+    }
+    const query = params.toString();
     return requestJsonManaged(
         `sessions:${sessionId}:subagents`,
-        `/api/sessions/${sessionId}/subagents`,
+        `/api/sessions/${sessionId}/subagents${query ? `?${query}` : ''}`,
         { signal: options.signal },
         'Failed to fetch session subagents',
         {
@@ -195,9 +221,15 @@ export async function fetchSessionSubagents(sessionId, options = {}) {
 }
 
 export async function fetchSessionTasks(sessionId, options = {}) {
+    const params = new URLSearchParams();
+    if (options.forceRefresh === true) {
+        params.set('force_refresh', 'true');
+        invalidateManagedRequests(`sessions:${sessionId}:tasks`);
+    }
+    const query = params.toString();
     return requestJsonManaged(
         `sessions:${sessionId}:tasks`,
-        `/api/sessions/${sessionId}/tasks`,
+        `/api/sessions/${sessionId}/tasks${query ? `?${query}` : ''}`,
         { signal: options.signal },
         'Failed to fetch session tasks',
         {

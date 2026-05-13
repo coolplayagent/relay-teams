@@ -1,25 +1,29 @@
 /**
  * components/agentPanel/dom.js
- * DOM helpers for the session-level subagent panel.
+ * DOM helpers for the main-workspace subagent panel.
  */
+import { els } from '../../utils/dom.js';
+
 export function getDrawer() {
-    return document.getElementById('agent-drawer');
+    return els.agentDrawer || document.getElementById('agent-drawer');
 }
 
 export function getSubagentCard() {
-    return document.querySelector('.rail-subagent-card');
+    return getDrawer();
 }
 
 export function openDrawerUi() {
-    const drawer = getDrawer();
-    if (drawer) drawer.classList.add('open');
-    const card = getSubagentCard();
-    if (card) card.classList.add('open');
+    const workspace = getDrawer();
+    if (workspace) {
+        workspace.hidden = false;
+        workspace.classList.add('open');
+    }
 }
 
 export function closeDrawerUi() {
-    const drawer = getDrawer();
-    if (drawer) drawer.classList.remove('open');
-    const card = getSubagentCard();
-    if (card) card.classList.remove('open');
+    const workspace = getDrawer();
+    if (workspace) {
+        workspace.hidden = true;
+        workspace.classList.remove('open');
+    }
 }

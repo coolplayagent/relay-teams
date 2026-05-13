@@ -2,7 +2,7 @@
  * app/session.js
  * Session selection state and UI synchronization.
  */
-import { clearAllPanels } from '../components/agentPanel.js';
+import { clearAllPanels, closeAgentPanel } from '../components/agentPanel.js';
 import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../components/contextIndicators.js';
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
@@ -62,6 +62,27 @@ export async function selectSession(sessionId) {
     if (!safeSessionId) {
         return;
     }
+    if (
+        state.currentSessionId === safeSessionId
+        && state.activeView === 'subagent-agent'
+    ) {
+        closeAgentPanel();
+        state.agentViews = { main: els.chatMessages };
+        document.querySelectorAll('.session-item').forEach(el => {
+            const isActive = el.getAttribute('data-session-id') === safeSessionId
+                && !el.classList.contains('session-subagent-item');
+            el.classList.toggle('active', isActive);
+        });
+        document.dispatchEvent(
+            new CustomEvent('agent-teams-session-selected', {
+                detail: { sessionId: safeSessionId },
+            }),
+        );
+        scheduleCoordinatorContextPreview({ immediate: true });
+        scheduleSessionTokenUsageRefresh({ immediate: true });
+        sysLog(formatMessage('session.switched', { session_id: safeSessionId }));
+        return;
+    }
     const selectionToken = ++sessionSelectionToken;
     const selectionController = resetSessionSelectionController();
     sessionSelectionTargetId = safeSessionId;
@@ -83,6 +104,7 @@ export async function selectSession(sessionId) {
     if (selectedWorkspaceId) {
         state.currentWorkspaceId = selectedWorkspaceId;
     }
+    applySelectedSessionMode(selectedSessionEl);
     if (isSameSession && (state.isGenerating || state.activeEventSource)) {
         try {
             await hydrateSessionView(safeSessionId, {
@@ -459,18 +481,14 @@ export async function selectSubagentSession(sessionId, subagent) {
         sessionSelectionController
         && sessionSelectionTargetId === safeSessionId
     );
-    if (isParentSelectionPending) {
-        cancelActiveSessionSelection();
-        state.currentSessionId = safeSessionId;
-        syncSessionDebugBadge(safeSessionId);
-    }
-    if (state.currentSessionId !== safeSessionId) {
-        await selectSession(safeSessionId);
+    if (isParentSelectionPending || state.currentSessionId !== safeSessionId) {
+        activateParentSessionForSubagent(safeSessionId);
         if (state.currentSessionId !== safeSessionId) {
             return;
         }
+    } else {
+        cancelActiveSessionSelection();
     }
-    cancelActiveSessionSelection();
     const fallback = {
         sessionId: safeSessionId,
         instanceId: safeInstanceId,
@@ -500,4 +518,113 @@ export async function selectSubagentSession(sessionId, subagent) {
             },
         }),
     );
+}
+
+function activateParentSessionForSubagent(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    const previousSessionId = state.currentSessionId;
+    const selectedSessionEl = document.querySelector(
+        `.session-item[data-session-id="${safeSessionId}"]`,
+    );
+    const selectedWorkspaceId = String(
+        selectedSessionEl?.getAttribute('data-workspace-id') || '',
+    ).trim();
+    cancelActiveSessionSelection();
+    if (selectedWorkspaceId) {
+        state.currentWorkspaceId = selectedWorkspaceId;
+    }
+    applySelectedSessionMode(selectedSessionEl);
+    if (previousSessionId !== safeSessionId) {
+        detachForegroundSubmission({ focusPrompt: false });
+        detachActiveStreamForSessionSwitch({ focusPrompt: false });
+        if (previousSessionId) {
+            stopSessionContinuity(previousSessionId);
+            detachNormalModeSubagentStreamsForSessionSwitch(previousSessionId);
+        }
+        state.currentSessionId = safeSessionId;
+        prepareStreamsForForegroundNavigation(safeSessionId);
+    } else {
+        state.currentSessionId = safeSessionId;
+    }
+    syncSessionDebugBadge(safeSessionId);
+    clearNewSessionDraft();
+    state.instanceRoleMap = {};
+    state.roleInstanceMap = {};
+    state.taskInstanceMap = {};
+    state.taskStatusMap = {};
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
+    state.autoSwitchedSubagentInstances = {};
+    state.pausedSubagent = null;
+    state.sessionAgents = [];
+    state.sessionTasks = [];
+    state.selectedRoleId = null;
+    markSubagentRailLoading(safeSessionId);
+    clearActiveSubagentSession();
+    resetCurrentSessionTopology();
+    clearSessionRecovery();
+    document.querySelectorAll('.session-item').forEach(el => {
+        const isActive = el.getAttribute('data-session-id') === safeSessionId
+            && !el.classList.contains('session-subagent-item');
+        el.classList.toggle('active', isActive);
+    });
+    document.dispatchEvent(
+        new CustomEvent('agent-teams-session-activated', {
+            detail: { sessionId: safeSessionId },
+        }),
+    );
+    hideProjectView();
+    setRoundsMode();
+    state.agentViews = { main: els.chatMessages };
+    state.activeView = 'main';
+    clearAllPanels();
+    clearContextIndicators({ preserveDisplay: true });
+    clearSessionTokenUsage({ preserveDisplay: true });
+    clearAllStreamState({ preserveOverlay: true });
+    refreshSessionTopologyControls();
+    void refreshParentSessionRecordForSubagent(safeSessionId);
+}
+
+function applySelectedSessionMode(selectedSessionEl) {
+    const mode = String(
+        selectedSessionEl?.getAttribute?.('data-session-mode') || '',
+    ).trim().toLowerCase();
+    if (!mode) {
+        return;
+    }
+    state.currentSessionMode = mode === 'orchestration' ? 'orchestration' : 'normal';
+}
+
+async function refreshParentSessionRecordForSubagent(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    try {
+        const sessionRecord = await fetchSessionHistory(safeSessionId, {
+            priority: 'high',
+        });
+        const activeSubagent = state.activeSubagentSession;
+        if (
+            state.currentSessionId !== safeSessionId
+            || !activeSubagent
+            || activeSubagent.sessionId !== safeSessionId
+        ) {
+            return;
+        }
+        applyCurrentSessionRecord(sessionRecord);
+        refreshSessionTopologyControls();
+        scheduleCoordinatorContextPreview({ immediate: true });
+        scheduleSessionTokenUsageRefresh({ immediate: true });
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            return;
+        }
+        sysLog(formatMessage('sidebar.error.selecting_session', {
+            error: error?.message || String(error),
+        }), 'log-error');
+    }
 }

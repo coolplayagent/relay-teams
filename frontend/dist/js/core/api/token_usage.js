@@ -2,7 +2,7 @@
  * core/api/token_usage.js
  * Token usage API wrappers.
  */
-import { requestJsonManaged } from './request.js';
+import { invalidateManagedRequests, requestJsonManaged } from './request.js';
 
 export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
     try {
@@ -25,9 +25,15 @@ export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
 
 export async function fetchSessionTokenUsage(sessionId, options = {}) {
     try {
+        const params = new URLSearchParams();
+        if (options.forceRefresh === true) {
+            params.set('force_refresh', 'true');
+            invalidateManagedRequests(`sessions:${sessionId}:token-usage`);
+        }
+        const query = params.toString();
         return await requestJsonManaged(
             `sessions:${sessionId}:token-usage`,
-            `/api/sessions/${sessionId}/token-usage`,
+            `/api/sessions/${sessionId}/token-usage${query ? `?${query}` : ''}`,
             {
                 signal: options.signal,
             },

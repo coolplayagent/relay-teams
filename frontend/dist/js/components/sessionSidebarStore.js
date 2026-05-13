@@ -9,13 +9,18 @@ const snapshot = {
     sessions: [],
     automationProjects: [],
 };
+const RECENT_SESSION_REMOVAL_RETENTION_MS = 30000;
 const optimisticSessions = new Map();
+const removedSessionIds = new Map();
 const viewedTerminalRunsBySessionId = new Map();
 
 export function rememberSidebarDataSnapshot({ workspaces, sessions, automationProjects } = {}) {
+    const incomingSessions = withoutRemovedSessions(cloneRows(sessions));
     snapshot.hasData = true;
     snapshot.workspaces = cloneRows(workspaces);
-    snapshot.sessions = cloneRows(sessions);
+    snapshot.sessions = hasRecentSessionRemoval()
+        ? mergeIncomingSessionsWithExistingSnapshot(incomingSessions, snapshot.sessions)
+        : incomingSessions;
     snapshot.automationProjects = cloneRows(automationProjects);
     trimOptimisticSessions(snapshot.sessions);
 }
@@ -63,6 +68,21 @@ export function updateOptimisticSessionTitle(sessionId, title) {
     });
 }
 
+export function removeSidebarSession(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    const current = findStoredSession(safeSessionId) || optimisticSessions.get(safeSessionId) || {};
+    removedSessionIds.set(safeSessionId, {
+        createdAt: timestampValue(current?.created_at || current?.createdAt || ''),
+        removedAt: Date.now(),
+    });
+    snapshot.sessions = withoutRemovedSessions(cloneRows(snapshot.sessions));
+    optimisticSessions.delete(safeSessionId);
+    viewedTerminalRunsBySessionId.delete(safeSessionId);
+}
+
 export function markSidebarSessionTerminalViewed(sessionId) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId) {
@@ -83,11 +103,14 @@ export function mergeOptimisticSessions(sessions) {
     const byId = new Map();
     cloneRows(sessions).forEach(session => {
         const sessionId = String(session?.session_id || '').trim();
-        if (sessionId) {
+        if (sessionId && !removedSessionIds.has(sessionId)) {
             byId.set(sessionId, applyViewedTerminalState(session));
         }
     });
     optimisticSessions.forEach((optimistic, sessionId) => {
+        if (removedSessionIds.has(sessionId)) {
+            return;
+        }
         const current = byId.get(sessionId) || {};
         byId.set(sessionId, applyViewedTerminalState(mergeSessionRecords(optimistic, current)));
     });
@@ -212,6 +235,60 @@ function applyViewedTerminalState(record) {
 
 function cloneRows(rows) {
     return Array.isArray(rows) ? rows.map(row => cloneRecord(row)) : [];
+}
+
+function withoutRemovedSessions(rows) {
+    return cloneRows(rows).filter(session => shouldKeepSessionAfterRemovalCheck(session));
+}
+
+function mergeIncomingSessionsWithExistingSnapshot(incomingSessions, existingSessions) {
+    const byId = new Map();
+    cloneRows(incomingSessions).forEach(session => {
+        const sessionId = String(session?.session_id || '').trim();
+        if (sessionId) {
+            byId.set(sessionId, session);
+        }
+    });
+    cloneRows(existingSessions).forEach(session => {
+        const sessionId = String(session?.session_id || '').trim();
+        if (sessionId && !byId.has(sessionId) && shouldKeepSessionAfterRemovalCheck(session)) {
+            byId.set(sessionId, session);
+        }
+    });
+    return Array.from(byId.values());
+}
+
+function hasRecentSessionRemoval() {
+    const now = Date.now();
+    for (const [sessionId, removal] of removedSessionIds.entries()) {
+        const removedAt = Number(removal?.removedAt || 0);
+        if (removedAt > 0 && now - removedAt <= RECENT_SESSION_REMOVAL_RETENTION_MS) {
+            return true;
+        }
+        if (removedAt > 0) {
+            removedSessionIds.delete(sessionId);
+        }
+    }
+    return false;
+}
+
+function shouldKeepSessionAfterRemovalCheck(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    if (!sessionId || !removedSessionIds.has(sessionId)) {
+        return true;
+    }
+    const removal = removedSessionIds.get(sessionId) || {};
+    const removedAt = Number(removal.removedAt || 0);
+    if (removedAt > 0 && Date.now() - removedAt <= RECENT_SESSION_REMOVAL_RETENTION_MS) {
+        return false;
+    }
+    const rowCreatedAt = timestampValue(session?.created_at || session?.createdAt || '');
+    const isNewRecordWithSameId = rowCreatedAt > removedAt;
+    if (isNewRecordWithSameId) {
+        removedSessionIds.delete(sessionId);
+        return true;
+    }
+    return false;
 }
 
 function cloneRecord(row) {

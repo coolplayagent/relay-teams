@@ -225,10 +225,17 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: false });
     } else if (evType === 'todo_updated') {
-        roundsTimeline.updateRoundTodo?.(
+        const patchedTodo = roundsTimeline.updateRoundTodo?.(
             payload?.run_id || eventMeta?.run_id || eventMeta?.trace_id || '',
             payload,
-        );
+        ) === true;
+        if (!patchedTodo && state.currentSessionId) {
+            void roundsTimeline.loadSessionRounds?.(state.currentSessionId, {
+                forceRefresh: true,
+                navigatorLayoutReason: 'todo-update',
+                scrollPolicy: 'preserve-anchor',
+            });
+        }
     } else {
         sysLog(`[evt] ${evType}`, 'log-info');
     }

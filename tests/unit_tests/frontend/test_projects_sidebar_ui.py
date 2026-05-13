@@ -869,6 +869,9 @@ console.log(JSON.stringify({
     assert "agent-teams-session-selection-cancelled" in sidebar_script
     assert "if (state.currentFeatureViewId === safeFeatureId) {" in sidebar_script
     assert "animateSessionItem(sessionItem, 'removing');" in sidebar_script
+    assert sidebar_script.count("await loadProjects({ forceRefresh: true });") >= 1
+    assert "scheduleSessionsRefresh(900, { forceRefresh: true });" in sidebar_script
+    assert "isSessionsRefreshSuppressed() && forceRefresh !== true" in sidebar_script
     assert (
         "optimisticActivateSession(sessionId, { animate: true, item: button, updateState: false });"
         in sidebar_script
@@ -882,6 +885,7 @@ console.log(JSON.stringify({
         "document.addEventListener('agent-teams-session-selected', () => void loadProjects());"
         not in sidebar_script
     )
+    assert "removeSidebarSession(sessionId);" in sidebar_script
     assert "agent-teams-session-activated" in sidebar_script
     session_script = (
         repo_root / "frontend" / "dist" / "js" / "app" / "session.js"
@@ -1648,6 +1652,16 @@ export async function runAutomationProject() {
         "${renderSubagentToggle(session)}\n"
         '                                            <span class="session-id">'
     ) in sidebar_script
+
+
+def test_projects_sidebar_counts_live_subagents_for_sidebar_toggle() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const liveSummary = getLiveSubagentSummary(sessionId);" in sidebar_script
+    assert "normalizeSubagentSessionCount(liveSummary.count) > 0" in sidebar_script
 
 
 def test_projects_sidebar_hides_stale_summary_toggle_after_empty_subagent_list_load(
@@ -4274,6 +4288,7 @@ def _run_sidebar_script(
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
     mock_memory_view_path = tmp_path / "mockMemoryView.mjs"
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
+    mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
     mock_rounds_timeline_path = tmp_path / "mockRoundsTimeline.mjs"
     mock_session_debug_badge_path = tmp_path / "mockSessionDebugBadge.mjs"
@@ -4956,6 +4971,10 @@ export const state = {
     pendingNewSessionActive: false,
     pendingNewSessionWorkspaceId: null,
 };
+
+export function getRoleDisplayName(roleId) {
+    return String(roleId || "").trim();
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -5163,6 +5182,18 @@ export function removeSessionSubagent(sessionId, instanceId) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_subagent_rail_path.write_text(
+        """
+export function getLiveSubagentSummary() {
+    return {
+        isLoading: false,
+        count: 0,
+        runningCount: 0,
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     mock_new_session_draft_path.write_text(
         """
@@ -5224,6 +5255,7 @@ export function syncSessionDebugBadge() {
         .replace("./projectView.js", "./mockProjectView.mjs")
         .replace("./memoryView.js", "./mockMemoryView.mjs")
         .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
+        .replace("./subagentRail.js", "./mockSubagentRail.mjs")
         .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
         .replace("./rounds/timeline.js", "./mockRoundsTimeline.mjs")
         .replace("./sessionSearch.js", "./sessionSearch.mjs")

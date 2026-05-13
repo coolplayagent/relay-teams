@@ -1,4 +1,4 @@
-/**
+﻿/**
  * components/agentPanel/index.js
  * Public API for session-level subagent panels and gate cards.
  */
@@ -40,6 +40,9 @@ export function openAgentPanel(
 ) {
     const drawer = getDrawer();
     if (!drawer) return;
+    if (reveal || forceRefresh || drawer.hidden !== true) {
+        openDrawerUi();
+    }
 
     forEachPanel((panelRecord, currentId) => {
         panelRecord.panelEl.style.display = currentId === instanceId ? 'flex' : 'none';
@@ -74,18 +77,33 @@ export function openAgentPanel(
     _syncRailHeader(instanceId, roleId, panel);
     schedulePanelContextPreview(instanceId, { immediate: true });
     state.selectedRoleId = roleId || state.selectedRoleId;
+    state.activeAgentRoleId = roleId || state.activeAgentRoleId;
+    state.activeAgentInstanceId = instanceId || state.activeAgentInstanceId;
     const roleSelect = document.getElementById('subagent-role-select');
     if (roleSelect && roleId) {
         roleSelect.value = roleId;
     }
     if (reveal) {
-        openDrawerUi();
+        state.activeView = 'subagent-agent';
     }
 }
 
 export function closeAgentPanel() {
     closeDrawerUi();
     setActiveInstanceId(null);
+    state.selectedRoleId = null;
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
+    if (state.activeView === 'subagent-agent') {
+        state.activeView = 'main';
+    }
+    document.dispatchEvent(new CustomEvent('agent-teams-live-subagents-changed', {
+        detail: {
+            sessionId: String(state.currentSessionId || '').trim(),
+            selectedRoleId: '',
+            reason: 'selection',
+        },
+    }));
 }
 
 export function clearAllPanels() {
@@ -94,6 +112,12 @@ export function clearAllPanels() {
     clearPanels();
     setActiveRoundContext('', []);
     setActiveInstanceId(null);
+    state.selectedRoleId = null;
+    state.activeAgentRoleId = null;
+    state.activeAgentInstanceId = null;
+    if (state.activeView === 'subagent-agent') {
+        state.activeView = 'main';
+    }
     _resetRailHeader();
 }
 

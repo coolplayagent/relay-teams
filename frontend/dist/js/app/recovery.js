@@ -93,6 +93,7 @@ export async function hydrateSessionView(
     sessionId = state.currentSessionId,
     {
         includeRounds = true,
+        forceRefresh = false,
         priority = '',
         quiet = true,
         roundsScrollPolicy = '',
@@ -115,10 +116,16 @@ export async function hydrateSessionView(
         && state.activeEventSource
         && state.isGenerating
     );
-    const recoveryPromise = refreshSessionRecovery(safeSessionId, { priority, quiet, signal });
+    const recoveryPromise = refreshSessionRecovery(safeSessionId, {
+        forceRefresh: forceRefresh === true,
+        priority,
+        quiet,
+        signal,
+    });
     recoveryPromise.catch(() => null);
     if (includeRounds && !shouldSkipRoundsReload) {
         await loadSessionRounds(safeSessionId, {
+            forceRefresh: forceRefresh === true,
             priority,
             render: !preserveActiveSubagentView,
             scrollPolicy: roundsScrollPolicy || undefined,
@@ -133,7 +140,12 @@ export async function hydrateSessionView(
         sessionId: safeSessionId,
         reason: 'hydrate-session',
     });
-    await refreshSubagentRail(safeSessionId, { preserveSelection: true, priority, signal });
+    await refreshSubagentRail(safeSessionId, {
+        preserveSelection: true,
+        priority,
+        forceRefresh: forceRefresh === true,
+        signal,
+    });
     throwIfAborted(signal);
     syncSessionContinuity();
     return snapshot;
@@ -454,6 +466,7 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
             state.currentRecoverySnapshot?.activeRun?.run_id || state.activeRunId || '',
         ).trim();
         const snapshot = await fetchSessionRecovery(safeSessionId, {
+            forceRefresh: options.forceRefresh === true,
             priority: options.priority,
             signal: options.signal,
         });
@@ -1148,6 +1161,7 @@ async function runScheduledContinuityRefresh(request) {
     const canRefreshRounds = request.includeRounds && !state.isGenerating && !state.activeEventSource;
     if (canRefreshRounds) {
         await loadSessionRounds(safeSessionId, {
+            forceRefresh: request.forceRefresh === true,
             render: !shouldPreserveActiveSubagentView(safeSessionId),
         });
         if (state.currentSessionId !== safeSessionId) return null;
@@ -1155,7 +1169,10 @@ async function runScheduledContinuityRefresh(request) {
     if (request.forceRefresh === true) {
         invalidateSessionRecovery(safeSessionId);
     }
-    const snapshot = await refreshSessionRecovery(safeSessionId, { quiet: request.quiet !== false });
+    const snapshot = await refreshSessionRecovery(safeSessionId, {
+        forceRefresh: request.forceRefresh === true,
+        quiet: request.quiet !== false,
+    });
     await ensureAutomaticRecoveryStream(snapshot, {
         sessionId: safeSessionId,
         reason: request.reason || 'continuity-refresh',

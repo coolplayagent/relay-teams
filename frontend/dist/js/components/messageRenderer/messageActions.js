@@ -123,8 +123,10 @@ function isEligibleAnswerMessage(message) {
 
 function isUnstableAnswerMessage(message) {
     if (!message) return false;
+    if (message.classList?.contains?.('is-streaming')) return true;
     if (message.querySelector?.('.streaming-cursor')) return true;
     if (message.querySelector?.('.msg-text[data-idle-cursor="true"]')) return true;
+    if (message.querySelector?.('.tool-block[data-status="running"]')) return true;
     const liveThinking = Array.from(message.querySelectorAll?.('.thinking-block') || [])
         .some(block => String(block.dataset?.streaming || '') === 'true');
     return liveThinking;

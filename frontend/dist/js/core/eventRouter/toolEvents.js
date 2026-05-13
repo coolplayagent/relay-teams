@@ -18,9 +18,7 @@ import {
     updateToolResult,
 } from '../../components/messageRenderer.js';
 import {
-    getActiveInstanceId,
     getPanelScrollContainer,
-    openAgentPanel,
 } from '../../components/agentPanel.js';
 import {
     getActiveSubagentSessionStreamContainer,
@@ -39,12 +37,6 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
-    const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
-    if (!isPrimary && !getActiveInstanceId()) {
-        if (!normalModeSubagent) {
-            openAgentPanel(instanceId, roleId);
-        }
-    }
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
     if (!container) {

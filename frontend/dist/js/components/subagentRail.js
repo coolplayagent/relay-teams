@@ -9,6 +9,7 @@ import {
     state,
 } from '../core/state.js';
 import { clearAllPanels, openAgentPanel } from './agentPanel.js';
+import { rememberOrchestrationSubagentSession } from './subagentSessions.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
@@ -54,9 +55,25 @@ export function markSubagentRailLoading(sessionId = state.currentSessionId) {
     renderSubagentRail({ preserveSelection: true, syncPanel: false });
 }
 
+export function getLiveSubagentSummary(sessionId = state.currentSessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    const isCurrentSession = !!safeSessionId && safeSessionId === currentSessionId;
+    const roles = isCurrentSession ? getDisplaySessionAgents() : [];
+    return {
+        isLoading: !!(
+            safeSessionId
+            && subagentRailLoadingSessionId
+            && subagentRailLoadingSessionId === safeSessionId
+        ),
+        count: roles.length,
+        runningCount: countRunningSubagentInstances(roles),
+    };
+}
+
 export async function refreshSubagentRail(
     sessionId = state.currentSessionId,
-    { preserveSelection = true, priority = '', signal = null } = {},
+    { preserveSelection = true, priority = '', forceRefresh = false, signal = null } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -72,8 +89,16 @@ export async function refreshSubagentRail(
 
     try {
         const [agentsPayload, tasksPayload] = await Promise.all([
-            fetchSessionAgents(safeSessionId, { priority, signal }),
-            fetchSessionTasks(safeSessionId, { priority, signal }),
+            fetchSessionAgents(safeSessionId, {
+                priority,
+                forceRefresh: forceRefresh === true,
+                signal,
+            }),
+            fetchSessionTasks(safeSessionId, {
+                priority,
+                forceRefresh: forceRefresh === true,
+                signal,
+            }),
         ]);
         if (signal?.aborted) return;
         if (state.currentSessionId !== safeSessionId) return;
@@ -83,6 +108,14 @@ export async function refreshSubagentRail(
             normalizeSessionAgents(agentsPayload),
             state.sessionTasks,
         );
+        state.sessionAgents.forEach(agent => {
+            rememberOrchestrationSubagentSession(safeSessionId, {
+                ...agent,
+                subagent_kind: 'orchestration',
+                interactive: true,
+                deletable: false,
+            });
+        });
         subagentRailLoadingSessionId = '';
         renderSubagentRail({ preserveSelection, syncPanel: preserveSelection });
     } catch (e) {
@@ -107,14 +140,18 @@ export function rememberLiveSubagent(instanceId, roleId) {
     const nowIso = new Date().toISOString();
     const nextAgents = [...(state.sessionAgents || [])];
     const existingIndex = nextAgents.findIndex(agent => agent.role_id === safeRoleId);
+    const existingRecord = existingIndex >= 0 ? nextAgents[existingIndex] : null;
     const nextRecord = {
         instance_id: safeInstanceId,
         role_id: safeRoleId,
+        run_id: String(existingRecord?.run_id || existingRecord?.runId || state.activeRunId || '').trim(),
         status: 'running',
-        created_at: existingIndex >= 0 ? nextAgents[existingIndex].created_at : nowIso,
+        created_at: existingIndex >= 0 ? existingRecord.created_at : nowIso,
         updated_at: nowIso,
-        runtime_system_prompt: existingIndex >= 0 ? nextAgents[existingIndex].runtime_system_prompt : '',
-        runtime_tools_json: existingIndex >= 0 ? nextAgents[existingIndex].runtime_tools_json : '',
+        runtime_system_prompt: existingIndex >= 0 ? existingRecord.runtime_system_prompt : '',
+        runtime_tools_json: existingIndex >= 0 ? existingRecord.runtime_tools_json : '',
+        reflection_summary_preview: existingIndex >= 0 ? existingRecord.reflection_summary_preview : '',
+        reflection_updated_at: existingIndex >= 0 ? existingRecord.reflection_updated_at : '',
     };
     if (existingIndex >= 0) {
         nextAgents[existingIndex] = {
@@ -125,6 +162,9 @@ export function rememberLiveSubagent(instanceId, roleId) {
         nextAgents.push(nextRecord);
     }
     state.sessionAgents = normalizeSessionAgents(nextAgents);
+    if (nextRecord.run_id) {
+        rememberOrchestrationSubagentSession(state.currentSessionId, nextRecord);
+    }
     renderSubagentRail({ preserveSelection: true, syncPanel: false });
 }
 
@@ -159,6 +199,59 @@ export function selectSubagentRole(
         reveal,
         forceRefresh,
     });
+}
+
+export function openSubagentAgent(
+    instanceId,
+    roleId,
+    { reveal = false, forceRefresh = false, record = null } = {},
+) {
+    const safeInstanceId = String(instanceId || '').trim();
+    const safeRoleId = String(roleId || '').trim();
+    if (!safeInstanceId || !safeRoleId || isPrimaryOrReservedRoleId(safeRoleId)) {
+        return false;
+    }
+
+    const nowIso = new Date().toISOString();
+    const existing = (state.sessionAgents || [])
+        .find(agent => String(agent?.instance_id || '').trim() === safeInstanceId)
+        || (state.sessionAgents || [])
+            .find(agent => String(agent?.role_id || '').trim() === safeRoleId)
+        || null;
+    const nextRecord = {
+        instance_id: safeInstanceId,
+        role_id: safeRoleId,
+        status: String(record?.status || existing?.status || 'idle'),
+        created_at: String(record?.created_at || existing?.created_at || nowIso),
+        updated_at: String(record?.updated_at || existing?.updated_at || nowIso),
+        runtime_system_prompt: String(
+            record?.runtime_system_prompt || existing?.runtime_system_prompt || '',
+        ),
+        runtime_tools_json: String(
+            record?.runtime_tools_json || existing?.runtime_tools_json || '',
+        ),
+        reflection_summary_preview: String(
+            record?.reflection_summary_preview || existing?.reflection_summary_preview || '',
+        ),
+        reflection_updated_at: String(
+            record?.reflection_updated_at || existing?.reflection_updated_at || '',
+        ),
+    };
+    const nextAgents = (state.sessionAgents || [])
+        .filter(agent =>
+            String(agent?.instance_id || '').trim() !== safeInstanceId
+            && String(agent?.role_id || '').trim() !== safeRoleId
+        );
+    nextAgents.push(nextRecord);
+    state.sessionAgents = normalizeSessionAgents(nextAgents);
+    state.selectedRoleId = safeRoleId;
+    setSubagentRailExpanded(true);
+    renderSubagentRail({ preserveSelection: true, syncPanel: false });
+    openAgentPanel(safeInstanceId, safeRoleId, {
+        reveal,
+        forceRefresh,
+    });
+    return true;
 }
 
 export function focusSubagent(instanceId, roleId) {
@@ -203,6 +296,7 @@ function renderSubagentRail({ preserveSelection = true, syncPanel = true } = {})
     if (syncPanel) {
         ensureSelectedPanel({ preserveSelection });
     }
+    emitLiveSubagentsChanged();
 }
 
 function updateSubagentSummary() {
@@ -314,11 +408,14 @@ function normalizeSessionAgents(payload) {
         const record = {
             instance_id: instanceId,
             role_id: roleId,
+            run_id: String(item.run_id || item.runId || ''),
             status: String(item.status || 'idle'),
             created_at: String(item.created_at || ''),
             updated_at: String(item.updated_at || item.created_at || ''),
             runtime_system_prompt: String(item.runtime_system_prompt || ''),
             runtime_tools_json: String(item.runtime_tools_json || ''),
+            reflection_summary_preview: String(item.reflection_summary_preview || ''),
+            reflection_updated_at: String(item.reflection_updated_at || ''),
         };
         const existing = latestByRole.get(roleId);
         if (!existing || String(record.updated_at).localeCompare(String(existing.updated_at)) >= 0) {
@@ -386,11 +483,14 @@ function reconcileSessionAgentsWithTasks(agentsPayload, tasksPayload) {
         latestByRole.set(roleId, {
             instance_id: instanceId,
             role_id: roleId,
+            run_id: existing?.run_id || task.run_id || '',
             status: 'running',
             created_at: existing?.created_at || task.created_at || '',
             updated_at: latestTimestamp(existing?.updated_at || '', task.updated_at || ''),
             runtime_system_prompt: existing?.runtime_system_prompt || '',
             runtime_tools_json: existing?.runtime_tools_json || '',
+            reflection_summary_preview: existing?.reflection_summary_preview || '',
+            reflection_updated_at: existing?.reflection_updated_at || '',
         });
     });
 
@@ -504,4 +604,17 @@ function escapeHtml(value) {
 
 function escapeAttribute(value) {
     return escapeHtml(value);
+}
+
+function emitLiveSubagentsChanged(detail = {}) {
+    if (typeof document?.dispatchEvent !== 'function') {
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('agent-teams-live-subagents-changed', {
+        detail: {
+            sessionId: String(state.currentSessionId || '').trim(),
+            selectedRoleId: String(state.selectedRoleId || '').trim(),
+            ...(detail || {}),
+        },
+    }));
 }

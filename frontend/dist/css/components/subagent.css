@@ -258,6 +258,10 @@
     box-shadow: none;
 }
 
+.projects-list .session-live-subagent-item .session-time {
+    text-transform: lowercase;
+}
+
 .projects-list .session-subagent-item.active::before {
     content: "";
     position: absolute;
@@ -482,6 +486,14 @@
     flex-direction: column;
     gap: 0.75rem;
     min-width: 0;
+}
+
+.chat-container.is-subagent-session-active .chat-scroll {
+    scrollbar-gutter: stable;
+}
+
+.subagent-session-body .message {
+    animation: none;
 }
 
 .subagent-session-loading {

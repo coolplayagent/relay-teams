@@ -154,6 +154,10 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "persistRightRailWidth(currentWidth);" in navbar_script
     assert "function persistSidebarWidth(width) {" in navbar_script
     assert "function persistRightRailWidth(width) {" in navbar_script
+    assert "window.innerWidth - getVisibleRightRailWidth() - 100" in navbar_script
+    assert "function getVisibleRightRailWidth() {" in navbar_script
+    assert "window.innerWidth - getVisibleSidebarWidth() - 220" in navbar_script
+    assert "function getVisibleSidebarWidth() {" in navbar_script
     assert navbar_script.count("flushWidth();") >= 2
     assert "initBackendStatusMonitor" in bootstrap_script
     assert "initializeSessionTokenUsage" in bootstrap_script

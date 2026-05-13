@@ -7,6 +7,7 @@ from enum import Enum
 from functools import partial
 import inspect
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import ParamSpec, TypeVar, cast
@@ -17,6 +18,8 @@ ParamT = ParamSpec("ParamT")
 ResultT = TypeVar("ResultT")
 ISOLATED_THREAD_WORKER_COUNT = 8
 SESSION_READ_THREAD_WORKER_COUNT = 8
+DEFAULT_SESSION_FAST_READ_THREAD_WORKER_COUNT = 8
+SESSION_PROJECTION_REFRESH_THREAD_WORKER_COUNT = 2
 UI_READ_THREAD_WORKER_COUNT = 8
 SETTINGS_ADMIN_THREAD_WORKER_COUNT = 4
 LOGS_INGEST_THREAD_WORKER_COUNT = 2
@@ -26,11 +29,47 @@ NETWORK_PROBE_THREAD_WORKER_COUNT = 4
 SLOW_SERVER_CALL_SECONDS = 1.0
 DEFAULT_ROUTE_WORK_QUEUE_TIMEOUT_SECONDS = 4.0
 LOGGER = get_logger(__name__)
+SESSION_FAST_READ_WORKERS_ENV = "RELAY_TEAMS_SESSION_FAST_READ_WORKERS"
+
+
+def _resolve_positive_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = int(raw_value.strip())
+    except ValueError:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="server.route_work.invalid_env",
+            message="Ignoring invalid route work environment override",
+            payload={"name": name, "value": raw_value, "default": default},
+        )
+        return default
+    if value < 1:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="server.route_work.invalid_env",
+            message="Ignoring non-positive route work environment override",
+            payload={"name": name, "value": raw_value, "default": default},
+        )
+        return default
+    return value
+
+
+SESSION_FAST_READ_THREAD_WORKER_COUNT = _resolve_positive_int_env(
+    SESSION_FAST_READ_WORKERS_ENV,
+    DEFAULT_SESSION_FAST_READ_THREAD_WORKER_COUNT,
+)
 
 
 class RouteWorkClass(str, Enum):
     CRITICAL_CONTROL = "critical_control"
     SESSION_READ = "session_read"
+    SESSION_FAST_READ = "session_fast_read"
+    SESSION_PROJECTION_REFRESH = "session_projection_refresh"
     UI_READ = "ui_read"
     SETTINGS_ADMIN = "settings_admin"
     LOGS_INGEST = "logs_ingest"
@@ -46,6 +85,10 @@ class RouteWorkRejectedError(RuntimeError):
 _ROUTE_WORKER_COUNTS = {
     RouteWorkClass.CRITICAL_CONTROL: ISOLATED_THREAD_WORKER_COUNT,
     RouteWorkClass.SESSION_READ: SESSION_READ_THREAD_WORKER_COUNT,
+    RouteWorkClass.SESSION_FAST_READ: SESSION_FAST_READ_THREAD_WORKER_COUNT,
+    RouteWorkClass.SESSION_PROJECTION_REFRESH: (
+        SESSION_PROJECTION_REFRESH_THREAD_WORKER_COUNT
+    ),
     RouteWorkClass.UI_READ: UI_READ_THREAD_WORKER_COUNT,
     RouteWorkClass.SETTINGS_ADMIN: SETTINGS_ADMIN_THREAD_WORKER_COUNT,
     RouteWorkClass.LOGS_INGEST: LOGS_INGEST_THREAD_WORKER_COUNT,
@@ -56,6 +99,10 @@ _ROUTE_WORKER_COUNTS = {
 _ROUTE_QUEUE_LIMITS = {
     RouteWorkClass.CRITICAL_CONTROL: ISOLATED_THREAD_WORKER_COUNT * 2,
     RouteWorkClass.SESSION_READ: SESSION_READ_THREAD_WORKER_COUNT * 10,
+    RouteWorkClass.SESSION_FAST_READ: SESSION_FAST_READ_THREAD_WORKER_COUNT * 20,
+    RouteWorkClass.SESSION_PROJECTION_REFRESH: (
+        SESSION_PROJECTION_REFRESH_THREAD_WORKER_COUNT * 4
+    ),
     RouteWorkClass.UI_READ: UI_READ_THREAD_WORKER_COUNT * 8,
     RouteWorkClass.SETTINGS_ADMIN: SETTINGS_ADMIN_THREAD_WORKER_COUNT * 2,
     RouteWorkClass.LOGS_INGEST: LOGS_INGEST_THREAD_WORKER_COUNT * 2,
@@ -233,6 +280,38 @@ async def call_maybe_async_in_session_read_thread(
 ) -> ResultT:
     return await call_route_work(
         RouteWorkClass.SESSION_READ,
+        operation,
+        function,
+        *args,
+        **kwargs,
+    )
+
+
+async def call_maybe_async_in_session_fast_read_thread(
+    operation: str,
+    function: Callable[ParamT, ResultT | Awaitable[ResultT]],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    return await call_route_work(
+        RouteWorkClass.SESSION_FAST_READ,
+        operation,
+        function,
+        *args,
+        **kwargs,
+    )
+
+
+async def call_maybe_async_in_session_projection_refresh_thread(
+    operation: str,
+    function: Callable[ParamT, ResultT | Awaitable[ResultT]],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    return await call_route_work(
+        RouteWorkClass.SESSION_PROJECTION_REFRESH,
         operation,
         function,
         *args,

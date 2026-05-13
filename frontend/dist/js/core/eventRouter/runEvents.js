@@ -55,9 +55,8 @@ import {
     startThinkingBlock,
 } from '../../components/messageRenderer.js';
 import {
-    getActiveInstanceId,
-    getPanelScrollContainer,
     openAgentPanel,
+    getPanelScrollContainer,
 } from '../../components/agentPanel.js';
 import {
     coordinatorContainerFor,
@@ -116,10 +115,9 @@ export function handleModelStepStarted(eventMeta, instanceId, roleId) {
             void refreshSubagentRail(state.currentSessionId, {
                 preserveSelection: true,
             });
-            getPanelScrollContainer(instanceId, roleId);
-            if (!state.autoSwitchedSubagentInstances[instanceId]) {
+            if (state.autoSwitchedSubagentInstances[instanceId] !== true) {
                 state.autoSwitchedSubagentInstances[instanceId] = true;
-                openAgentPanel(instanceId, roleId);
+                openAgentPanel(instanceId, roleId, { reveal: false });
             }
         }
         if (normalModeSubagent) {
@@ -173,9 +171,6 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
             });
             return;
         }
-        if (!normalModeSubagent && !getActiveInstanceId()) {
-            openAgentPanel(instanceId, roleId);
-        }
         getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
         appendStreamChunk(streamKey, payload.text || '', runId, roleId, label);
     }
@@ -226,9 +221,6 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
             eventId: eventMeta?.event_id || '',
         });
         return;
-    }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
     }
     getOrCreateStreamBlock(container, streamKey, roleId, label, runId);
     appendStreamOutputParts(streamKey, output, {
@@ -300,9 +292,6 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
         });
         return;
     }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
-    }
     getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
     startThinkingBlock(instanceId, partIndex, {
         container,
@@ -356,9 +345,6 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
             eventId: eventMeta?.event_id || '',
         });
         return;
-    }
-    if (!normalModeSubagent && !getActiveInstanceId()) {
-        openAgentPanel(instanceId, roleId);
     }
     getOrCreateStreamBlock(container, instanceId, roleId, label, runId);
     appendThinkingChunk(instanceId, partIndex, text, {

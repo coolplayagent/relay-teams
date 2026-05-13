@@ -105,6 +105,7 @@ export function clearActiveSubagentSession({ abortMainReturn = true } = {}) {
     cancelTerminalRefreshForInstance(getActiveSubagentSession()?.instanceId || '');
     state.activeSubagentSession = null;
     state.activeView = 'main';
+    setSubagentSessionChromeActive(false);
     setMainComposerVisible(true);
     if (!state.isGenerating) {
         if (els.promptInput) {
@@ -148,7 +149,10 @@ export async function ensureSessionSubagents(
     }
     const loadPromise = (async () => {
         const payload = await runQueuedSubagentSessionLoad(
-            () => fetchSessionSubagents(safeSessionId, { signal }),
+            () => fetchSessionSubagents(safeSessionId, {
+                forceRefresh: force === true,
+                signal,
+            }),
             signal,
         );
         throwIfAborted(signal);
@@ -291,6 +295,24 @@ export function rememberNormalModeSubagentSession(sessionId, record) {
     const normalized = coerceParentStoppedSubagentSession(
         normalizeSubagentSession(record, safeSessionId),
     );
+    if (!safeSessionId || normalized === null) {
+        return false;
+    }
+    const current = getSessionSubagentSessions(safeSessionId);
+    const next = upsertSubagentSessionRecord(current, normalized);
+    applySessionSubagentRecords(safeSessionId, next);
+    return true;
+}
+
+export function rememberOrchestrationSubagentSession(sessionId, record) {
+    const safeSessionId = String(sessionId || record?.session_id || record?.sessionId || '').trim();
+    const normalized = normalizeSubagentSession({
+        ...record,
+        subagent_kind: 'orchestration',
+        interactive: true,
+        deletable: false,
+        updated_at: record?.updated_at || record?.updatedAt || new Date().toISOString(),
+    }, safeSessionId);
     if (!safeSessionId || normalized === null) {
         return false;
     }
@@ -581,6 +603,7 @@ export async function openSubagentSession(sessionId, record) {
     state.activeView = 'subagent-session';
     state.activeAgentRoleId = normalized.roleId;
     state.activeAgentInstanceId = normalized.instanceId;
+    setSubagentSessionChromeActive(true);
     clearAllPanels();
     hideRoundNavigator();
     setMainComposerVisible(false);
@@ -718,13 +741,16 @@ function applySessionSubagentRecords(
     rows,
     { emitChange = true } = {},
 ) {
-    const nextRows = Array.isArray(rows) ? rows : [];
-    const previousRows = getSessionSubagentSessions(sessionId);
-    const listChanged = !areSubagentSessionListsEqual(previousRows, nextRows);
-    const structureChanged = !areSubagentSessionStructuresEqual(previousRows, nextRows);
-    subagentSessionsBySessionId.set(sessionId, nextRows);
-    syncNormalModeSubagentStreams(sessionId, getSessionSubagentSessions(sessionId));
-    syncActiveSubagentSessionFromCache(sessionId);
+      const nextRows = Array.isArray(rows) ? rows : [];
+      const previousRows = getSessionSubagentSessions(sessionId);
+      const listChanged = !areSubagentSessionListsEqual(previousRows, nextRows);
+      const structureChanged = !areSubagentSessionStructuresEqual(previousRows, nextRows);
+      subagentSessionsBySessionId.set(sessionId, nextRows);
+      syncNormalModeSubagentStreams(
+          sessionId,
+          getSessionSubagentSessions(sessionId).filter(item => item.subagentKind === 'normal'),
+      );
+      syncActiveSubagentSessionFromCache(sessionId);
     if (emitChange && structureChanged) {
         emitSubagentSessionsChanged({
             forceRefresh: false,
@@ -880,7 +906,13 @@ function normalizeSubagentSession(record, sessionId) {
         || '',
     ).trim();
     const safeSessionId = String(sessionId || record.session_id || record.sessionId || '').trim();
-    if (!safeSessionId || !instanceId || !roleId || !runId || !runId.startsWith('subagent_run_')) {
+    const subagentKind = normalizeSubagentKind(record);
+    const interactive = record.interactive === true || subagentKind === 'orchestration';
+    const deletable = record.deletable === true || subagentKind === 'normal';
+    if (!safeSessionId || !instanceId || !roleId || !runId) {
+        return null;
+    }
+    if (subagentKind === 'normal' && !runId.startsWith('subagent_run_')) {
         return null;
     }
     const normalizedStatus = normalizeSubagentRunStatus(record.status);
@@ -894,9 +926,12 @@ function normalizeSubagentSession(record, sessionId) {
         runId,
         title: String(record.title || '').trim(),
         status: normalizedStatus,
-        runStatus: normalizedRunStatus,
-        runPhase: String(record.run_phase || record.runPhase || '').trim(),
-        lastEventId: Number(record.last_event_id || record.lastEventId || 0),
+          runStatus: normalizedRunStatus,
+          runPhase: String(record.run_phase || record.runPhase || '').trim(),
+          subagentKind,
+          interactive,
+          deletable,
+          lastEventId: Number(record.last_event_id || record.lastEventId || 0),
         checkpointEventId: Number(
             record.checkpoint_event_id || record.checkpointEventId || 0,
         ),
@@ -905,7 +940,24 @@ function normalizeSubagentSession(record, sessionId) {
         updatedAt: String(record.updated_at || record.updatedAt || record.created_at || '').trim(),
         conversationId: String(record.conversation_id || record.conversationId || '').trim(),
     };
-}
+  }
+
+  function normalizeSubagentKind(record) {
+      const explicit = String(
+          record?.subagent_kind
+          || record?.subagentKind
+          || record?.kind
+          || '',
+      ).trim().toLowerCase();
+      if (explicit === 'orchestration' || explicit === 'live') {
+          return 'orchestration';
+      }
+      if (explicit === 'normal' || explicit === 'session') {
+          return 'normal';
+      }
+      const runId = String(record?.run_id || record?.runId || record?.subagent_run_id || '').trim();
+      return runId.startsWith('subagent_run_') ? 'normal' : 'orchestration';
+  }
 
 function isSubagentBackgroundTask(payload) {
     return !!(
@@ -1082,6 +1134,13 @@ function setMainComposerVisible(visible) {
         return;
     }
     els.inputContainer.style.display = visible ? '' : 'none';
+}
+
+function setSubagentSessionChromeActive(active) {
+    els.chatContainer?.classList?.toggle?.(
+        'is-subagent-session-active',
+        active === true,
+    );
 }
 
 function ensureSubagentSessionView(active, { showLoading = false } = {}) {
@@ -1276,10 +1335,11 @@ function areSubagentSessionStructureRecordsEqual(left, right) {
         right
         && left.sessionId === right.sessionId
         && left.instanceId === right.instanceId
-        && left.roleId === right.roleId
-        && left.runId === right.runId
-        && left.title === right.title
-        && left.conversationId === right.conversationId
+          && left.roleId === right.roleId
+          && left.runId === right.runId
+          && left.title === right.title
+          && left.subagentKind === right.subagentKind
+          && left.conversationId === right.conversationId
     );
 }
 
@@ -1292,9 +1352,12 @@ function areSubagentSessionListRecordsEqual(left, right) {
         && left.runId === right.runId
         && left.title === right.title
         && left.status === right.status
-        && left.runStatus === right.runStatus
-        && left.runPhase === right.runPhase
-        && left.lastEventId === right.lastEventId
+          && left.runStatus === right.runStatus
+          && left.runPhase === right.runPhase
+          && left.subagentKind === right.subagentKind
+          && left.interactive === right.interactive
+          && left.deletable === right.deletable
+          && left.lastEventId === right.lastEventId
         && left.checkpointEventId === right.checkpointEventId
         && left.streamConnected === right.streamConnected
         && left.createdAt === right.createdAt
@@ -1312,9 +1375,12 @@ function areSubagentSessionRecordsEqual(left, right) {
         && left.runId === right.runId
         && left.title === right.title
         && left.status === right.status
-        && left.runStatus === right.runStatus
-        && left.runPhase === right.runPhase
-        && left.lastEventId === right.lastEventId
+          && left.runStatus === right.runStatus
+          && left.runPhase === right.runPhase
+          && left.subagentKind === right.subagentKind
+          && left.interactive === right.interactive
+          && left.deletable === right.deletable
+          && left.lastEventId === right.lastEventId
         && left.checkpointEventId === right.checkpointEventId
         && left.streamConnected === right.streamConnected
         && left.createdAt === right.createdAt

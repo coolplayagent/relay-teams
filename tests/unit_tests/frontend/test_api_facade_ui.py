@@ -295,12 +295,264 @@ export function invalidateManagedRequestCache() {
         },
         {
             "key": "sessions:list",
-            "url": "/api/sessions",
+            "url": "/api/sessions?force_refresh=true",
             "options": {},
             "errorMessage": "Failed to fetch sessions",
             "config": {"ttlMs": 500},
         },
     ]
+
+
+def test_fetch_session_subagents_force_refresh_adds_backend_query(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return [];
+}
+
+export async function requestJson() {
+    return { status: 'ok' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+
+export function invalidateManagedRequestCache() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessionSubagents('session-1', { forceRefresh: true }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["invalidatedPrefixes"] == ["sessions:session-1:subagents"]
+    assert payload["managedRequests"][0]["url"] == (
+        "/api/sessions/session-1/subagents?force_refresh=true"
+    )
+
+
+def test_fetch_session_detail_force_refresh_adds_backend_queries(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return key.includes(':rounds:') ? { items: [] } : [];
+}
+
+export async function requestJson() {
+    return { status: 'ok' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+
+export function invalidateManagedRequestCache() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessionRounds('session-1', { forceRefresh: true }); "
+                "await mod.fetchSessionRecovery('session-1', { forceRefresh: true }); "
+                "await mod.fetchSessionAgents('session-1', { forceRefresh: true }); "
+                "await mod.fetchSessionTasks('session-1', { forceRefresh: true }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["invalidatedPrefixes"] == [
+        "sessions:session-1:rounds:",
+        "sessions:session-1:recovery",
+        "sessions:session-1:agents",
+        "sessions:session-1:tasks",
+    ]
+    assert [request["url"] for request in payload["managedRequests"]] == [
+        "/api/sessions/session-1/rounds?limit=8&force_refresh=true",
+        "/api/sessions/session-1/recovery?force_refresh=true",
+        "/api/sessions/session-1/agents?force_refresh=true",
+        "/api/sessions/session-1/tasks?force_refresh=true",
+    ]
+
+
+def test_fetch_session_token_usage_force_refresh_adds_backend_query(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "token_usage.js"
+    )
+    module_under_test_path = tmp_path / "token_usage.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return { session_id: 'session-1' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessionTokenUsage('session-1', { forceRefresh: true }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["invalidatedPrefixes"] == ["sessions:session-1:token-usage"]
+    assert payload["managedRequests"][0]["url"] == (
+        "/api/sessions/session-1/token-usage?force_refresh=true"
+    )
 
 
 def test_role_config_reads_use_managed_requests_and_writes_invalidate_cache(

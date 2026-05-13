@@ -4,12 +4,16 @@ import asyncio
 import json
 import logging
 import time
+from typing import cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+from relay_teams.interfaces.server.async_call import (
+    call_maybe_async_in_session_fast_read_thread,
+)
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
@@ -23,6 +27,7 @@ from relay_teams.sessions.session_models import (
     SessionRecord,
     normalize_session_create_metadata_input,
 )
+from relay_teams.sessions.session_read_models import SessionSubagentsSnapshotResponse
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
@@ -73,9 +78,14 @@ async def create_session(
 
 @router.get("", response_model=list[SessionRecord])
 async def list_sessions(
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> list[SessionRecord]:
-    records = await service.list_sessions_async()
+    records = await call_maybe_async_in_session_fast_read_thread(
+        "session.list",
+        service.list_sessions_async,
+        force_refresh=force_refresh,
+    )
     return list(records)
 
 
@@ -234,25 +244,35 @@ async def get_session_rounds(
     cursor_run_id: OptionalIdentifierStr = None,
     timeline: bool = False,
     summary: bool = False,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    return await service.get_session_rounds_async(
+    return await call_maybe_async_in_session_fast_read_thread(
+        "session.rounds",
+        service.get_session_rounds_async,
         session_id,
         limit=limit,
         cursor_run_id=cursor_run_id,
         timeline=timeline,
         summary=summary,
+        force_refresh=force_refresh,
     )
 
 
 @router.get("/{session_id}/recovery")
 async def get_session_recovery(
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
         return await asyncio.wait_for(
-            service.get_recovery_snapshot_async(session_id),
+            call_maybe_async_in_session_fast_read_thread(
+                "session.recovery",
+                service.get_recovery_snapshot_async,
+                session_id,
+                force_refresh=force_refresh,
+            ),
             timeout=SESSION_RECOVERY_TIMEOUT_SECONDS,
         )
     except KeyError as exc:
@@ -289,11 +309,17 @@ async def get_round(
 @router.get("/{session_id}/agents")
 async def list_session_agents(
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        agents = await service.list_agents_in_session_async(session_id)
-        return list(agents)
+        agents = await call_maybe_async_in_session_fast_read_thread(
+            "session.agents",
+            service.list_agents_in_session_async,
+            session_id,
+            force_refresh=force_refresh,
+        )
+        return list(cast(tuple[dict[str, object], ...], agents))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -301,11 +327,37 @@ async def list_session_agents(
 @router.get("/{session_id}/subagents")
 async def list_session_subagents(
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        subagents = await service.list_normal_mode_subagents_async(session_id)
-        return list(subagents)
+        subagents = await call_maybe_async_in_session_fast_read_thread(
+            "session.subagents",
+            service.list_session_subagents_async,
+            session_id,
+            force_refresh=force_refresh,
+        )
+        return list(cast(tuple[dict[str, object], ...], subagents))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.get(
+    "/{session_id}/subagents:snapshot",
+    response_model=SessionSubagentsSnapshotResponse,
+)
+async def list_session_subagents_snapshot(
+    session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
+    service: SessionService = Depends(get_session_service),
+) -> SessionSubagentsSnapshotResponse:
+    try:
+        return await call_maybe_async_in_session_fast_read_thread(
+            "session.subagents.snapshot",
+            service.list_session_subagents_snapshot_async,
+            session_id,
+            force_refresh=force_refresh,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -409,17 +461,29 @@ async def get_agent_messages(
 @router.get("/{session_id}/tasks")
 async def get_session_tasks(
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await service.get_session_tasks_async(session_id)
+    return await call_maybe_async_in_session_fast_read_thread(
+        "session.tasks",
+        service.get_session_tasks_async,
+        session_id,
+        force_refresh=force_refresh,
+    )
 
 
 @router.get("/{session_id}/token-usage")
 async def get_session_token_usage(
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    summary = await service.get_token_usage_by_session_async(session_id)
+    summary = await call_maybe_async_in_session_fast_read_thread(
+        "session.token_usage",
+        service.get_token_usage_by_session_async,
+        session_id,
+        force_refresh=force_refresh,
+    )
     return {
         "session_id": summary.session_id,
         "total_input_tokens": summary.total_input_tokens,

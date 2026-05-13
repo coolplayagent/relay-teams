@@ -6,6 +6,29 @@ from pathlib import Path
 import subprocess
 
 
+def test_subagent_session_streaming_layout_is_stable() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    css_text = (
+        repo_root / "frontend" / "dist" / "css" / "components" / "subagent.css"
+    ).read_text(encoding="utf-8")
+
+    assert ".chat-container.is-subagent-session-active .chat-scroll" in css_text
+    assert "scrollbar-gutter: stable;" in css_text
+    assert ".subagent-session-body .message" in css_text
+    assert "animation: none;" in css_text
+
+
+def test_live_subagent_open_is_guarded_after_session_switch_race() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    bootstrap_script = (
+        repo_root / "frontend" / "dist" / "js" / "app" / "bootstrap.js"
+    ).read_text(encoding="utf-8")
+
+    assert "void selectSession(sessionId).then(() => {" in bootstrap_script
+    assert "if (state.currentSessionId === sessionId) {" in bootstrap_script
+    assert "openSelectedSubagent();" in bootstrap_script
+
+
 def test_opening_subagent_session_hides_main_input_container(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -163,7 +186,32 @@ function createChatMessages() {
     };
 }
 
+const chatContainerClasses = new Set();
+
 export const els = {
+    chatContainer: {
+        get className() {
+            return Array.from(chatContainerClasses).join(" ");
+        },
+        classList: {
+            toggle(name, force) {
+                if (force === true) {
+                    chatContainerClasses.add(name);
+                    return true;
+                }
+                if (force === false) {
+                    chatContainerClasses.delete(name);
+                    return false;
+                }
+                if (chatContainerClasses.has(name)) {
+                    chatContainerClasses.delete(name);
+                    return false;
+                }
+                chatContainerClasses.add(name);
+                return true;
+            },
+        },
+    },
     inputContainer: { style: {} },
     promptInput: { disabled: false },
     sendBtn: { disabled: false },
@@ -230,6 +278,7 @@ const hiddenWhileOpen = els.inputContainer.style.display || "";
 const hintWhileOpen = els.promptInputHint.textContent;
 const sendDisabledWhileOpen = els.sendBtn.disabled;
 const activeViewWhileOpen = state.activeView;
+const chatContainerClassWhileOpen = els.chatContainer.className;
 
 clearActiveSubagentSession();
 
@@ -238,10 +287,12 @@ console.log(JSON.stringify({
     hintWhileOpen,
     sendDisabledWhileOpen,
     activeViewWhileOpen,
+    chatContainerClassWhileOpen,
     hiddenAfterClear: els.inputContainer.style.display || "",
     hintAfterClear: els.promptInputHint.textContent,
     sendDisabledAfterClear: els.sendBtn.disabled,
     activeViewAfterClear: state.activeView,
+    chatContainerClassAfterClear: els.chatContainer.className,
     renderCalls: globalThis.__renderCalls,
     clearAllPanelsCalls: globalThis.__clearAllPanelsCalls,
     hideRoundNavigatorCalls: globalThis.__hideRoundNavigatorCalls,
@@ -271,10 +322,12 @@ console.log(JSON.stringify({
     assert payload["hintWhileOpen"] == "Read-only subagent session"
     assert payload["sendDisabledWhileOpen"] is True
     assert payload["activeViewWhileOpen"] == "subagent-session"
+    assert payload["chatContainerClassWhileOpen"] == "is-subagent-session-active"
     assert payload["hiddenAfterClear"] == ""
     assert payload["hintAfterClear"] == ""
     assert payload["sendDisabledAfterClear"] is False
     assert payload["activeViewAfterClear"] == "main"
+    assert payload["chatContainerClassAfterClear"] == ""
     assert payload["renderCalls"] == [
         {
             "sessionId": "session-1",
@@ -535,6 +588,132 @@ console.log(JSON.stringify({
         }
     ]
     assert payload["logs"] == []
+
+
+def test_ensure_session_subagents_force_refresh_reaches_api(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "subagentSessions.js"
+    )
+    module_under_test_path = tmp_path / "subagentSessions.mjs"
+    runner_path = tmp_path / "runner_force_refresh.mjs"
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
+        .replace("./rounds/navigator.js", "./mockNavigator.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function fetchSessionSubagents(sessionId, options = {}) {
+    globalThis.__fetchCalls.push({
+        sessionId,
+        forceRefresh: options.forceRefresh === true,
+        hasSignal: !!options.signal,
+    });
+    return [];
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockStream.mjs").write_text(
+        "export function syncNormalModeSubagentStreams() {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRecovery.mjs").write_text(
+        """
+export function abortMainSessionRestore() {}
+export async function restoreMainSessionView() { return {}; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanel.mjs").write_text(
+        "export function clearAllPanels() {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanelHistory.mjs").write_text(
+        "export async function renderInstanceHistoryInto() { return {}; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockNavigator.mjs").write_text(
+        "export function hideRoundNavigator() {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = { currentSessionId: "session-1", activeSubagentSession: null };
+export function getRoleDisplayName(roleId, { fallback } = {}) {
+    return String(roleId || fallback || "Agent");
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockDom.mjs").write_text(
+        "export const els = {};\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        "export function t(key) { return key; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        "export function sysLog() {}\n",
+        encoding="utf-8",
+    )
+    runner_path.write_text(
+        """
+globalThis.__fetchCalls = [];
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+globalThis.document = { dispatchEvent() {} };
+
+const { ensureSessionSubagents } = await import("./subagentSessions.mjs");
+
+await ensureSessionSubagents("session-1", { force: true });
+
+console.log(JSON.stringify(globalThis.__fetchCalls));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout) == [
+        {
+            "sessionId": "session-1",
+            "forceRefresh": True,
+            "hasSignal": False,
+        }
+    ]
 
 
 def test_return_to_main_session_ignores_stale_hydration_after_subagent_reentry(
@@ -1861,6 +2040,9 @@ console.log(JSON.stringify({
             "status": "failed",
             "runStatus": "failed",
             "runPhase": "",
+            "subagentKind": "normal",
+            "interactive": False,
+            "deletable": True,
             "lastEventId": 0,
             "checkpointEventId": 0,
             "streamConnected": False,

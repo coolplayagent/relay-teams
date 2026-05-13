@@ -5,7 +5,132 @@ from pathlib import Path
 import subprocess
 
 
-def test_subagent_rail_module_loads_with_real_frontend_graph() -> None:
+def test_frontend_named_local_imports_are_exported() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = r"""
+const fs = require('fs');
+const path = require('path');
+const root = path.resolve('frontend/dist/js');
+
+function walk(dir) {
+  const output = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const absolute = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      output.push(...walk(absolute));
+    } else if (entry.isFile() && absolute.endsWith('.js')) {
+      output.push(absolute);
+    }
+  }
+  return output;
+}
+
+const files = walk(root);
+const textByFile = new Map(files.map(file => [file, fs.readFileSync(file, 'utf8')]));
+
+function resolveImport(fromFile, specifier) {
+  if (!specifier.startsWith('.')) {
+    return null;
+  }
+  const base = path.resolve(path.dirname(fromFile), specifier);
+  const candidates = [base, `${base}.js`, path.join(base, 'index.js')];
+  return candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || null;
+}
+
+function exportedNames(file, seen = new Set()) {
+  if (seen.has(file)) {
+    return new Set();
+  }
+  seen.add(file);
+  const text = textByFile.get(file) || '';
+  const names = new Set();
+  const declarationPatterns = [
+    /export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g,
+    /export\s+class\s+([A-Za-z_$][\w$]*)/g,
+    /export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g,
+  ];
+  for (const pattern of declarationPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      names.add(match[1]);
+    }
+  }
+  for (const match of text.matchAll(/export\s*\{([^}]+)\}(?:\s*from\s*['"]([^'"]+)['"])?/g)) {
+    const reexportTarget = match[2] ? resolveImport(file, match[2]) : null;
+    if (reexportTarget) {
+      for (const name of exportedNames(reexportTarget, seen)) {
+        names.add(name);
+      }
+      continue;
+    }
+    for (const part of match[1].split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const pieces = trimmed.split(/\s+as\s+/);
+      names.add((pieces[1] || pieces[0]).trim());
+    }
+  }
+  for (const match of text.matchAll(/export\s+\*\s+from\s*['"]([^'"]+)['"]/g)) {
+    const reexportTarget = resolveImport(file, match[1]);
+    if (!reexportTarget) {
+      continue;
+    }
+    for (const name of exportedNames(reexportTarget, seen)) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+const missing = [];
+for (const [file, text] of textByFile) {
+  for (const match of text.matchAll(/import\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+    const target = resolveImport(file, match[2]);
+    if (!target) {
+      continue;
+    }
+    const exports = exportedNames(target);
+    for (const part of match[1].split(',')) {
+      const trimmed = part.trim();
+      if (!trimmed) {
+        continue;
+      }
+      const imported = trimmed.split(/\s+as\s+/)[0].trim();
+      if (imported && !exports.has(imported)) {
+        missing.push(`${path.relative(root, file)} imports ${imported} from ${path.relative(root, target)}`);
+      }
+    }
+  }
+}
+
+if (missing.length > 0) {
+  console.error(missing.join('\n'));
+  process.exit(1);
+}
+console.log(`checked ${files.length} frontend modules`);
+"""
+
+    completed = subprocess.run(
+        ["node", "-e", script],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Frontend named import/export check failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert "frontend modules" in completed.stdout
+
+
+def test_subagent_workspace_module_loads_with_real_frontend_graph() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     module_path = (
         repo_root / "frontend" / "dist" / "js" / "components" / "subagentRail.js"

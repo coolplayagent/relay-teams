@@ -20,7 +20,7 @@ import {
     pickWorkspace,
     updateSession,
 } from '../core/api.js';
-import { state } from '../core/state.js';
+import { getRoleDisplayName, state } from '../core/state.js';
 import {
     closeNormalModeSubagentStream,
     detachActiveStreamForSessionSwitch,
@@ -58,6 +58,7 @@ import {
     isSubagentSessionListLoading,
     toggleSubagentSessionList,
 } from './subagentSessions.js';
+import { getLiveSubagentSummary } from './subagentRail.js';
 import {
     configureSessionSearch,
     openSessionSearch,
@@ -68,6 +69,7 @@ import {
     hasSidebarDataSnapshot,
     mergeOptimisticSessions,
     rememberSidebarDataSnapshot,
+    removeSidebarSession,
     updateOptimisticSessionTitle,
     upsertOptimisticSession,
 } from './sessionSidebarStore.js';
@@ -105,6 +107,7 @@ let pendingSessionVisibilityAnimation = null;
 let loadProjectsRequestId = 0;
 let loadProjectsController = null;
 let sessionsRefreshPromise = null;
+let suppressSessionsRefreshUntil = 0;
 let lastProjectsRenderSignature = '';
 let sidebarSelectionToken = 0;
 let sessionAnimationTokenSeed = 0;
@@ -114,6 +117,7 @@ const subagentListAnimationTokens = new WeakMap();
 let sidebarCollapsibleAnimationTokenSeed = 0;
 let subagentListVisualSyncToken = 0;
 const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
+const SESSION_DELETE_REFRESH_SUPPRESSION_MS = 20000;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
@@ -148,6 +152,32 @@ function isProjectsListInteracting() {
     ) {
         return true;
     }
+    return false;
+}
+
+function suppressSessionsRefreshAfterLocalDelete() {
+    suppressSessionsRefreshUntil = Date.now() + SESSION_DELETE_REFRESH_SUPPRESSION_MS;
+    loadProjectsRequestId += 1;
+    if (loadProjectsController) {
+        loadProjectsController.abort();
+        loadProjectsController = null;
+    }
+    if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+    }
+    pendingSessionsRefreshForce = false;
+    pendingSessionsRefreshTrailingForce = false;
+}
+
+function isSessionsRefreshSuppressed() {
+    if (suppressSessionsRefreshUntil <= 0) {
+        return false;
+    }
+    if (Date.now() <= suppressSessionsRefreshUntil) {
+        return true;
+    }
+    suppressSessionsRefreshUntil = 0;
     return false;
 }
 
@@ -244,6 +274,14 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function humanizeRoleId(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    if (!safeRoleId) {
+        return 'Agent';
+    }
+    return safeRoleId.replace(/_/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
 function formatWorkspaceProjectLabel(workspace) {
@@ -421,7 +459,18 @@ function renderSessionRunIndicator(session) {
 }
 
 function shouldRenderSubagentChildren(session) {
-    return String(session?.session_mode || '').trim() === 'normal';
+    const sessionId = String(session?.session_id || '').trim();
+    const liveSummary = getLiveSubagentSummary(sessionId);
+    return !!(
+        sessionId
+        && (
+            normalizeSubagentSessionCount(session?.subagent_session_count) > 0
+            || hasLoadedSessionSubagents(sessionId)
+            || isSubagentSessionListLoading(sessionId)
+            || liveSummary.isLoading
+            || normalizeSubagentSessionCount(liveSummary.count) > 0
+        )
+    );
 }
 
 function renderSubagentToggle(session) {
@@ -432,9 +481,7 @@ function renderSubagentToggle(session) {
     const children = getSessionSubagentSessions(sessionId);
     const loading = isSubagentSessionListLoading(sessionId);
     const loaded = hasLoadedSessionSubagents(sessionId);
-    const summaryCount = normalizeSubagentSessionCount(
-        session?.subagent_session_count,
-    );
+    const summaryCount = normalizeSubagentSessionCount(session?.subagent_session_count);
     const cachedCount = normalSubagentCountBySessionId.get(sessionId) || 0;
     const childCount = resolveStableSubagentCount({
         loaded,
@@ -518,7 +565,10 @@ function renderSubagentListContents(sessionId, listItemTabIndex = '0') {
         return `<div class="session-subagent-empty">${escapeHtml(label)}</div>`;
     }
     const activeSubagent = getActiveSubagentSession();
-    return children.map(child => {
+    const items = children.map(child => {
+        if (child.subagentKind === 'orchestration' || child.interactive === true) {
+            return renderLiveSubagentItem(safeSessionId, child, listItemTabIndex);
+        }
         const active = !!(
             activeSubagent
             && activeSubagent.sessionId === safeSessionId
@@ -563,7 +613,45 @@ function renderSubagentListContents(sessionId, listItemTabIndex = '0') {
                 </span>
             </div>
         `;
-    }).join('');
+    });
+    return items.join('');
+}
+
+function renderLiveSubagentItem(sessionId, agent, listItemTabIndex = '0') {
+    const instanceId = String(agent?.instanceId || agent?.instance_id || '').trim();
+    const roleId = String(agent?.roleId || agent?.role_id || '').trim();
+    if (!sessionId || !instanceId || !roleId) {
+        return '';
+    }
+    const status = String(agent?.status || agent?.runStatus || 'idle').trim() || 'idle';
+    const label = getRoleDisplayName(roleId, { fallback: humanizeRoleId(roleId) });
+    const active = !!(
+        state.activeView === 'subagent-agent'
+        && String(state.currentSessionId || '').trim() === sessionId
+        && String(state.activeAgentInstanceId || '').trim() === instanceId
+    );
+    return `
+        <div
+            class="session-item session-subagent-item session-live-subagent-item${active ? ' active' : ''}"
+            tabindex="${listItemTabIndex}"
+            role="button"
+            data-subagent-kind="orchestration"
+            data-session-id="${escapeHtml(sessionId)}"
+            data-subagent-instance-id="${escapeHtml(instanceId)}"
+            data-subagent-role-id="${escapeHtml(roleId)}"
+            data-subagent-run-id="${escapeHtml(agent?.runId || agent?.run_id || '')}"
+            data-subagent-title="${escapeHtml(label)}"
+        >
+            <span class="session-main">
+                <span class="session-id">
+                    <span class="session-label-text" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+                </span>
+            </span>
+            <span class="session-meta">
+                <span class="session-time">${escapeHtml(status)}</span>
+            </span>
+        </div>
+    `;
 }
 
 function syncSubagentSessionListVisualState({
@@ -1089,6 +1177,8 @@ function buildProjectsRenderSignature(groups, automationProjects) {
         activeSessionId: String(state.currentSessionId || '').trim(),
         activeFeatureId: getActiveFeatureId(),
         activeSubagentInstanceId: String(activeSubagent?.instanceId || '').trim(),
+        activeAgentInstanceId: String(state.activeAgentInstanceId || '').trim(),
+        activeView: String(state.activeView || '').trim(),
         openProjectMenuId,
         pendingAnimation: pendingSessionAnimation,
         pendingVisibilityAnimation: pendingSessionVisibilityAnimation,
@@ -1141,6 +1231,7 @@ function getSignatureSubagentChildren(sessionId) {
         runId: String(child?.runId || '').trim(),
         title: String(child?.title || '').trim(),
         status: String(child?.status || '').trim(),
+        type: String(child?.subagentKind || 'normal').trim(),
         updatedAt: String(child?.updatedAt || child?.createdAt || '').trim(),
     }));
 }
@@ -1701,41 +1792,46 @@ function measureCollapsedSessionListHeight(list) {
     return 0;
 }
 
+function dispatchSubagentItemSelection(button) {
+    const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+    const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
+    const roleId = String(button.getAttribute('data-subagent-role-id') || '').trim();
+    const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
+    const title = String(button.getAttribute('data-subagent-title') || '').trim();
+    const kind = String(button.getAttribute('data-subagent-kind') || 'session').trim();
+    if (!sessionId || !instanceId) return;
+    const eventName = kind === 'live' || kind === 'orchestration'
+        ? 'agent-teams-select-live-subagent'
+        : 'agent-teams-select-subagent-session';
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent(eventName, {
+            detail: {
+                sessionId,
+                subagent: {
+                    instanceId,
+                    roleId,
+                    runId,
+                    title,
+                },
+            },
+        }),
+    );
+}
+
 function bindSubagentSessionItems(root) {
     if (!root?.querySelectorAll) {
         return;
     }
     root.querySelectorAll('.session-subagent-item').forEach(button => {
-        const selectChild = () => {
-            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
-            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
-            const roleId = String(button.getAttribute('data-subagent-role-id') || '').trim();
-            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
-            const title = String(button.getAttribute('data-subagent-title') || '').trim();
-            if (!sessionId || !instanceId) return;
-            globalThis.document?.dispatchEvent?.(
-                new CustomEvent('agent-teams-select-subagent-session', {
-                    detail: {
-                        sessionId,
-                        subagent: {
-                            instanceId,
-                            roleId,
-                            runId,
-                            title,
-                        },
-                    },
-                }),
-            );
-        };
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
-            selectChild();
+            dispatchSubagentItemSelection(button);
         });
         button.addEventListener('keydown', event => {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                selectChild();
+                dispatchSubagentItemSelection(button);
             }
         });
     });
@@ -1785,7 +1881,7 @@ function bindSubagentDeleteButtons(root) {
             if (state.currentSessionId === sessionId && !state.activeSubagentSession && typeof selectSessionHandler === 'function') {
                 await selectSessionHandler(sessionId);
             }
-            await loadProjects();
+            await loadProjects({ forceRefresh: true });
         });
     });
 }
@@ -1891,36 +1987,15 @@ function bindProjectCard(card, group) {
     });
 
     card.querySelectorAll('.session-subagent-item').forEach(button => {
-        const selectChild = () => {
-            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
-            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
-            const roleId = String(button.getAttribute('data-subagent-role-id') || '').trim();
-            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
-            const title = String(button.getAttribute('data-subagent-title') || '').trim();
-            if (!sessionId || !instanceId) return;
-            document.dispatchEvent(
-                new CustomEvent('agent-teams-select-subagent-session', {
-                    detail: {
-                        sessionId,
-                        subagent: {
-                            instanceId,
-                            roleId,
-                            runId,
-                            title,
-                        },
-                    },
-                }),
-            );
-        };
         button.addEventListener('click', event => {
             event.preventDefault();
             event.stopPropagation();
-            selectChild();
+            dispatchSubagentItemSelection(button);
         });
         button.addEventListener('keydown', event => {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                selectChild();
+                dispatchSubagentItemSelection(button);
             }
         });
     });
@@ -2021,10 +2096,13 @@ function bindProjectCard(card, group) {
             animateSessionItem(sessionItem, 'removing');
             await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_ANIMATION_REMOVE_MS));
             await deleteSession(sessionId);
+            removeSidebarSession(sessionId);
+            suppressSessionsRefreshAfterLocalDelete();
+            renderProjectsFromSnapshot({ syncStreams: false });
             if (state.currentSessionId === sessionId) {
                 clearActiveSessionView();
             }
-            await loadProjects();
+            scheduleSessionsRefresh(900, { forceRefresh: true });
         });
     });
 }
@@ -2225,6 +2303,7 @@ function renderProjectCard(group) {
                                         role="button"
                                         data-session-id="${escapeHtml(session.session_id)}"
                                         data-workspace-id="${escapeHtml(session.workspace_id || group.workspace?.workspace_id || '')}"
+                                        data-session-mode="${escapeHtml(String(session.session_mode || ''))}"
                                     >
                                         <span class="session-main">
                                             ${renderSubagentToggle(session)}
@@ -2414,6 +2493,10 @@ function handleSessionTitlePreviewed(event) {
 
 export async function loadProjects({ forceRefresh = false } = {}) {
     if (!els.projectsList) return;
+    if (isSessionsRefreshSuppressed() && hasSidebarDataSnapshot()) {
+        renderProjectsFromSnapshot({ syncStreams: false });
+        return;
+    }
     ensureSessionSearchConfigured();
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
@@ -2459,6 +2542,18 @@ export async function loadProjects({ forceRefresh = false } = {}) {
         document.addEventListener('agent-teams-session-activated', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-session-selected', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-subagent-session-selected', syncSubagentSessionFromEvent);
+        document.addEventListener('agent-teams-live-subagents-changed', event => {
+            const sessionId = String(event?.detail?.sessionId || state.currentSessionId || '').trim();
+            if (sessionId) {
+                syncSubagentSessionListVisualState({
+                    ensureListSessionId: sessionId,
+                    refreshSessionId: sessionId,
+                });
+            }
+            if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+                scheduleSessionsRefresh(180, { forceRefresh: false });
+            }
+        });
         document.addEventListener('agent-teams-new-session-draft-created', event => {
             handleNewSessionDraftCreated(event);
         });
@@ -2492,6 +2587,10 @@ export async function loadProjects({ forceRefresh = false } = {}) {
         if (requestId !== loadProjectsRequestId) {
             return;
         }
+        if (isSessionsRefreshSuppressed() && forceRefresh !== true) {
+            renderProjectsFromSnapshot({ syncStreams: false });
+            return;
+        }
         rememberSidebarDataSnapshot({ workspaces, sessions, automationProjects });
         const snapshotData = getSidebarDataSnapshot();
         renderProjectSidebarData(
@@ -2520,6 +2619,9 @@ export async function loadProjects({ forceRefresh = false } = {}) {
 }
 
 export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } = {}) {
+    if (isSessionsRefreshSuppressed() && forceRefresh !== true) {
+        return;
+    }
     pendingSessionsRefreshForce = pendingSessionsRefreshForce || forceRefresh === true;
     if (refreshTimer) clearTimeout(refreshTimer);
     const safeDelayMs = Math.max(0, Number(delayMs) || 0);
@@ -2537,6 +2639,10 @@ export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } 
 
 async function refreshSessionsSnapshot({ forceRefresh = false } = {}) {
     if (!els.projectsList) return;
+    if (isSessionsRefreshSuppressed() && forceRefresh !== true) {
+        renderProjectsFromSnapshot({ syncStreams: false });
+        return;
+    }
     if (!hasSidebarDataSnapshot()) {
         await loadProjects({ forceRefresh });
         return;
@@ -2551,16 +2657,21 @@ async function refreshSessionsSnapshot({ forceRefresh = false } = {}) {
     sessionsRefreshPromise = (async () => {
         try {
             const sessions = await fetchSessions({ forceRefresh: forceRefresh === true });
+            if (isSessionsRefreshSuppressed() && forceRefresh !== true) {
+                renderProjectsFromSnapshot({ syncStreams: false });
+                return;
+            }
             const snapshotData = getSidebarDataSnapshot();
             rememberSidebarDataSnapshot({
                 workspaces: snapshotData.workspaces,
                 sessions,
                 automationProjects: snapshotData.automationProjects,
             });
+            const nextSnapshotData = getSidebarDataSnapshot();
             renderProjectSidebarData(
-                snapshotData.workspaces,
-                sessions,
-                snapshotData.automationProjects,
+                nextSnapshotData.workspaces,
+                nextSnapshotData.sessions,
+                nextSnapshotData.automationProjects,
             );
         } catch (error) {
             if (error?.name === 'AbortError') {

@@ -452,6 +452,38 @@ class AgentInstanceRepository(SharedSqliteRepository):
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    def list_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[AgentRuntimeRecord, ...]]:
+        if len(session_ids) == 0:
+            return {}
+        records_by_session: dict[str, list[AgentRuntimeRecord]] = {
+            session_id: [] for session_id in session_ids
+        }
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT *
+                    FROM agent_instances
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    record = self._to_record(row)
+                    records_by_session.setdefault(record.session_id, []).append(record)
+        return {
+            session_id: tuple(records)
+            for session_id, records in records_by_session.items()
+        }
+
     async def list_by_session_async(
         self, session_id: str
     ) -> tuple[AgentRuntimeRecord, ...]:
@@ -463,6 +495,40 @@ class AgentInstanceRepository(SharedSqliteRepository):
             )
         )
         return tuple(self._to_record(row) for row in rows)
+
+    async def list_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[AgentRuntimeRecord, ...]]:
+        if len(session_ids) == 0:
+            return {}
+        records_by_session: dict[str, list[AgentRuntimeRecord]] = {
+            session_id: [] for session_id in session_ids
+        }
+        async with self._async_lock_for_current_loop():
+            conn = await self._get_async_conn()
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT *
+                    FROM agent_instances
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                )
+                for row in rows:
+                    record = self._to_record(row)
+                    records_by_session.setdefault(record.session_id, []).append(record)
+        return {
+            session_id: tuple(records)
+            for session_id, records in records_by_session.items()
+        }
 
     def count_normal_mode_subagents_by_session_ids(
         self,

@@ -616,6 +616,7 @@ async function refreshRoundsAfterCompletion(sessionId, runId = '', options = {})
             if (typeof recoveryModule.hydrateSessionView === 'function' && state.currentSessionId === sessionId) {
                 await recoveryModule.hydrateSessionView(sessionId, {
                     includeRounds: true,
+                    forceRefresh: true,
                     quiet: true,
                     roundsScrollPolicy: 'completion-auto',
                 });
