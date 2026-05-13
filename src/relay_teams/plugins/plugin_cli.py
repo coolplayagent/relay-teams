@@ -158,9 +158,10 @@ def plugin_install(
         install_marketplace_provider = marketplace_provider
         if source.startswith("clawhub:"):
             install_source = source.removeprefix("clawhub:").strip()
+            if marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON:
+                install_marketplace_provider = PluginMarketplaceProviderKind.CLAWHUB
             if marketplace is None:
                 install_marketplace = Path("clawhub")
-                install_marketplace_provider = PluginMarketplaceProviderKind.CLAWHUB
         if install_marketplace is None:
             resolved_source_kind = _to_install_source_kind(
                 source_kind

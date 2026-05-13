@@ -616,6 +616,58 @@ def test_plugin_install_clawhub_shorthand_strips_prefix_with_explicit_marketplac
     }
 
 
+def test_plugin_install_clawhub_shorthand_infers_provider_with_marketplace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_install_marketplace_plugin(
+        self,
+        *,
+        name: str,
+        marketplace: Path,
+        scope: PluginScope,
+        version: str | None = None,
+        enabled: bool = True,
+        marketplace_provider: object = "local_json",
+        marketplace_source: str = "",
+        marketplace_ref: str = "",
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> SimpleNamespace:
+        _ = self
+        _ = (scope, version, enabled, marketplace_source, marketplace_ref)
+        _ = install_policy
+        captured["name"] = name
+        captured["marketplace"] = marketplace
+        captured["marketplace_provider"] = marketplace_provider
+        return SimpleNamespace(name="quality", scope=scope, enabled=enabled)
+
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(tmp_path / "app"))
+    monkeypatch.setattr(
+        "relay_teams.plugins.config_manager.PluginConfigManager.install_marketplace_plugin",
+        fake_install_marketplace_plugin,
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        [
+            "plugin",
+            "install",
+            "clawhub:quality",
+            "--marketplace",
+            "clawhub",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == {
+        "name": "quality",
+        "marketplace": Path("clawhub"),
+        "marketplace_provider": PluginMarketplaceProviderKind.CLAWHUB,
+    }
+
+
 def test_plugin_configure_reports_invalid_values(
     monkeypatch,
     tmp_path: Path,
