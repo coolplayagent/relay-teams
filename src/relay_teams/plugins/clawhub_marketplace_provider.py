@@ -127,7 +127,7 @@ class ClawHubMarketplaceProvider:
         if not normalized_query:
             return self.load_index(
                 source=source,
-                fetch_all=not include_versions,
+                fetch_all=True,
                 include_versions=include_versions,
             )
         raw = _get_json(

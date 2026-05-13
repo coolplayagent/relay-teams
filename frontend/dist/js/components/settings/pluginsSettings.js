@@ -22,7 +22,6 @@ const CLAUDE_MARKETPLACE_NAME = 'claude-plugins-official';
 const CLAUDE_MARKETPLACE_SOURCE = 'anthropics/claude-plugins-official';
 const CLAWHUB_MARKETPLACE_NAME = 'clawhub';
 const CLAWHUB_MARKETPLACE_SOURCE = 'https://clawhub.ai';
-const CLAWHUB_MARKETPLACE_PAGE_SIZE = 100;
 const MUTABLE_SCOPES = new Set(['user', 'project', 'project_local']);
 const COMPONENT_FIELDS = [
     ['skill_sources', 'Skills'],
@@ -436,7 +435,6 @@ function renderMarketplaceStatus() {
         <div class="plugin-validation-result">
             <strong>${escapeHtml(formatMessage('settings.plugins.marketplace_loaded', { count: visibleCount }))}</strong>
             <span>${escapeHtml(marketplaceBrowser.path)}</span>
-            ${marketplaceBrowser.next_cursor ? `<button class="secondary-btn section-action-btn" type="button" data-plugin-action="load-more-marketplace">${escapeHtml(t('settings.plugins.load_more_marketplace'))}</button>` : ''}
         </div>
     `;
 }
@@ -704,13 +702,6 @@ async function handlePluginAction(action, plugin, button) {
         }
         return;
     }
-    if (action === 'load-more-marketplace') {
-        const form = button.closest('form');
-        if (form instanceof HTMLFormElement) {
-            await loadMarketplaceForInstall(form, { append: true });
-        }
-        return;
-    }
     if (!plugin) {
         return;
     }
@@ -786,7 +777,7 @@ async function submitPluginInstall(form) {
     }
 }
 
-async function loadMarketplaceForInstall(form, { append = false } = {}) {
+async function loadMarketplaceForInstall(form) {
     syncInstallDraftFromForm(form);
     const claudeMarketplaceMode = installDraft.source_kind === 'marketplace' && installDraft.marketplace_provider === 'claude';
     const clawhubMarketplaceMode = installDraft.source_kind === 'marketplace' && installDraft.marketplace_provider === 'clawhub';
@@ -798,8 +789,6 @@ async function loadMarketplaceForInstall(form, { append = false } = {}) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_source_required') });
         return;
     }
-    const existingPlugins = append ? marketplaceBrowser.plugins : [];
-    const cursor = append ? marketplaceBrowser.next_cursor : '';
     marketplaceBrowser = {
         ...marketplaceBrowser,
         path: installDraft.marketplace,
@@ -815,17 +804,16 @@ async function loadMarketplaceForInstall(form, { append = false } = {}) {
                     marketplace_provider: installDraft.marketplace_provider,
                     marketplace_source: installDraft.marketplace_source,
                     marketplace_ref: installDraft.marketplace_ref,
-                    ...(clawhubMarketplaceMode ? clawhubMarketplaceRequestOptions(cursor) : {}),
+                    ...(clawhubMarketplaceMode ? clawhubMarketplaceRequestOptions() : {}),
                     refresh: true,
                 }
                 : {},
         );
         const plugins = Array.isArray(marketplace?.plugins) ? marketplace.plugins : [];
-        const mergedPlugins = append ? mergeMarketplacePlugins(existingPlugins, plugins) : plugins;
         marketplaceBrowser = {
             path: installDraft.marketplace,
-            plugins: mergedPlugins,
-            next_cursor: String(marketplace?.next_cursor || '').trim(),
+            plugins,
+            next_cursor: '',
             error: '',
             loading: false,
         };
@@ -840,8 +828,8 @@ async function loadMarketplaceForInstall(form, { append = false } = {}) {
     } catch (error) {
         marketplaceBrowser = {
             path: installDraft.marketplace,
-            plugins: existingPlugins,
-            next_cursor: cursor,
+            plugins: [],
+            next_cursor: '',
             error: String(error?.message || t('settings.plugins.marketplace_load_failed')),
             loading: false,
         };
@@ -1024,7 +1012,6 @@ function pluginMarketplaceRequestOptions(plugin) {
         marketplace_source: plugin?.source?.marketplace_source || '',
         marketplace_ref: plugin?.source?.marketplace_ref || '',
         ...(provider === 'clawhub' ? {
-            limit: CLAWHUB_MARKETPLACE_PAGE_SIZE,
             include_details: true,
             fetch_all: true,
             allow_missing_digest: true,
@@ -1213,30 +1200,11 @@ function visibleMarketplacePlugins() {
     return plugins.filter(isLowRiskClawHubMarketplacePlugin);
 }
 
-function clawhubMarketplaceRequestOptions(cursor = '') {
+function clawhubMarketplaceRequestOptions() {
     return {
-        limit: CLAWHUB_MARKETPLACE_PAGE_SIZE,
-        cursor,
         include_details: false,
-        fetch_all: false,
+        fetch_all: true,
     };
-}
-
-function mergeMarketplacePlugins(existingPlugins, nextPlugins) {
-    const byName = new Map();
-    for (const plugin of existingPlugins) {
-        const name = String(plugin?.name || '').trim();
-        if (name) {
-            byName.set(name, plugin);
-        }
-    }
-    for (const plugin of nextPlugins) {
-        const name = String(plugin?.name || '').trim();
-        if (name) {
-            byName.set(name, plugin);
-        }
-    }
-    return Array.from(byName.values());
 }
 
 function isLowRiskClawHubMarketplacePlugin(plugin) {

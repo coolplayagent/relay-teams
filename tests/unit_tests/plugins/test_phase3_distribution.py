@@ -1968,14 +1968,14 @@ def test_clawhub_marketplace_provider_decodes_family_cursor(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=4,
         cursor='{"code-plugin":"code-next","bundle-plugin":"bundle-next"}',
+        fetch_all=False,
     )
 
     assert [entry.name for entry in index.plugins] == ["code", "bundle"]
@@ -1998,14 +1998,14 @@ def test_clawhub_marketplace_provider_skips_uncursored_families_on_followup(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=4,
         cursor='{"code-plugin":"code-next"}',
+        fetch_all=False,
     )
 
     assert [entry.name for entry in index.plugins] == ["code"]
@@ -2030,12 +2030,11 @@ def test_clawhub_marketplace_provider_limits_single_page_globally(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=1,
         fetch_all=False,
     )
@@ -2047,7 +2046,7 @@ def test_clawhub_marketplace_provider_limits_single_page_globally(
     ]
 
 
-def test_clawhub_marketplace_service_allows_max_size_single_page(
+def test_clawhub_marketplace_provider_allows_max_size_single_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requested_urls: list[str] = []
@@ -2062,12 +2061,11 @@ def test_clawhub_marketplace_service_allows_max_size_single_page(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=100,
         fetch_all=False,
     )
@@ -2105,14 +2103,13 @@ def test_clawhub_marketplace_provider_loads_one_detailed_page(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=1,
-        include_details=True,
+        include_versions=True,
         fetch_all=False,
     )
 
@@ -2136,12 +2133,11 @@ def test_clawhub_marketplace_provider_visits_pending_family_before_cursor(
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
 
-    index = PluginMarketplaceService().load_provider_index(
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
         source=PluginMarketplaceSource(
             provider=PluginMarketplaceProviderKind.CLAWHUB,
             value="https://clawhub.test",
         ),
-        app_config_dir=Path("unused"),
         limit=1,
         cursor='{"code-plugin":"code-next","bundle-plugin":""}',
         fetch_all=False,
@@ -2209,6 +2205,49 @@ def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
         "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1",
         "https://clawhub.test/api/v1/packages/first/versions/1.0.0",
         "https://clawhub.test/api/v1/packages/second/versions/1.1.0",
+    ]
+
+
+def test_clawhub_marketplace_service_ignores_pagination_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1":
+            return {
+                "items": [{"name": "first", "version": "1.0.0"}],
+                "nextCursor": "next",
+            }
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=next"
+        ):
+            return {"items": [{"name": "second", "version": "1.1.0"}]}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1":
+            return {"items": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+        limit=1,
+        cursor='{"code-plugin":"stale"}',
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["first", "second"]
+    assert index.next_cursor == ""
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1",
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=next",
+        "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1",
     ]
 
 

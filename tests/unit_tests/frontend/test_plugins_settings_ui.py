@@ -47,7 +47,7 @@ def test_plugins_settings_clawhub_marketplace_loads_full_safe_browsing() -> None
         repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
     ).read_text(encoding="utf-8")
 
-    assert "const CLAWHUB_MARKETPLACE_PAGE_SIZE = 100;" in source
+    assert "CLAWHUB_MARKETPLACE_PAGE_SIZE" not in source
     assert "function visibleMarketplacePlugins()" in source
     assert "function isLowRiskClawHubMarketplacePlugin(plugin)" in source
     assert "function isLowRiskClawHubVersion(version)" not in source
@@ -55,9 +55,9 @@ def test_plugins_settings_clawhub_marketplace_loads_full_safe_browsing() -> None
     assert "function marketplaceCompatibilityDetail(plugin)" not in source
     assert "inspectPluginMarketplace(" not in source
     assert 'data-plugin-action="inspect-marketplace-plugin"' not in source
-    assert 'data-plugin-action="load-more-marketplace"' in source
+    assert 'data-plugin-action="load-more-marketplace"' not in source
     assert "include_details: false" in source
-    assert "fetch_all: false" in source
+    assert "fetch_all: true" in source
     assert "return compatibility === 'direct';" in source
     assert (
         "return versions.filter(version => !versionUnsupportedReason(version));"
@@ -228,7 +228,6 @@ console.log(JSON.stringify({
             "marketplace_provider": "clawhub",
             "marketplace_source": "https://clawhub.ai",
             "marketplace_ref": "",
-            "limit": 100,
             "include_details": True,
             "fetch_all": True,
             "allow_missing_digest": True,
@@ -743,10 +742,8 @@ console.log(JSON.stringify({
             "marketplace_provider": "clawhub",
             "marketplace_source": "https://clawhub.ai",
             "marketplace_ref": "",
-            "limit": 100,
-            "cursor": "",
             "include_details": False,
-            "fetch_all": False,
+            "fetch_all": True,
             "refresh": True,
         },
     }

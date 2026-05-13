@@ -508,16 +508,15 @@ page. Version entries may include `warnings` and `unsupported_reason`;
 unsupported versions remain visible for browsing but cannot be installed. The
 frontend uses this endpoint instead of reading marketplace files directly.
 
-For ClawHub, `limit` is capped at `100`, `cursor` requests the next package page,
-`fetch_all` defaults to `true` for the previous all-page lightweight index
-behavior, and `fetch_all: false` returns a single page even when `limit` is
-`100`. `include_details: true` hydrates each returned package with release
-metadata needed for installability checks; pair it with `fetch_all: true` when a
-caller needs complete detail-aware lookup across all pages. Lightweight ClawHub browse requests
-do not apply install policy blocking because digest and scan metadata may
-require package detail inspection; detail-aware browse, search, inspect,
-install, and update requests enforce policy. Existing callers that omit those
-fields keep the previous all-page lightweight index behavior.
+For ClawHub, marketplace loading always fetches every package page and returns
+an empty `next_cursor`; `cursor` and `fetch_all: false` are ignored for this
+provider. `limit` is capped at `100` and is used as the upstream per-request
+page size while the backend drains all pages. `include_details: true` hydrates
+each returned package with release metadata needed for installability checks.
+Lightweight ClawHub browse requests do not apply install policy blocking
+because digest and scan metadata may require package detail inspection;
+detail-aware browse, search, inspect, install, and update requests enforce
+policy.
 
 ### `POST /system/configs/plugins/marketplace:search`
 

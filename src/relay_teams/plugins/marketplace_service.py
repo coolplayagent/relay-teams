@@ -62,8 +62,8 @@ class PluginMarketplaceService:
             index = ClawHubMarketplaceProvider().load_index(
                 source=source,
                 limit=limit,
-                cursor=cursor,
-                fetch_all=fetch_all and not cursor,
+                cursor="",
+                fetch_all=True,
                 include_versions=include_details,
             )
             if not include_details:
