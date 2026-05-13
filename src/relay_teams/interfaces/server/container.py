@@ -1493,12 +1493,14 @@ class ServerContainer:
         await self.automation_delivery_worker.start()
         await self.automation_bound_session_queue_worker.start()
         await self.github_trigger_action_worker.start()
+        await self.board_todo_service.start()
         await self.automation_scheduler_service.start()
         return None
 
     async def stop(self) -> None:
         await self.app_env_file_watcher.stop()
         await self.automation_scheduler_service.stop()
+        await self.board_todo_service.stop()
         await self.github_trigger_action_worker.stop()
         await self.automation_bound_session_queue_worker.stop()
         await self.automation_delivery_worker.stop()

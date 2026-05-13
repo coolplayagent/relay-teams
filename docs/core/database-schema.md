@@ -1152,6 +1152,13 @@ CREATE TABLE IF NOT EXISTS board_todo_items (
     html_url TEXT,
     session_id TEXT,
     run_id TEXT,
+    current_attempt_id TEXT,
+    active_attempt_id TEXT,
+    execution_workspace_id TEXT,
+    execution_policy TEXT,
+    runtime_target_kind TEXT,
+    runtime_target_id TEXT,
+    queue_ticket_id TEXT,
     linked_pr_number INTEGER,
     linked_pr_url TEXT,
     archived_at TEXT,
@@ -1207,8 +1214,111 @@ CREATE TABLE IF NOT EXISTS board_todo_source_state (
     last_diagnostics_json TEXT NOT NULL DEFAULT '[]'
 );
 
+CREATE TABLE IF NOT EXISTS board_todo_handoff_prompts (
+    prompt_ref TEXT PRIMARY KEY,
+    todo_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    template_kind TEXT NOT NULL,
+    template_source TEXT NOT NULL,
+    final_prompt_snapshot TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS board_todo_attempts (
+    attempt_id TEXT PRIMARY KEY,
+    todo_id TEXT NOT NULL,
+    attempt_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    board_workspace_id TEXT,
+    initiated_from_workspace_id TEXT,
+    source_workspace_id TEXT,
+    execution_workspace_id TEXT,
+    execution_policy TEXT,
+    runtime_target_kind TEXT,
+    runtime_target_id TEXT,
+    queue_ticket_id TEXT,
+    handoff_initiator TEXT NOT NULL DEFAULT 'human',
+    start_policy TEXT NOT NULL DEFAULT 'human_required',
+    yolo INTEGER NOT NULL DEFAULT 1,
+    thinking_json TEXT NOT NULL DEFAULT '{}',
+    session_id TEXT,
+    run_id TEXT,
+    prompt_ref TEXT,
+    summary TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS board_todo_execution_queue (
+    queue_ticket_id TEXT PRIMARY KEY,
+    todo_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    prompt_ref TEXT NOT NULL,
+    queue_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    board_workspace_id TEXT NOT NULL,
+    source_workspace_id TEXT NOT NULL,
+    initiated_from_workspace_id TEXT,
+    execution_workspace_id TEXT,
+    previous_run_id TEXT,
+    execution_policy TEXT NOT NULL,
+    runtime_target_kind TEXT,
+    runtime_target_id TEXT,
+    session_mode TEXT,
+    normal_root_role_id TEXT,
+    orchestration_preset_id TEXT,
+    yolo INTEGER NOT NULL DEFAULT 1,
+    thinking_json TEXT NOT NULL DEFAULT '{}',
+    claim_token TEXT,
+    claim_expires_at TEXT,
+    claimed_by TEXT,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    diagnostics_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS board_todo_handoff_templates (
+    template_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    template_kind TEXT NOT NULL,
+    source_id TEXT,
+    template TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS board_todo_diagnostics (
+    diagnostic_id TEXT PRIMARY KEY,
+    todo_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL,
+    attempt_id TEXT,
+    queue_ticket_id TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_board_todo_sources_workspace
     ON board_todo_sources(workspace_id, kind, enabled);
+CREATE INDEX IF NOT EXISTS idx_board_todo_attempts_todo
+    ON board_todo_attempts(todo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_todo_handoff_prompts_todo
+    ON board_todo_handoff_prompts(todo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_todo_execution_queue_pending
+    ON board_todo_execution_queue(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_board_todo_execution_queue_todo
+    ON board_todo_execution_queue(todo_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_board_todo_handoff_templates_lookup
+    ON board_todo_handoff_templates(
+        workspace_id,
+        scope,
+        template_kind,
+        source_id
+    );
 ```
 
 Purpose: workspace-scoped TODO board state owned by Agent Teams. External
@@ -1223,6 +1333,8 @@ Notes:
   the external source update time, such as GitHub issue `updated_at`, for
   business-time sorting.
 - `session_id/run_id` bind an item to the dedicated session/run created when processing starts.
+- `current_attempt_id` points at the latest `board_todo_attempts` row for the item. `active_attempt_id` points at the currently active execution attempt, or is null when no execution/review attempt is active.
+- `execution_workspace_id`, `execution_policy`, `runtime_target_kind/id`, and `queue_ticket_id` are current execution context references. `execution_policy` is `fork_git_worktree` or `current_workspace`; runtime targets are local normal roles or orchestration presets in this phase.
 - Session deletion clears stale board references; active non-`done` items bound to that session return to `todo`.
 - Users can explicitly move `review` items to `done`; this updates `status`, `last_status_reason`, and revision metadata without adding new columns.
 - `linked_pr_number/linked_pr_url` move imported issue items to `done` when the linked PR merges.
@@ -1232,6 +1344,11 @@ Notes:
 - `todo_sources_bootstrapped` records that GitHub source auto-initialization has already been attempted for the board workspace. When true, sync and settings reads no longer recreate sources from git remote detection; users manage the list explicitly.
 - GitHub sources persist `display_name`, `enabled`, and `repository_full_name`; sync uses this persisted configuration instead of re-reading git remotes after initialization. Multiple GitHub sources are supported and each owns independent state.
 - `board_todo_source_state` stores per-source cursors and diagnostics. Disabled sources do not participate in board sync and retain their existing state.
+- `board_todo_handoff_prompts` stores the exact reviewed final prompt used by a start or request-changes handoff. The snapshot is retained even after the run prompt enters session history so later queue/recovery/audit flows do not depend on session messages.
+- `board_todo_attempts` stores attempt history for `start` and `request_changes`. `attempt_type` is `start` or `request_changes`; `status` is `pending`, `active`, `succeeded`, `failed`, or `cancelled`. Attempt rows record board/view/source/execution workspace ids, runtime target, queue ticket id, `handoff_initiator=human`, `start_policy=human_required`, and selected YOLO/thinking options.
+- `board_todo_execution_queue` stores durable start/request-changes tickets when concurrency is full and `queue_if_full=true`. Pending tickets hold a `prompt_ref` so the worker can later create a fork/session/run without reconstructing the prompt. Claimed tickets use a short lease and expired claims are eligible for reclaim. `previous_run_id` preserves the review run context if a queued request-changes handoff fails before creating a replacement run.
+- `board_todo_handoff_templates` stores workspace defaults and source overrides for `start` and `request_changes`; precedence is source override, then workspace override, then built-in template.
+- `board_todo_diagnostics` stores minimal user-visible facts for template rendering, fork, runtime target, queue stale, and run creation failures.
 - `board_todo_workspace_state.github_issue_sync_cursor` and `repository_full_name` are retained for existing data; per-source state is authoritative for new sync.
 - TODO board API responses may include `run_status`, `run_phase`, `run_recoverable`, and `run_last_error` on `BoardTodoItem`, but those are derived from `run_runtime` at read time and are not `board_todo_items` columns.
 - TODO board API responses may include non-persisted `source_groups` for grouped/mixed frontend rendering. `source_groups` is derived from `board_todo_sources` and current item source fields and is not a database table.

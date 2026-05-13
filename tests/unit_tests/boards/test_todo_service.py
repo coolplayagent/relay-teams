@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import subprocess
 from collections.abc import Awaitable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -19,10 +20,26 @@ from relay_teams.boards import (
 )
 from relay_teams.boards.todo_models import (
     BoardTodoArchiveRequest,
+    BoardTodoAttempt,
+    BoardTodoAttemptStatus,
+    BoardTodoAttemptType,
+    BoardTodoExecutionPolicy,
+    BoardTodoExecutionQueueTicket,
+    BoardTodoHandoffPrompt,
+    BoardTodoHandoffTemplate,
+    BoardTodoHandoffTemplateInput,
+    BoardTodoHandoffTemplateKind,
     BoardTodoItem,
     BoardTodoLinkPullRequestRequest,
     BoardTodoMarkDoneRequest,
+    BoardTodoPreviewRequestChangesRequest,
     BoardTodoPreviewStartRequest,
+    BoardTodoConcurrencySnapshot,
+    BoardTodoQueueKind,
+    BoardTodoQueueStatus,
+    BoardTodoRuntimeTargetKind,
+    BoardTodoRuntimeTargetOption,
+    BoardTodoScope,
     BoardTodoSource,
     BoardTodoSourceCreateRequest,
     BoardTodoSourceKind,
@@ -31,6 +48,7 @@ from relay_teams.boards.todo_models import (
     BoardTodoSourceUpdateRequest,
     BoardTodoSyncStatus,
     BoardTodoStartRequest,
+    BoardTodoTemplateScope,
 )
 from relay_teams.media import content_parts_to_text
 from relay_teams.sessions.runs.enums import InjectionSource
@@ -59,11 +77,32 @@ from relay_teams.boards.todo_service import (
     WorkspaceServiceLike,
     _first_github_remote_url,
     _format_github_sync_error,
+    _default_execution_policy,
+    _execution_workspace_preview,
     _json_datetime_or_none,
     _json_int,
     _linked_pull_request_from_events,
     _parse_github_pull_request_url,
     _parse_github_remote,
+    _queue_ticket_can_be_claimed,
+    _queue_ticket_sorts_after,
+    _resolve_runtime_target,
+    _role_id_from_runtime_target,
+    _start_session_topology,
+    _target_role_id_for_run,
+    _validate_runtime_target_matches_session,
+)
+from relay_teams.boards.todo_repository import (
+    _diagnostics_from_json,
+    _execution_policy_or_none,
+    _queue_ticket_is_pending_or_expired,
+    _row_to_attempt_or_none,
+    _row_to_handoff_prompt_or_none,
+    _row_to_handoff_template_or_none,
+    _row_to_queue_ticket_or_none,
+    _runtime_target_kind_or_none,
+    _session_mode_or_none,
+    _thinking_from_json,
 )
 
 
@@ -101,9 +140,52 @@ def test_board_todo_source_validation_rejects_mismatched_provider() -> None:
         )
 
 
+def test_board_todo_handoff_template_validation_rejects_bad_scope() -> None:
+    with pytest.raises(ValidationError, match="require source_id"):
+        BoardTodoHandoffTemplate(
+            template_id="btemplate_source_missing",
+            workspace_id="repo",
+            scope=BoardTodoTemplateScope.SOURCE,
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Start",
+        )
+    with pytest.raises(ValidationError, match="cannot include source_id"):
+        BoardTodoHandoffTemplate(
+            template_id="btemplate_workspace_with_source",
+            workspace_id="repo",
+            scope=BoardTodoTemplateScope.WORKSPACE,
+            source_id="bsrc_github",
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Start",
+        )
+
+
 class _GetWorkspaceStub(Protocol):
     def __call__(
         self, self_obj: object, workspace_id: str
+    ) -> Awaitable[WorkspaceRecord]:
+        raise NotImplementedError
+
+
+class _ForkWorkspaceStub(Protocol):
+    def __call__(
+        self,
+        self_obj: object,
+        source_workspace_id: str,
+        *,
+        name: str,
+        start_ref: str | None = None,
+    ) -> Awaitable[WorkspaceRecord]:
+        raise NotImplementedError
+
+
+class _DeleteWorkspaceStub(Protocol):
+    def __call__(
+        self,
+        self_obj: object,
+        *,
+        workspace_id: str,
+        remove_directory: bool = False,
     ) -> Awaitable[WorkspaceRecord]:
         raise NotImplementedError
 
@@ -203,6 +285,18 @@ class _GetSessionStub(Protocol):
         raise NotImplementedError
 
 
+class _DeleteSessionStub(Protocol):
+    def __call__(
+        self,
+        self_obj: object,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> Awaitable[None]:
+        raise NotImplementedError
+
+
 class _CreateRunStub(Protocol):
     def __call__(
         self,
@@ -215,6 +309,11 @@ class _CreateRunStub(Protocol):
 
 
 class _EnsureRunStartedStub(Protocol):
+    def __call__(self, self_obj: object, run_id: str) -> Awaitable[None]:
+        raise NotImplementedError
+
+
+class _StopRunStub(Protocol):
     def __call__(self, self_obj: object, run_id: str) -> Awaitable[None]:
         raise NotImplementedError
 
@@ -781,6 +880,1066 @@ async def test_preview_start_returns_prompt_and_start_requires_final_prompt(
     )
     assert started.status == BoardTodoStatus.IN_PROGRESS
     assert run_service.prompts == ["Edited prompt"]
+    attempts = await service.repository_for_tests.list_attempts_for_todo_async(
+        item.todo_id
+    )
+    assert len(attempts) == 1
+    assert attempts[0].attempt_type == BoardTodoAttemptType.START
+    assert attempts[0].status == BoardTodoAttemptStatus.ACTIVE
+    assert started.current_attempt_id == attempts[0].attempt_id
+    assert started.active_attempt_id == attempts[0].attempt_id
+    assert attempts[0].prompt_ref is not None
+    prompt = await service.repository_for_tests.require_handoff_prompt_async(
+        attempts[0].prompt_ref
+    )
+    assert prompt.template_kind == "start"
+    assert prompt.final_prompt_snapshot == "Edited prompt"
+
+
+@pytest.mark.asyncio
+async def test_start_defaults_to_fork_execution_workspace(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=_RunService(run_runtime),
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Fork this issue",
+    )
+
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Edited prompt"),
+    )
+
+    assert started.execution_policy == BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+    assert started.execution_workspace_id is not None
+    assert started.execution_workspace_id != "repo"
+    assert session_service.workspace_ids == [started.execution_workspace_id]
+
+
+@pytest.mark.asyncio
+async def test_start_derives_session_topology_from_runtime_target(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Preset target",
+    )
+
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Edited prompt",
+            runtime_target_id="preset:review",
+        ),
+    )
+
+    assert started.runtime_target_id == "preset:review"
+    assert session_service.session_modes == [SessionMode.ORCHESTRATION]
+    assert session_service.orchestration_preset_ids == ["review"]
+    assert run_service.intents[0].session_mode == SessionMode.ORCHESTRATION
+
+
+@pytest.mark.asyncio
+async def test_start_queues_when_runtime_target_slot_is_full_and_drains(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+
+    assert queued.status == BoardTodoStatus.IN_PROGRESS
+    assert queued.queue_ticket_id is not None
+    assert run_service.count == 0
+    ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+    assert ticket.status == BoardTodoQueueStatus.PENDING
+
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+                "queue_ticket_id": None,
+            }
+        )
+    )
+    drained = await service.drain_queue_once()
+    updated = await service.repository_for_tests.require_async(item.todo_id)
+    completed_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert run_service.count == 1
+    assert updated.run_id == "run-1"
+    assert updated.queue_ticket_id is None
+    assert completed_ticket.status == BoardTodoQueueStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_pending_queue_ticket_reserves_runtime_target_capacity(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    first = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="First queued issue",
+    )
+    second = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Second queued issue",
+    )
+    first_queued = await service.start_todo(
+        todo_id=first.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert first_queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    second_queued = await service.start_todo(
+        todo_id=second.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Second prompt"),
+    )
+
+    assert second_queued.queue_ticket_id is not None
+    assert second_queued.run_id is None
+    assert run_service.count == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_active_run_without_runtime_target_reserves_session_target(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active_session = await session_service.create_session_async(
+        workspace_id="repo",
+        session_mode=SessionMode.NORMAL,
+        normal_root_role_id="main_agent",
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Legacy active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "session_id": active_session.session_id,
+                "run_id": "run-active",
+                "active_attempt_id": "attempt-active",
+                "runtime_target_id": None,
+                "runtime_target_kind": None,
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id=active_session.session_id,
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued behind legacy issue",
+    )
+
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process queued"),
+    )
+
+    assert queued.status == BoardTodoStatus.IN_PROGRESS
+    assert queued.queue_ticket_id is not None
+    assert queued.run_id is None
+    assert run_service.count == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_lets_oldest_pending_ticket_consume_free_slot(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    first = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="First queued issue",
+    )
+    second = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Second queued issue",
+    )
+    first_queued = await service.start_todo(
+        todo_id=first.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="First prompt"),
+    )
+    second_queued = await service.start_todo(
+        todo_id=second.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Second prompt"),
+    )
+    assert first_queued.queue_ticket_id is not None
+    assert second_queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    first_after = await service.repository_for_tests.require_async(first.todo_id)
+    second_after = await service.repository_for_tests.require_async(second.todo_id)
+
+    assert drained == 1
+    assert run_service.count == 1
+    assert first_after.run_id == "run-1"
+    assert first_after.queue_ticket_id is None
+    assert second_after.run_id is None
+    assert second_after.queue_ticket_id == second_queued.queue_ticket_id
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_releases_claim_when_capacity_fills_after_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process queued"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    async def fake_concurrency_snapshot(
+        *,
+        source_workspace_id: str,
+        runtime_target_id: str,
+        excluded_queue_ticket_id: str | None = None,
+        excluded_todo_id: str | None = None,
+        include_claimable_queue_tickets: bool = True,
+        capacity_before_ticket: BoardTodoExecutionQueueTicket | None = None,
+    ) -> BoardTodoConcurrencySnapshot:
+        del (
+            source_workspace_id,
+            runtime_target_id,
+            excluded_queue_ticket_id,
+            excluded_todo_id,
+            include_claimable_queue_tickets,
+        )
+        runtime_target_active = 1 if capacity_before_ticket is not None else 0
+        return BoardTodoConcurrencySnapshot(
+            source_workspace_active=runtime_target_active,
+            source_workspace_limit=2,
+            runtime_target_active=runtime_target_active,
+            runtime_target_limit=1,
+        )
+
+    monkeypatch.setattr(service, "_concurrency_snapshot", fake_concurrency_snapshot)
+
+    drained = await service.drain_queue_once()
+
+    released_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+    assert drained == 0
+    assert released_ticket.status == BoardTodoQueueStatus.PENDING
+    assert released_ticket.claim_token is None
+    assert released_ticket.claim_expires_at is None
+    assert run_service.count == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_skips_blocked_prefix_for_later_free_target(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    first_main = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="First main target",
+    )
+    second_main = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Second main target",
+    )
+    reviewer = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Reviewer target",
+    )
+    first_main_queued = await service.start_todo(
+        todo_id=first_main.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="First main prompt"),
+    )
+    second_main_queued = await service.start_todo(
+        todo_id=second_main.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Second main prompt"),
+    )
+    reviewer_queued = await service.start_todo(
+        todo_id=reviewer.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Reviewer prompt",
+            runtime_target_id="role:reviewer",
+        ),
+    )
+    assert first_main_queued.queue_ticket_id is not None
+    assert second_main_queued.queue_ticket_id is not None
+    assert reviewer_queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    first_main_after = await service.repository_for_tests.require_async(
+        first_main.todo_id
+    )
+    second_main_after = await service.repository_for_tests.require_async(
+        second_main.todo_id
+    )
+    reviewer_after = await service.repository_for_tests.require_async(reviewer.todo_id)
+
+    assert drained == 2
+    assert run_service.count == 2
+    assert first_main_after.run_id == "run-1"
+    assert second_main_after.run_id is None
+    assert second_main_after.queue_ticket_id == second_main_queued.queue_ticket_id
+    assert reviewer_after.run_id == "run-2"
+    assert reviewer_after.queue_ticket_id is None
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_reclaims_expired_claimed_ticket(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+    await service.repository_for_tests.update_queue_ticket_async(
+        ticket.model_copy(
+            update={
+                "status": BoardTodoQueueStatus.CLAIMED,
+                "claim_expires_at": _now() - timedelta(minutes=1),
+                "claimed_by": "previous-worker",
+            }
+        )
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    updated = await service.repository_for_tests.require_async(item.todo_id)
+    completed_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert run_service.count == 1
+    assert updated.run_id == "run-1"
+    assert updated.queue_ticket_id is None
+    assert completed_ticket.status == BoardTodoQueueStatus.COMPLETED
+    assert completed_ticket.claimed_by == "board-todo-queue-worker"
+
+
+@pytest.mark.asyncio
+async def test_queue_ticket_claim_is_atomic_for_live_claim(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(service, workspace_id="repo", title="Queued")
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+    now = _now()
+
+    first_claim = await service.repository_for_tests.claim_queue_ticket_async(
+        ticket=ticket,
+        claim_token="first",
+        claim_expires_at=now + timedelta(minutes=1),
+        claimed_by="first-worker",
+        now=now,
+    )
+    second_claim = await service.repository_for_tests.claim_queue_ticket_async(
+        ticket=ticket,
+        claim_token="second",
+        claim_expires_at=now + timedelta(minutes=1),
+        claimed_by="second-worker",
+        now=now,
+    )
+
+    assert first_claim is not None
+    assert second_claim is None
+    stored = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+    assert stored.claim_token == "first"
+
+
+@pytest.mark.asyncio
+async def test_drain_queue_cancels_ticket_that_no_longer_owns_item(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.archive_todo(
+        todo_id=queued.todo_id,
+        payload=BoardTodoArchiveRequest(reason="No longer needed"),
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    archived = await service.repository_for_tests.require_async(item.todo_id)
+    cancelled_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert run_service.count == 0
+    assert archived.status == BoardTodoStatus.ARCHIVED
+    assert cancelled_ticket.status == BoardTodoQueueStatus.CANCELLED
+    assert cancelled_ticket.diagnostics == (
+        "Queued handoff ticket no longer owns TODO item",
+    )
+
+
+@pytest.mark.asyncio
+async def test_queued_start_stale_after_session_creation_cleans_prepared_resources(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _BlockingSessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drain_task = asyncio.create_task(service.drain_queue_once())
+    await session_service.entered.wait()
+    await service.archive_todo(
+        todo_id=queued.todo_id,
+        payload=BoardTodoArchiveRequest(reason="No longer needed"),
+    )
+    session_service.release.set()
+    drained = await drain_task
+    archived = await service.repository_for_tests.require_async(item.todo_id)
+    cancelled_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert run_service.count == 0
+    assert archived.status == BoardTodoStatus.ARCHIVED
+    assert cancelled_ticket.status == BoardTodoQueueStatus.CANCELLED
+    assert cancelled_ticket.diagnostics == (
+        "Queued handoff ticket no longer owns TODO item before run start",
+    )
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+    assert len(workspace_service.deleted_workspace_ids) == 1
+    assert workspace_service.deleted_workspace_ids[0] != "repo"
+
+
+@pytest.mark.asyncio
+async def test_queued_start_stale_after_run_creation_cleans_prepared_resources(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _BlockingEnsureRunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drain_task = asyncio.create_task(service.drain_queue_once())
+    await run_service.entered.wait()
+    await service.archive_todo(
+        todo_id=queued.todo_id,
+        payload=BoardTodoArchiveRequest(reason="No longer needed"),
+    )
+    run_service.release.set()
+    drained = await drain_task
+    archived = await service.repository_for_tests.require_async(item.todo_id)
+    cancelled_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert archived.status == BoardTodoStatus.ARCHIVED
+    assert run_runtime.records["run-1"].status == RunRuntimeStatus.STOPPED
+    assert cancelled_ticket.status == BoardTodoQueueStatus.CANCELLED
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+    assert len(workspace_service.deleted_workspace_ids) == 1
+    assert workspace_service.deleted_workspace_ids[0] != "repo"
+
+
+@pytest.mark.asyncio
+async def test_queued_start_cancellation_cleans_prepared_resources(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _ControlledRunService(run_runtime, block_on_count=1)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drain_task = asyncio.create_task(service.drain_queue_once())
+    await run_service.entered.wait()
+    drain_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await drain_task
+    restored = await service.repository_for_tests.require_async(item.todo_id)
+    failed_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert restored.status == BoardTodoStatus.TODO
+    assert failed_ticket.status == BoardTodoQueueStatus.FAILED
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+    assert len(workspace_service.deleted_workspace_ids) == 1
+    assert workspace_service.deleted_workspace_ids[0] != "repo"
+    run_service.release.set()
+
+
+@pytest.mark.asyncio
+async def test_workspace_handoff_template_is_used_for_preview(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Template issue",
+    )
+    await service.upsert_workspace_handoff_template(
+        BoardTodoHandoffTemplateInput(
+            workspace_id="repo",
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Handle {{ todo.title }} in {{ todo.repository }}",
+        )
+    )
+
+    preview = await service.preview_start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewStartRequest(view_workspace_id="repo"),
+    )
+
+    assert preview.template_source == "workspace:repo"
+    assert preview.prompt == "Handle Template issue in owner/repo"
 
 
 @pytest.mark.asyncio
@@ -827,7 +1986,7 @@ async def test_start_request_passes_normal_runtime_options(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_start_request_without_mode_uses_session_default(
+async def test_start_request_without_mode_uses_matching_runtime_target_default(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
@@ -853,7 +2012,8 @@ async def test_start_request_without_mode_uses_session_default(
         payload=BoardTodoStartRequest(final_prompt="Edited prompt"),
     )
 
-    assert session_service.session_modes == [None]
+    assert session_service.session_modes == [SessionMode.NORMAL]
+    assert session_service.normal_root_role_ids == ["main_agent"]
     assert run_service.intents[0].session_mode == SessionMode.NORMAL
 
 
@@ -928,9 +2088,16 @@ async def test_request_changes_preserves_orchestration_session_mode(
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
 
+    preview = await service.preview_request_changes_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewRequestChangesRequest(feedback="Please revise"),
+    )
     await service.request_changes(
         todo_id=item.todo_id,
-        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=preview.prompt,
+        ),
     )
 
     assert [intent.session_mode for intent in run_service.intents] == [
@@ -980,6 +2147,7 @@ async def test_start_from_fork_workspace_uses_view_workspace(
         todo_id=item.todo_id,
         payload=BoardTodoStartRequest(
             view_workspace_id="fork",
+            execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
             final_prompt="Use the fork workspace",
         ),
     )
@@ -1455,6 +2623,15 @@ async def test_full_sync_restores_github_issue_archived_by_closed_sync(
             source_key="github:owner/repo:issue:7",
             repository_full_name="owner/repo",
             issue_number=7,
+            session_id="session-old",
+            run_id="run-old",
+            current_attempt_id="attempt-old",
+            active_attempt_id="attempt-old",
+            execution_workspace_id="workspace-old",
+            execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+            runtime_target_kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            runtime_target_id="role:reviewer",
+            queue_ticket_id="queue-old",
             archived_at=_now(),
             last_status_reason="GitHub issue no longer open",
             created_at=_now(),
@@ -1468,6 +2645,15 @@ async def test_full_sync_restores_github_issue_archived_by_closed_sync(
     assert board.items[0].status == BoardTodoStatus.TODO
     assert board.items[0].archived_at is None
     assert board.items[0].last_status_reason == "GitHub issue reopened"
+    assert board.items[0].session_id is None
+    assert board.items[0].run_id is None
+    assert board.items[0].current_attempt_id is None
+    assert board.items[0].active_attempt_id is None
+    assert board.items[0].execution_workspace_id is None
+    assert board.items[0].execution_policy is None
+    assert board.items[0].runtime_target_kind is None
+    assert board.items[0].runtime_target_id is None
+    assert board.items[0].queue_ticket_id is None
 
 
 @pytest.mark.asyncio
@@ -1861,6 +3047,21 @@ async def test_archive_delta_removes_from_active_and_restore_returns_to_todo(
     item = await _create_test_todo(
         service, workspace_id="repo", title="Restore", body=""
     )
+    item = await service.repository_for_tests.update_async(
+        item.model_copy(
+            update={
+                "session_id": "session-old",
+                "run_id": "run-old",
+                "current_attempt_id": "attempt-old",
+                "active_attempt_id": "attempt-old",
+                "execution_workspace_id": "workspace-old",
+                "execution_policy": BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                "runtime_target_kind": BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+                "runtime_target_id": "role:reviewer",
+                "queue_ticket_id": "queue-old",
+            }
+        )
+    )
     board = await service.list_board(workspace_id="repo")
     archived = await service.archive_todo(
         todo_id=item.todo_id,
@@ -1886,6 +3087,15 @@ async def test_archive_delta_removes_from_active_and_restore_returns_to_todo(
     ]
     assert restored.status == BoardTodoStatus.TODO
     assert restored.archived_at is None
+    assert restored.session_id is None
+    assert restored.run_id is None
+    assert restored.current_attempt_id is None
+    assert restored.active_attempt_id is None
+    assert restored.execution_workspace_id is None
+    assert restored.execution_policy is None
+    assert restored.runtime_target_kind is None
+    assert restored.runtime_target_id is None
+    assert restored.queue_ticket_id is None
 
 
 @pytest.mark.asyncio
@@ -1976,9 +3186,16 @@ async def test_start_request_changes_and_run_completion_flow(tmp_path: Path) -> 
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
     reviewed = (await service.list_board(workspace_id="repo")).items[0]
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
     changed = await service.request_changes(
         todo_id=item.todo_id,
-        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=f"{request_prompt}\n\nEdited by reviewer.",
+        ),
     )
 
     assert started.status == BoardTodoStatus.IN_PROGRESS
@@ -1986,7 +3203,519 @@ async def test_start_request_changes_and_run_completion_flow(tmp_path: Path) -> 
     assert reviewed.status == BoardTodoStatus.REVIEW
     assert changed.status == BoardTodoStatus.IN_PROGRESS
     assert changed.run_id != started.run_id
-    assert run_service.prompts[-1].endswith("Please revise")
+    assert run_service.prompts[-1].endswith("Edited by reviewer.")
+    attempts = await service.repository_for_tests.list_attempts_for_todo_async(
+        item.todo_id
+    )
+    attempts_by_type = {attempt.attempt_type: attempt for attempt in attempts}
+    request_attempt = attempts_by_type[BoardTodoAttemptType.REQUEST_CHANGES]
+    assert BoardTodoAttemptType.START in attempts_by_type
+    assert changed.current_attempt_id == request_attempt.attempt_id
+    assert changed.active_attempt_id == request_attempt.attempt_id
+    assert request_attempt.prompt_ref is not None
+    prompt = await service.repository_for_tests.require_handoff_prompt_async(
+        request_attempt.prompt_ref
+    )
+    assert prompt.template_kind == "request_changes"
+    assert prompt.final_prompt_snapshot.endswith("Edited by reviewer.")
+
+
+@pytest.mark.asyncio
+async def test_queued_request_changes_uses_selected_runtime_target(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:reviewer",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process"),
+    )
+    assert started.run_id is not None
+    session_service.sessions[
+        started.session_id or ""
+    ].normal_root_role_id = "main_agent"
+    run_runtime.set_status(started.run_id, RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
+
+    queued = await service.request_changes(
+        todo_id=item.todo_id,
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=request_prompt,
+            runtime_target_id="role:reviewer",
+        ),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+
+    assert drained == 1
+    assert run_service.intents[-1].target_role_id == "reviewer"
+    assert session_service.sessions[started.session_id or ""].normal_root_role_id == (
+        "main_agent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_queued_request_changes_failure_preserves_previous_run(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _ControlledRunService(run_runtime, fail_on_count=2)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process"),
+    )
+    assert started.run_id == "run-1"
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
+    queued = await service.request_changes(
+        todo_id=item.todo_id,
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=request_prompt,
+        ),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    restored = await service.repository_for_tests.require_async(item.todo_id)
+    failed_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert restored.status == BoardTodoStatus.REVIEW
+    assert restored.run_id == started.run_id
+    assert failed_ticket.status == BoardTodoQueueStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_queued_start_failure_cleans_fork_and_clears_handoff_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _ControlledRunService(run_runtime, fail_on_count=1)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    active = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Active issue",
+    )
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "active_attempt_id": "attempt-active",
+                "run_id": "run-active",
+                "runtime_target_id": "role:main_agent",
+            }
+        )
+    )
+    run_runtime.records["run-active"] = RunRuntimeRecord(
+        run_id="run-active",
+        session_id="session-active",
+        status=RunRuntimeStatus.RUNNING,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Queued issue",
+    )
+    queued = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Queued prompt"),
+    )
+    assert queued.queue_ticket_id is not None
+    await service.repository_for_tests.update_async(
+        active.model_copy(
+            update={
+                "status": BoardTodoStatus.DONE,
+                "active_attempt_id": None,
+                "run_id": None,
+            }
+        )
+    )
+
+    drained = await service.drain_queue_once()
+    restored = await service.repository_for_tests.require_async(item.todo_id)
+    failed_ticket = await service.repository_for_tests.require_queue_ticket_async(
+        queued.queue_ticket_id
+    )
+
+    assert drained == 1
+    assert restored.status == BoardTodoStatus.TODO
+    assert restored.current_attempt_id is None
+    assert restored.active_attempt_id is None
+    assert restored.execution_workspace_id is None
+    assert restored.execution_policy is None
+    assert restored.runtime_target_kind is None
+    assert restored.runtime_target_id is None
+    assert failed_ticket.status == BoardTodoQueueStatus.FAILED
+    assert len(workspace_service.deleted_workspace_ids) == 1
+    assert workspace_service.deleted_workspace_ids[0] != "repo"
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+
+
+@pytest.mark.asyncio
+async def test_request_changes_preview_and_empty_prompt_do_not_create_handoff(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service, workspace_id="repo", title="Implement", body="Body"
+    )
+
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process"),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+
+    preview = await service.preview_request_changes_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewRequestChangesRequest(
+            feedback="Please revise",
+            view_workspace_id="repo",
+        ),
+    )
+    attempts_after_preview = (
+        await service.repository_for_tests.list_attempts_for_todo_async(item.todo_id)
+    )
+
+    assert "Please revise" in preview.prompt
+    assert preview.session_id == started.session_id
+    assert preview.run_id == started.run_id
+    assert run_service.count == 1
+    assert len(attempts_after_preview) == 1
+    with pytest.raises(ValueError, match="final_prompt is required"):
+        await service.request_changes(
+            todo_id=item.todo_id,
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise",
+                final_prompt=" ",
+            ),
+        )
+
+    attempts_after_reject = (
+        await service.repository_for_tests.list_attempts_for_todo_async(item.todo_id)
+    )
+    board = await service.list_board(workspace_id="repo")
+    assert run_service.count == 1
+    assert attempts_after_reject == attempts_after_preview
+    assert board.items[0].status == BoardTodoStatus.REVIEW
+
+
+@pytest.mark.asyncio
+async def test_request_changes_derives_missing_runtime_target_from_session(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Legacy review item",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Process",
+            runtime_target_id="preset:default",
+        ),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    reviewed = await service.repository_for_tests.require_async(item.todo_id)
+    await service.repository_for_tests.update_async(
+        reviewed.model_copy(
+            update={
+                "runtime_target_kind": None,
+                "runtime_target_id": None,
+            }
+        )
+    )
+
+    preview = await service.preview_request_changes_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewRequestChangesRequest(feedback="Revise"),
+    )
+    changed = await service.request_changes(
+        todo_id=item.todo_id,
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Revise",
+            final_prompt=preview.prompt,
+        ),
+    )
+
+    assert preview.runtime_target_id == "preset:default"
+    assert (
+        changed.runtime_target_kind == BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET
+    )
+    assert changed.runtime_target_id == "preset:default"
+    assert run_service.intents[-1].session_mode == SessionMode.ORCHESTRATION
+
+
+@pytest.mark.asyncio
+async def test_request_changes_rejects_runtime_target_outside_session_mode(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process"),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
+
+    with pytest.raises(ValueError, match="normal sessions require a role"):
+        await service.request_changes(
+            todo_id=item.todo_id,
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise",
+                final_prompt=request_prompt,
+                runtime_target_id="preset:default",
+            ),
+        )
+
+    board = await service.list_board(workspace_id="repo")
+    assert board.items[0].status == BoardTodoStatus.REVIEW
+    assert board.items[0].run_id == started.run_id
+
+
+@pytest.mark.asyncio
+async def test_request_changes_rejects_mismatched_orchestration_preset(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Process",
+            runtime_target_id="preset:plan",
+        ),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
+
+    with pytest.raises(ValueError, match="orchestration preset"):
+        await service.request_changes(
+            todo_id=item.todo_id,
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise",
+                final_prompt=request_prompt,
+                runtime_target_id="preset:default",
+            ),
+        )
+
+    board = await service.list_board(workspace_id="repo")
+    assert board.items[0].status == BoardTodoStatus.REVIEW
+    assert board.items[0].run_id == started.run_id
+
+
+@pytest.mark.asyncio
+async def test_request_changes_preview_includes_existing_runtime_target_option(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+    started = await service.start_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoStartRequest(
+            final_prompt="Process",
+            runtime_target_id="role:reviewer",
+        ),
+    )
+    run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
+    await service.reconcile_workspace_async(workspace_id="repo")
+
+    preview = await service.preview_request_changes_todo(
+        todo_id=item.todo_id,
+        payload=BoardTodoPreviewRequestChangesRequest(
+            feedback="Please revise",
+        ),
+    )
+
+    assert preview.runtime_target_id == "role:reviewer"
+    assert "role:reviewer" in {
+        option.target_id for option in preview.runtime_target_options
+    }
 
 
 @pytest.mark.asyncio
@@ -2016,9 +3745,16 @@ async def test_board_started_runs_inherit_general_shell_policy(
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
     changed = await service.request_changes(
         todo_id=item.todo_id,
-        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=request_prompt,
+        ),
     )
 
     assert changed.run_id == "run-2"
@@ -2149,13 +3885,107 @@ async def test_start_reserves_todo_before_creating_session_or_run(
 
 
 @pytest.mark.asyncio
+async def test_start_rechecks_capacity_after_reservation(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    run_runtime = _RunRuntimeRepository()
+    run_service = _RunService(run_runtime)
+    session_service = _BlockingSessionService()
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    first = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="First",
+    )
+    second = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Second",
+    )
+
+    first_start = asyncio.create_task(
+        service.start_todo(
+            todo_id=first.todo_id,
+            payload=BoardTodoStartRequest(final_prompt="Process first"),
+        )
+    )
+    await session_service.entered.wait()
+    queued = await service.start_todo(
+        todo_id=second.todo_id,
+        payload=BoardTodoStartRequest(final_prompt="Process second"),
+    )
+
+    assert queued.status == BoardTodoStatus.IN_PROGRESS
+    assert queued.queue_ticket_id is not None
+    assert queued.run_id is None
+    assert run_service.count == 0
+
+    session_service.release.set()
+    started = await first_start
+
+    assert started.run_id == "run-1"
+    assert run_service.count == 1
+
+
+@pytest.mark.asyncio
+async def test_start_failure_restore_does_not_clear_newer_reservation(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    service = _service(tmp_path, workspaces=(workspace,))
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Reserved again",
+    )
+    current = await service.repository_for_tests.update_async(
+        item.model_copy(
+            update={
+                "status": BoardTodoStatus.IN_PROGRESS,
+                "current_attempt_id": "attempt-new",
+                "active_attempt_id": "attempt-new",
+                "execution_workspace_id": "repo",
+                "execution_policy": BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+                "runtime_target_kind": BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+                "runtime_target_id": "role:main_agent",
+                "last_status_reason": "Preparing newer start",
+            }
+        )
+    )
+
+    await service._restore_failed_start_reservation(
+        current,
+        current_attempt_id="attempt-old",
+    )
+
+    restored = await service.repository_for_tests.require_async(item.todo_id)
+    assert restored.status == BoardTodoStatus.IN_PROGRESS
+    assert restored.current_attempt_id == "attempt-new"
+    assert restored.active_attempt_id == "attempt-new"
+    assert restored.execution_workspace_id == "repo"
+    assert restored.runtime_target_id == "role:main_agent"
+    assert restored.last_status_reason == "Preparing newer start"
+
+
+@pytest.mark.asyncio
 async def test_start_restores_todo_when_run_creation_fails(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _SessionService()
     run_runtime = _RunRuntimeRepository()
     run_service = _FailingRunService()
     service = _service(
         tmp_path,
         workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
         run_service=run_service,
         run_runtime=run_runtime,
     )
@@ -2175,6 +4005,461 @@ async def test_start_restores_todo_when_run_creation_fails(tmp_path: Path) -> No
     assert board.items[0].session_id is None
     assert board.items[0].run_id is None
     assert board.items[0].last_status_reason == "Start failed"
+    assert len(workspace_service.deleted_workspace_ids) == 1
+    assert workspace_service.deleted_workspace_ids[0] != "repo"
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+
+
+@pytest.mark.asyncio
+async def test_start_stops_run_and_deletes_session_when_run_start_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "repo", "owner/repo")
+    workspace_service = _WorkspaceService((workspace,))
+    session_service = _SessionService()
+    run_runtime = _RunRuntimeRepository()
+    run_service = _EnsureFailingRunService(run_runtime)
+    service = _service(
+        tmp_path,
+        workspaces=(workspace,),
+        workspace_service=workspace_service,
+        session_service=session_service,
+        run_service=run_service,
+        run_runtime=run_runtime,
+    )
+    item = await _create_test_todo(
+        service,
+        workspace_id="repo",
+        title="Implement",
+        body="Body",
+    )
+
+    with pytest.raises(RuntimeError, match="run start failed"):
+        await service.start_todo(
+            todo_id=item.todo_id,
+            payload=BoardTodoStartRequest(final_prompt="Process"),
+        )
+
+    board = await service.list_board(workspace_id="repo")
+    assert board.items[0].status == BoardTodoStatus.TODO
+    assert run_runtime.records["run-1"].status == RunRuntimeStatus.STOPPED
+    assert session_service.deleted_session_ids == ["session-1"]
+    assert "session-1" not in session_service.sessions
+    assert len(workspace_service.deleted_workspace_ids) == 1
+
+
+@pytest.mark.asyncio
+async def test_repository_handoff_records_cover_edge_paths(tmp_path: Path) -> None:
+    repository = BoardTodoRepository(tmp_path / "board-todos.sqlite")
+    now = datetime.now(tz=UTC)
+    todo = await repository.create_async(
+        BoardTodoItem(
+            todo_id="todo_repo_handoff",
+            workspace_id="repo",
+            status=BoardTodoStatus.TODO,
+            title="Repo handoff",
+            source_provider=BoardTodoSourceProvider.GITHUB,
+            source_type=BoardTodoSourceType.GITHUB_ISSUE,
+            source_key="github:owner/repo:issue:77",
+            repository_full_name="owner/repo",
+            issue_number=77,
+            html_url="https://github.com/owner/repo/issues/77",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    attempt = await repository.create_attempt_async(
+        BoardTodoAttempt(
+            attempt_id="battempt_repo_handoff",
+            todo_id=todo.todo_id,
+            attempt_type=BoardTodoAttemptType.START,
+            board_workspace_id=todo.workspace_id,
+            source_workspace_id=todo.workspace_id,
+            execution_workspace_id=todo.workspace_id,
+            execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+            runtime_target_kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            runtime_target_id="role:main_agent",
+            created_at=now,
+        )
+    )
+    updated_attempt = await repository.update_attempt_async(
+        attempt.model_copy(update={"summary": "Started"})
+    )
+    assert updated_attempt.summary == "Started"
+    assert await repository.require_attempt_async(attempt.attempt_id) == updated_attempt
+    with pytest.raises(KeyError):
+        await repository.require_attempt_async("battempt_missing")
+    with pytest.raises(KeyError):
+        await repository.update_attempt_async(
+            attempt.model_copy(update={"attempt_id": "battempt_missing"})
+        )
+
+    prompt = await repository.create_handoff_prompt_async(
+        BoardTodoHandoffPrompt(
+            prompt_ref="bprompt_repo_handoff",
+            todo_id=todo.todo_id,
+            attempt_id=attempt.attempt_id,
+            template_kind=BoardTodoHandoffTemplateKind.START.value,
+            template_source="built_in:start",
+            final_prompt_snapshot="Please process this TODO.",
+            created_at=now,
+        )
+    )
+    stored_prompt = await repository.require_handoff_prompt_async(prompt.prompt_ref)
+    assert stored_prompt.final_prompt_snapshot == "Please process this TODO."
+    with pytest.raises(KeyError):
+        await repository.require_handoff_prompt_async("bprompt_missing")
+
+    ticket = await repository.create_queue_ticket_async(
+        BoardTodoExecutionQueueTicket(
+            queue_ticket_id="bqueue_repo_handoff",
+            todo_id=todo.todo_id,
+            attempt_id=attempt.attempt_id,
+            prompt_ref=prompt.prompt_ref,
+            queue_kind=BoardTodoQueueKind.START,
+            board_workspace_id=todo.workspace_id,
+            source_workspace_id=todo.workspace_id,
+            execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+            runtime_target_kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+            runtime_target_id="role:main_agent",
+            session_mode=SessionMode.NORMAL,
+            normal_root_role_id="main_agent",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    pending = await repository.list_pending_queue_tickets_async(limit=10)
+    assert tuple(entry.queue_ticket_id for entry in pending) == (
+        ticket.queue_ticket_id,
+    )
+    assert (
+        await repository.renew_queue_ticket_claim_async(
+            ticket=ticket,
+            claim_expires_at=now + timedelta(minutes=5),
+        )
+        is None
+    )
+    claimed = await repository.claim_queue_ticket_async(
+        ticket=ticket,
+        claim_token="claim-1",
+        claim_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+        claimed_by="worker-1",
+        now=datetime.now(tz=UTC),
+    )
+    assert claimed is not None
+    assert claimed.claim_token == "claim-1"
+    assert (
+        await repository.claim_queue_ticket_async(
+            ticket=claimed,
+            claim_token="claim-2",
+            claim_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+            claimed_by="worker-2",
+            now=datetime.now(tz=UTC),
+        )
+        is None
+    )
+    renewed = await repository.renew_queue_ticket_claim_async(
+        ticket=claimed,
+        claim_expires_at=datetime.now(tz=UTC) + timedelta(minutes=10),
+    )
+    assert renewed is not None
+    assert renewed.claim_token == "claim-1"
+    assert (
+        await repository.renew_queue_ticket_claim_async(
+            ticket=claimed.model_copy(update={"claim_token": "stale-claim"}),
+            claim_expires_at=datetime.now(tz=UTC) + timedelta(minutes=15),
+        )
+        is None
+    )
+    failed_claim = await repository.update_claimed_queue_ticket_async(
+        renewed.model_copy(update={"status": BoardTodoQueueStatus.FAILED})
+    )
+    assert failed_claim is not None
+    assert failed_claim.status == BoardTodoQueueStatus.FAILED
+    assert (
+        await repository.update_claimed_queue_ticket_async(
+            renewed.model_copy(
+                update={
+                    "status": BoardTodoQueueStatus.FAILED,
+                    "claim_token": "stale-claim",
+                }
+            )
+        )
+        is None
+    )
+    release_ticket = await repository.create_queue_ticket_async(
+        ticket.model_copy(
+            update={
+                "queue_ticket_id": "bqueue_repo_release",
+                "status": BoardTodoQueueStatus.PENDING,
+                "claim_token": None,
+                "claim_expires_at": None,
+                "claimed_by": None,
+            }
+        )
+    )
+    release_claimed = await repository.claim_queue_ticket_async(
+        ticket=release_ticket,
+        claim_token="claim-release",
+        claim_expires_at=datetime.now(tz=UTC) + timedelta(minutes=5),
+        claimed_by="worker-release",
+        now=datetime.now(tz=UTC),
+    )
+    assert release_claimed is not None
+    released = await repository.release_queue_ticket_claim_async(release_claimed)
+    assert released is not None
+    assert released.status == BoardTodoQueueStatus.PENDING
+    assert released.claim_token is None
+    assert released.claim_expires_at is None
+    assert await repository.release_queue_ticket_claim_async(released) is None
+    assert (
+        await repository.release_queue_ticket_claim_async(
+            release_claimed.model_copy(update={"claim_token": "stale-release"})
+        )
+        is None
+    )
+    with pytest.raises(KeyError):
+        await repository.require_queue_ticket_async("bqueue_missing")
+    with pytest.raises(KeyError):
+        await repository.update_queue_ticket_async(
+            ticket.model_copy(update={"queue_ticket_id": "bqueue_missing"})
+        )
+
+    expired_ticket = await repository.create_queue_ticket_async(
+        ticket.model_copy(
+            update={
+                "queue_ticket_id": "bqueue_repo_expired",
+                "status": BoardTodoQueueStatus.CLAIMED,
+                "claim_token": "claim-expired",
+                "claim_expires_at": datetime.now(tz=UTC) - timedelta(minutes=1),
+                "claimed_by": "worker-expired",
+            }
+        )
+    )
+    pending_after_claim = await repository.list_pending_queue_tickets_async(limit=10)
+    assert {entry.queue_ticket_id for entry in pending_after_claim} == {
+        release_ticket.queue_ticket_id,
+        expired_ticket.queue_ticket_id,
+    }
+
+    workspace_template = await repository.upsert_handoff_template_async(
+        BoardTodoHandoffTemplate(
+            template_id="btemplate_workspace_repo",
+            workspace_id=todo.workspace_id,
+            scope=BoardTodoTemplateScope.WORKSPACE,
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Workspace template",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    source_template = await repository.upsert_handoff_template_async(
+        BoardTodoHandoffTemplate(
+            template_id="btemplate_source_repo",
+            workspace_id=todo.workspace_id,
+            scope=BoardTodoTemplateScope.SOURCE,
+            source_id="bsrc_repo",
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            template="Source template",
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    assert (
+        await repository.get_handoff_template_async(
+            workspace_id=todo.workspace_id,
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            source_id="bsrc_repo",
+        )
+    ) == source_template
+    assert (
+        await repository.get_handoff_template_async(
+            workspace_id=todo.workspace_id,
+            template_kind=BoardTodoHandoffTemplateKind.START,
+            source_id="bsrc_missing",
+        )
+    ) == workspace_template
+    assert (
+        await repository.require_handoff_template_async(source_template.template_id)
+        == source_template
+    )
+    assert (
+        len(
+            await repository.list_handoff_templates_async(
+                workspace_id=todo.workspace_id
+            )
+        )
+        == 2
+    )
+    await repository.delete_handoff_template_async(
+        template_id=source_template.template_id
+    )
+    with pytest.raises(KeyError):
+        await repository.require_handoff_template_async(source_template.template_id)
+    with pytest.raises(KeyError):
+        await repository.delete_handoff_template_async(template_id="btemplate_missing")
+
+
+def test_board_todo_repository_handoff_row_helpers_tolerate_dirty_data() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+
+    def select_row(sql: str) -> sqlite3.Row:
+        selected = conn.execute(sql).fetchone()
+        if selected is None:
+            raise AssertionError("expected one sqlite row")
+        return cast(sqlite3.Row, selected)
+
+    assert (
+        _row_to_attempt_or_none(
+            select_row(
+                """
+                SELECT
+                    '' AS attempt_id,
+                    'todo_repo' AS todo_id,
+                    'start' AS attempt_type,
+                    'pending' AS status,
+                    NULL AS board_workspace_id,
+                    NULL AS initiated_from_workspace_id,
+                    NULL AS source_workspace_id,
+                    NULL AS execution_workspace_id,
+                    NULL AS execution_policy,
+                    NULL AS runtime_target_kind,
+                    NULL AS runtime_target_id,
+                    NULL AS queue_ticket_id,
+                    NULL AS handoff_initiator,
+                    NULL AS start_policy,
+                    NULL AS yolo,
+                    'not-json' AS thinking_json,
+                    NULL AS session_id,
+                    NULL AS run_id,
+                    NULL AS prompt_ref,
+                    NULL AS summary,
+                    NULL AS error,
+                    NULL AS created_at,
+                    NULL AS started_at,
+                    NULL AS finished_at
+                """
+            )
+        )
+        is None
+    )
+    assert (
+        _row_to_handoff_prompt_or_none(
+            select_row(
+                """
+                SELECT
+                    '' AS prompt_ref,
+                    'todo_repo' AS todo_id,
+                    'battempt_repo' AS attempt_id,
+                    'start' AS template_kind,
+                    'built_in:start' AS template_source,
+                    'Prompt' AS final_prompt_snapshot,
+                    NULL AS created_at
+                """
+            )
+        )
+        is None
+    )
+    assert _row_to_queue_ticket_or_none(None) is None
+    assert (
+        _row_to_queue_ticket_or_none(
+            select_row(
+                """
+                SELECT
+                    '' AS queue_ticket_id,
+                    'todo_repo' AS todo_id,
+                    'battempt_repo' AS attempt_id,
+                    'bprompt_repo' AS prompt_ref,
+                    'start' AS queue_kind,
+                    'pending' AS status,
+                    'repo' AS board_workspace_id,
+                    'repo' AS source_workspace_id,
+                    NULL AS initiated_from_workspace_id,
+                    NULL AS execution_workspace_id,
+                    NULL AS previous_run_id,
+                    'current_workspace' AS execution_policy,
+                    NULL AS runtime_target_kind,
+                    NULL AS runtime_target_id,
+                    NULL AS session_mode,
+                    NULL AS normal_root_role_id,
+                    NULL AS orchestration_preset_id,
+                    NULL AS yolo,
+                    '[]' AS thinking_json,
+                    NULL AS claim_token,
+                    NULL AS claim_expires_at,
+                    NULL AS claimed_by,
+                    NULL AS failure_count,
+                    'not-json' AS diagnostics_json,
+                    NULL AS created_at,
+                    NULL AS updated_at
+                """
+            )
+        )
+        is None
+    )
+    assert (
+        _row_to_handoff_template_or_none(
+            select_row(
+                """
+                SELECT
+                    '' AS template_id,
+                    'repo' AS workspace_id,
+                    'workspace' AS scope,
+                    'start' AS template_kind,
+                    NULL AS source_id,
+                    'Template' AS template,
+                    NULL AS created_at,
+                    NULL AS updated_at
+                """
+            )
+        )
+        is None
+    )
+
+    assert isinstance(_thinking_from_json("not-json"), RunThinkingConfig)
+    assert isinstance(_thinking_from_json("[]"), RunThinkingConfig)
+    assert isinstance(_thinking_from_json('{"effort":"invalid"}'), RunThinkingConfig)
+    assert _diagnostics_from_json("not-json") == ()
+    assert _diagnostics_from_json('"not-a-list"') == ()
+    assert _diagnostics_from_json('["kept", "", 1]') == ("kept", "1")
+    assert _execution_policy_or_none(None) is None
+    assert _execution_policy_or_none("invalid") is None
+    assert (
+        _execution_policy_or_none("current_workspace")
+        == BoardTodoExecutionPolicy.CURRENT_WORKSPACE
+    )
+    assert _runtime_target_kind_or_none(None) is None
+    assert _runtime_target_kind_or_none("invalid") is None
+    assert (
+        _runtime_target_kind_or_none("local_role")
+        == BoardTodoRuntimeTargetKind.LOCAL_ROLE
+    )
+    assert _session_mode_or_none(None) is None
+    assert _session_mode_or_none("invalid") is None
+    assert _session_mode_or_none("normal") == SessionMode.NORMAL
+
+    ticket = BoardTodoExecutionQueueTicket(
+        queue_ticket_id="bqueue_helper",
+        todo_id="todo_helper",
+        attempt_id="battempt_helper",
+        prompt_ref="bprompt_helper",
+        queue_kind=BoardTodoQueueKind.START,
+        board_workspace_id="repo",
+        source_workspace_id="repo",
+        status=BoardTodoQueueStatus.COMPLETED,
+    )
+    assert (
+        _queue_ticket_is_pending_or_expired(ticket, now=datetime.now(tz=UTC)) is False
+    )
+    assert (
+        _queue_ticket_is_pending_or_expired(
+            ticket.model_copy(update={"status": BoardTodoQueueStatus.CLAIMED}),
+            now=datetime.now(tz=UTC),
+        )
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -2235,15 +4520,25 @@ async def test_request_changes_rejects_non_review_items_without_creating_another
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
     changed = await service.request_changes(
         todo_id=item.todo_id,
-        payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+        payload=BoardTodoStatusUpdateRequest(
+            feedback="Please revise",
+            final_prompt=request_prompt,
+        ),
     )
 
     with pytest.raises(ValueError, match="only review board items can request changes"):
         await service.request_changes(
             todo_id=item.todo_id,
-            payload=BoardTodoStatusUpdateRequest(feedback="Please revise again"),
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise again",
+                final_prompt="Revise again",
+            ),
         )
 
     board = await service.list_board(workspace_id="repo")
@@ -2278,11 +4573,18 @@ async def test_request_changes_reserves_review_before_creating_follow_up_run(
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
 
     first_change = asyncio.create_task(
         service.request_changes(
             todo_id=item.todo_id,
-            payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise",
+                final_prompt=request_prompt,
+            ),
         )
     )
     await run_service.entered.wait()
@@ -2290,7 +4592,10 @@ async def test_request_changes_reserves_review_before_creating_follow_up_run(
     with pytest.raises(ValueError, match="only review board items can request changes"):
         await service.request_changes(
             todo_id=item.todo_id,
-            payload=BoardTodoStatusUpdateRequest(feedback="Please revise again"),
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise again",
+                final_prompt="Revise again",
+            ),
         )
 
     board = await service.list_board(workspace_id="repo")
@@ -2298,7 +4603,7 @@ async def test_request_changes_reserves_review_before_creating_follow_up_run(
     assert board.items[0].status == BoardTodoStatus.IN_PROGRESS
     assert board.items[0].session_id == started.session_id
     assert board.items[0].run_id is None
-    assert board.items[0].last_status_reason == "Requesting changes"
+    assert board.items[0].last_status_reason == "Preparing board todo request changes"
 
     run_service.release.set()
     changed = await first_change
@@ -2307,7 +4612,7 @@ async def test_request_changes_reserves_review_before_creating_follow_up_run(
     assert changed.status == BoardTodoStatus.IN_PROGRESS
     assert changed.session_id == started.session_id
     assert changed.run_id == "run-2"
-    assert run_service.prompts[-1].endswith("Please revise")
+    assert run_service.prompts[-1] == request_prompt
 
 
 @pytest.mark.asyncio
@@ -2335,19 +4640,36 @@ async def test_request_changes_restores_review_when_run_creation_fails(
     )
     run_runtime.set_status(started.run_id or "", RunRuntimeStatus.COMPLETED)
     await service.reconcile_workspace_async(workspace_id="repo")
+    request_prompt = await _preview_request_changes_prompt(
+        service,
+        todo_id=item.todo_id,
+    )
 
     with pytest.raises(RuntimeError, match="run creation failed"):
         await service.request_changes(
             todo_id=item.todo_id,
-            payload=BoardTodoStatusUpdateRequest(feedback="Please revise"),
+            payload=BoardTodoStatusUpdateRequest(
+                feedback="Please revise",
+                final_prompt=request_prompt,
+            ),
         )
 
     board = await service.list_board(workspace_id="repo")
+    attempts = await service.repository_for_tests.list_attempts_for_todo_async(
+        item.todo_id
+    )
     assert run_service.count == 2
     assert board.items[0].status == BoardTodoStatus.REVIEW
     assert board.items[0].session_id == started.session_id
     assert board.items[0].run_id == started.run_id
     assert board.items[0].last_status_reason == "Request changes failed"
+    request_attempt = next(
+        attempt
+        for attempt in attempts
+        if attempt.attempt_type == BoardTodoAttemptType.REQUEST_CHANGES
+    )
+    assert request_attempt.status == BoardTodoAttemptStatus.FAILED
+    assert request_attempt.error == "run creation failed"
 
 
 @pytest.mark.asyncio
@@ -2670,6 +4992,18 @@ async def test_board_todo_service_protocol_stubs_raise_not_implemented() -> None
         await method(workspace_service, "workspace")
     with pytest.raises(NotImplementedError):
         method = cast(
+            _ForkWorkspaceStub,
+            getattr(WorkspaceServiceLike, "fork_workspace_async"),
+        )
+        await method(workspace_service, "workspace", name="fork")
+    with pytest.raises(NotImplementedError):
+        method = cast(
+            _DeleteWorkspaceStub,
+            getattr(WorkspaceServiceLike, "delete_workspace_with_options_async"),
+        )
+        await method(workspace_service, workspace_id="fork")
+    with pytest.raises(NotImplementedError):
+        method = cast(
             _ListAccountsStub,
             getattr(GitHubTriggerServiceLike, "list_accounts_async"),
         )
@@ -2741,6 +5075,12 @@ async def test_board_todo_service_protocol_stubs_raise_not_implemented() -> None
             getattr(SessionServiceLike, "get_session_async"),
         )
         await method(session_service, "session")
+    with pytest.raises(NotImplementedError):
+        method = cast(
+            _DeleteSessionStub,
+            getattr(SessionServiceLike, "delete_session_async"),
+        )
+        await method(session_service, "session")
     intent = IntentInput(
         session_id="session",
         input=(),
@@ -2757,6 +5097,12 @@ async def test_board_todo_service_protocol_stubs_raise_not_implemented() -> None
         method = cast(
             _EnsureRunStartedStub,
             getattr(SessionRunServiceLike, "ensure_run_started_async"),
+        )
+        await method(run_service, "run")
+    with pytest.raises(NotImplementedError):
+        method = cast(
+            _StopRunStub,
+            getattr(SessionRunServiceLike, "stop_run_async"),
         )
         await method(run_service, "run")
     with pytest.raises(NotImplementedError):
@@ -2831,6 +5177,234 @@ def test_board_todo_service_github_helper_edge_cases() -> None:
     )
 
 
+def test_board_todo_handoff_helper_edge_cases() -> None:
+    item = BoardTodoItem(
+        todo_id="todo-helper",
+        workspace_id="repo",
+        title="Helper",
+        source_provider=BoardTodoSourceProvider.GITHUB,
+        source_type=BoardTodoSourceType.GITHUB_ISSUE,
+        source_key="github:owner/repo:issue:1",
+        repository_full_name="owner/repo",
+        issue_number=1,
+        execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+    )
+    assert _default_execution_policy(item) == BoardTodoExecutionPolicy.CURRENT_WORKSPACE
+    item_without_policy = item.model_copy(update={"execution_policy": None})
+    assert (
+        _default_execution_policy(item_without_policy)
+        == BoardTodoExecutionPolicy.FORK_GIT_WORKTREE
+    )
+
+    current_preview = _execution_workspace_preview(
+        item=item,
+        scope=BoardTodoScope(
+            board_workspace_id="repo",
+            view_workspace_id="fork-view",
+        ),
+        execution_policy=BoardTodoExecutionPolicy.CURRENT_WORKSPACE,
+    )
+    fork_preview = _execution_workspace_preview(
+        item=item,
+        scope=BoardTodoScope(
+            board_workspace_id="repo",
+            view_workspace_id="fork-view",
+        ),
+        execution_policy=BoardTodoExecutionPolicy.FORK_GIT_WORKTREE,
+    )
+    assert current_preview.workspace_id == "fork-view"
+    assert fork_preview.workspace_id is None
+
+    with pytest.raises(ValueError, match="preset id"):
+        _resolve_runtime_target(
+            runtime_target_id="preset:",
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+    with pytest.raises(ValueError, match="role id"):
+        _resolve_runtime_target(
+            runtime_target_id="role:",
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+    with pytest.raises(ValueError, match="role: or preset:"):
+        _resolve_runtime_target(
+            runtime_target_id="reviewer",
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+    assert (
+        _resolve_runtime_target(
+            runtime_target_id=None,
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+            fallback_runtime_target_kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+        ).target_id
+        == "preset:default"
+    )
+    assert (
+        _resolve_runtime_target(
+            runtime_target_id=None,
+            session_mode=None,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+            fallback_runtime_target_kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+        ).target_id
+        == "role:main_agent"
+    )
+
+    preset_target = BoardTodoRuntimeTargetOption(
+        target_id="preset:default",
+        kind=BoardTodoRuntimeTargetKind.ORCHESTRATION_PRESET,
+        label="Default",
+    )
+    role_target = BoardTodoRuntimeTargetOption(
+        target_id="role:main_agent",
+        kind=BoardTodoRuntimeTargetKind.LOCAL_ROLE,
+        label="Main",
+    )
+    with pytest.raises(ValueError, match="orchestration mode"):
+        _start_session_topology(
+            runtime_target=preset_target,
+            session_mode=SessionMode.NORMAL,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+    with pytest.raises(ValueError, match="normal mode"):
+        _start_session_topology(
+            runtime_target=role_target,
+            session_mode=SessionMode.ORCHESTRATION,
+            normal_root_role_id=None,
+            orchestration_preset_id=None,
+        )
+    with pytest.raises(ValueError, match="normal root role"):
+        _start_session_topology(
+            runtime_target=role_target,
+            session_mode=SessionMode.NORMAL,
+            normal_root_role_id="reviewer",
+            orchestration_preset_id=None,
+        )
+    with pytest.raises(ValueError, match="orchestration preset"):
+        _start_session_topology(
+            runtime_target=preset_target,
+            session_mode=SessionMode.ORCHESTRATION,
+            normal_root_role_id=None,
+            orchestration_preset_id="planning",
+        )
+    assert _start_session_topology(
+        runtime_target=preset_target,
+        session_mode=None,
+        normal_root_role_id=None,
+        orchestration_preset_id=None,
+    ) == (SessionMode.ORCHESTRATION, None, "default")
+
+    normal_session = SessionRecord(
+        session_id="session-normal",
+        workspace_id="repo",
+        metadata={},
+        session_mode=SessionMode.NORMAL,
+        normal_root_role_id="main_agent",
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    orchestration_session = normal_session.model_copy(
+        update={
+            "session_id": "session-orchestration",
+            "session_mode": SessionMode.ORCHESTRATION,
+            "normal_root_role_id": None,
+        }
+    )
+    with pytest.raises(ValueError, match="preset runtime target"):
+        _validate_runtime_target_matches_session(
+            runtime_target=role_target,
+            session=orchestration_session,
+        )
+    with pytest.raises(ValueError, match="role runtime target"):
+        _validate_runtime_target_matches_session(
+            runtime_target=preset_target,
+            session=normal_session,
+        )
+    with pytest.raises(ValueError, match="orchestration preset"):
+        _validate_runtime_target_matches_session(
+            runtime_target=preset_target,
+            session=orchestration_session.model_copy(
+                update={"orchestration_preset_id": "planning"}
+            ),
+        )
+
+    pending_ticket = BoardTodoExecutionQueueTicket(
+        queue_ticket_id="ticket-pending",
+        todo_id="todo-helper",
+        attempt_id="attempt-helper",
+        prompt_ref="prompt-helper",
+        queue_kind=BoardTodoQueueKind.START,
+        board_workspace_id="repo",
+        source_workspace_id="repo",
+    )
+    expired_ticket = pending_ticket.model_copy(
+        update={
+            "queue_ticket_id": "ticket-expired",
+            "status": BoardTodoQueueStatus.CLAIMED,
+            "claim_expires_at": _now() - timedelta(seconds=1),
+        }
+    )
+    live_ticket = pending_ticket.model_copy(
+        update={
+            "queue_ticket_id": "ticket-live",
+            "status": BoardTodoQueueStatus.CLAIMED,
+            "claim_expires_at": datetime.now(tz=UTC) + timedelta(minutes=1),
+        }
+    )
+    no_expiry_ticket = pending_ticket.model_copy(
+        update={
+            "queue_ticket_id": "ticket-no-expiry",
+            "status": BoardTodoQueueStatus.CLAIMED,
+            "claim_expires_at": None,
+        }
+    )
+    failed_ticket = pending_ticket.model_copy(
+        update={
+            "queue_ticket_id": "ticket-failed",
+            "status": BoardTodoQueueStatus.FAILED,
+        }
+    )
+    assert _queue_ticket_can_be_claimed(pending_ticket) is True
+    assert _queue_ticket_can_be_claimed(expired_ticket) is True
+    assert _queue_ticket_can_be_claimed(live_ticket) is False
+    assert _queue_ticket_can_be_claimed(no_expiry_ticket) is False
+    assert _queue_ticket_can_be_claimed(failed_ticket) is False
+    later_ticket = pending_ticket.model_copy(
+        update={
+            "queue_ticket_id": "ticket-later",
+            "created_at": pending_ticket.created_at + timedelta(seconds=1),
+        }
+    )
+    assert _queue_ticket_sorts_after(later_ticket, pending_ticket) is True
+    assert _queue_ticket_sorts_after(pending_ticket, later_ticket) is False
+
+    assert _role_id_from_runtime_target(None) is None
+    assert (
+        _target_role_id_for_run(
+            session=orchestration_session,
+            ticket=pending_ticket,
+        )
+        is None
+    )
+    assert (
+        _target_role_id_for_run(
+            session=normal_session,
+            ticket=pending_ticket.model_copy(
+                update={"runtime_target_id": "role:reviewer"}
+            ),
+        )
+        == "reviewer"
+    )
+
+
 def test_board_todo_service_linked_pull_request_event_selection() -> None:
     pull_request_map = {
         2: {
@@ -2880,9 +5454,33 @@ class _WorkspaceService:
         self._workspaces = {
             workspace.workspace_id: workspace for workspace in workspaces
         }
+        self.deleted_workspace_ids: list[str] = []
 
     async def get_workspace_async(self, workspace_id: str) -> WorkspaceRecord:
         return self._workspaces[workspace_id]
+
+    async def fork_workspace_async(
+        self,
+        source_workspace_id: str,
+        *,
+        name: str,
+        start_ref: str | None = None,
+    ) -> WorkspaceRecord:
+        _ = start_ref
+        source = self._workspaces[source_workspace_id]
+        workspace = source.model_copy(update={"workspace_id": name})
+        self._workspaces[name] = workspace
+        return workspace
+
+    async def delete_workspace_with_options_async(
+        self,
+        *,
+        workspace_id: str,
+        remove_directory: bool = False,
+    ) -> WorkspaceRecord:
+        _ = remove_directory
+        self.deleted_workspace_ids.append(workspace_id)
+        return self._workspaces.pop(workspace_id)
 
 
 class _GitHubTriggerService:
@@ -3097,6 +5695,7 @@ class _SessionService:
         self.normal_root_role_ids: list[str | None] = []
         self.orchestration_preset_ids: list[str | None] = []
         self.sessions: dict[str, SessionRecord] = {}
+        self.deleted_session_ids: list[str] = []
 
     async def create_session_async(
         self,
@@ -3129,6 +5728,18 @@ class _SessionService:
     async def get_session_async(self, session_id: str) -> SessionRecord:
         return self.sessions[session_id]
 
+    async def delete_session_async(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        _ = force
+        _ = cascade
+        self.deleted_session_ids.append(session_id)
+        self.sessions.pop(session_id, None)
+
 
 class _BlockingSessionService:
     def __init__(self) -> None:
@@ -3136,6 +5747,7 @@ class _BlockingSessionService:
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
         self.sessions: dict[str, SessionRecord] = {}
+        self.deleted_session_ids: list[str] = []
 
     async def create_session_async(
         self,
@@ -3165,6 +5777,18 @@ class _BlockingSessionService:
 
     async def get_session_async(self, session_id: str) -> SessionRecord:
         return self.sessions[session_id]
+
+    async def delete_session_async(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        _ = force
+        _ = cascade
+        self.deleted_session_ids.append(session_id)
+        self.sessions.pop(session_id, None)
 
 
 class _RunService:
@@ -3196,6 +5820,9 @@ class _RunService:
     async def ensure_run_started_async(self, run_id: str) -> None:
         self._runtime.set_status(run_id, RunRuntimeStatus.RUNNING)
 
+    async def stop_run_async(self, run_id: str) -> None:
+        self._runtime.set_status(run_id, RunRuntimeStatus.STOPPED)
+
 
 class _FailingRunService:
     def __init__(self) -> None:
@@ -3212,6 +5839,72 @@ class _FailingRunService:
 
     async def ensure_run_started_async(self, run_id: str) -> None:
         raise AssertionError("run should not be started")
+
+    async def stop_run_async(self, run_id: str) -> None:
+        _ = run_id
+
+
+class _EnsureFailingRunService:
+    def __init__(self, runtime: "_RunRuntimeRepository") -> None:
+        self._runtime = runtime
+        self.count = 0
+
+    async def create_run_async(
+        self,
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
+        self.count += 1
+        run_id = f"run-{self.count}"
+        self._runtime.records[run_id] = RunRuntimeRecord(
+            run_id=run_id,
+            session_id=intent.session_id,
+            status=RunRuntimeStatus.RUNNING,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        return run_id, intent.session_id
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        _ = run_id
+        raise RuntimeError("run start failed")
+
+    async def stop_run_async(self, run_id: str) -> None:
+        self._runtime.set_status(run_id, RunRuntimeStatus.STOPPED)
+
+
+class _BlockingEnsureRunService:
+    def __init__(self, runtime: "_RunRuntimeRepository") -> None:
+        self._runtime = runtime
+        self.count = 0
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def create_run_async(
+        self,
+        intent: IntentInput,
+        *,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> tuple[str, str]:
+        self.count += 1
+        run_id = f"run-{self.count}"
+        self._runtime.records[run_id] = RunRuntimeRecord(
+            run_id=run_id,
+            session_id=intent.session_id,
+            status=RunRuntimeStatus.RUNNING,
+            created_at=_now(),
+            updated_at=_now(),
+        )
+        return run_id, intent.session_id
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        _ = run_id
+        self.entered.set()
+        await self.release.wait()
+
+    async def stop_run_async(self, run_id: str) -> None:
+        self._runtime.set_status(run_id, RunRuntimeStatus.STOPPED)
 
 
 class _ControlledRunService:
@@ -3258,6 +5951,9 @@ class _ControlledRunService:
     async def ensure_run_started_async(self, run_id: str) -> None:
         self._runtime.set_status(run_id, RunRuntimeStatus.RUNNING)
 
+    async def stop_run_async(self, run_id: str) -> None:
+        self._runtime.set_status(run_id, RunRuntimeStatus.STOPPED)
+
 
 class _RunRuntimeRepository:
     def __init__(self) -> None:
@@ -3282,6 +5978,7 @@ def _service(
     github_accounts: tuple[GitHubTriggerAccountRecord, ...] | None = None,
     github_tokens: dict[str, str] | None = None,
     shared_github_token: str | None = None,
+    workspace_service: WorkspaceServiceLike | None = None,
     session_service: SessionServiceLike | None = None,
     run_service: SessionRunServiceLike | None = None,
     run_runtime: _RunRuntimeRepository | None = None,
@@ -3290,7 +5987,7 @@ def _service(
     runtime = run_runtime or _RunRuntimeRepository()
     return _BoardTodoServiceHarness(
         repository=repository or BoardTodoRepository(tmp_path / "board-todos.sqlite"),
-        workspace_service=_WorkspaceService(workspaces),
+        workspace_service=workspace_service or _WorkspaceService(workspaces),
         github_trigger_service=_GitHubTriggerService(
             accounts=github_accounts,
             tokens=github_tokens,
@@ -3341,6 +6038,19 @@ async def _create_test_todo(
             updated_at=now,
         )
     )
+
+
+async def _preview_request_changes_prompt(
+    service: _BoardTodoServiceHarness,
+    *,
+    todo_id: str,
+    feedback: str = "Please revise",
+) -> str:
+    preview = await service.preview_request_changes_todo(
+        todo_id=todo_id,
+        payload=BoardTodoPreviewRequestChangesRequest(feedback=feedback),
+    )
+    return preview.prompt
 
 
 def _workspace(

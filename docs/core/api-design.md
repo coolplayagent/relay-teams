@@ -4359,7 +4359,12 @@ review/completion evidence. Board columns are Agent Teams state.
 - `POST /api/boards/todos:sync-changes` performs an incremental GitHub issue/PR sync against per-source cursors and returns a delta response. `force_full=true` performs the same open-issue reconciliation as `/api/boards/todos:sync`.
 - `POST /api/boards/todos/{todo_id}:preview-start` renders the default start prompt and runtime-control defaults for user review without changing status or creating a session/run.
 - `POST /api/boards/todos/{todo_id}:start` requires a non-empty `final_prompt` after user review, creates a dedicated session/run with the selected runtime controls, and moves the item to `in_progress`. `prompt` is accepted as a compatibility alias.
-- `POST /api/boards/todos/{todo_id}:request-changes` creates a new run in the bound session and moves the item back to `in_progress`.
+- `POST /api/boards/todos/{todo_id}:preview-request-changes` accepts `feedback` and optional `view_workspace_id`, renders the request-changes prompt for user review, and does not change status or create a run/attempt.
+- `POST /api/boards/todos/{todo_id}:request-changes` requires a non-empty reviewed `final_prompt` after feedback preview, creates a new run in the bound session, and moves the item back to `in_progress`. `prompt` is accepted as a compatibility alias.
+- `GET /api/boards/todo-handoff-templates?workspace_id=...` lists workspace and source scoped handoff templates for the resolved root board workspace.
+- `PUT /api/boards/todo-handoff-templates/workspace` upserts the workspace default `start` or `request_changes` template.
+- `PUT /api/boards/todo-handoff-templates/source/{source_id}` upserts a source override template.
+- `DELETE /api/boards/todo-handoff-templates/source/{template_id}` deletes a source override so preview falls back to the workspace template or built-in template.
 - `POST /api/boards/todos/{todo_id}:mark-done` accepts an optional reason and moves a `review` item to `done`; non-`review` items return `409`.
 - `POST /api/boards/todos/{todo_id}:archive` soft-deletes the item into `archived`.
 - `POST /api/boards/todos/{todo_id}:restore` restores an archived item to `todo`.
@@ -4381,22 +4386,62 @@ Frontends may render `grouped` mode by nesting every status column under these
 groups, or `mixed` mode by showing status columns without group nesting while
 still displaying each card's source label.
 
-`preview-start` accepts optional `view_workspace_id` and returns
+`preview-start` accepts optional `view_workspace_id`, candidate
+`execution_policy`, `runtime_target_id`, and `queue_if_full`. It returns
 `board_workspace_id`, `view_workspace_id`, `is_fork_view`,
-`forked_from_workspace_id`, the rendered `prompt`, and runtime defaults:
+`forked_from_workspace_id`, `template_source`, the rendered `prompt`,
+`execution_policy`, `execution_workspace_preview`, `runtime_target_options`,
+selected `runtime_target_id`, `concurrency`, `queue_preview`, and runtime defaults:
 `session_mode`, `normal_root_role_id`, `normal_mode_roles`,
 `orchestration_preset_id`, `orchestration_presets`, `yolo`, and `thinking`.
 The first phase may return empty role/preset option arrays when clients already
 load those option sets through the shared role and orchestration config APIs.
 
-`start` accepts `view_workspace_id`, `final_prompt`, `session_mode`,
-`normal_root_role_id`, `orchestration_preset_id`, `yolo`, and `thinking`.
-For fork views, `view_workspace_id` selects the workspace where the run session
-is created while the TODO item still belongs to the resolved root board.
+`start` accepts `view_workspace_id`, `final_prompt`, `execution_policy`,
+`runtime_target_id`, `queue_if_full`, `session_mode`, `normal_root_role_id`,
+`orchestration_preset_id`, `yolo`, and `thinking`.
+`execution_policy=fork_git_worktree` is the default for code TODOs: the service
+forks from the root/source workspace, creates the session/run in that execution
+workspace, and keeps the TODO item owned by the root board workspace.
+`execution_policy=current_workspace` uses the current view workspace for
+execution.
 `session_mode = normal` applies `normal_root_role_id` to the created session and
 run `target_role_id`; `session_mode = orchestration` applies
 `orchestration_preset_id` to the created session and does not set a normal target
-role. `thinking.enabled` and `thinking.effort` are passed to the run intent.
+role. `runtime_target_id` is constrained to local normal roles and local
+orchestration presets in this phase. `thinking.enabled` and `thinking.effort`
+are passed to the run intent.
+
+If the source workspace or selected runtime target is at its handoff concurrency
+limit, `start` and `request-changes` create a durable
+`board_todo_execution_queue` ticket when `queue_if_full=true`. The item remains
+`in_progress` with `queue_ticket_id`; no execution workspace, session, or run is
+created until the queue worker claims the ticket after a slot opens. With
+`queue_if_full=false`, the API returns `409` and leaves the item in its prior
+state. The built-in limits are 2 active handoffs per source workspace and 1
+active handoff per runtime target.
+
+`preview-request-changes` accepts `feedback`, optional `view_workspace_id`,
+candidate `runtime_target_id`, and `queue_if_full`.
+It returns `board_workspace_id`, `view_workspace_id`, fork scope fields,
+`template_kind="request_changes"`, `template_source`, the rendered `prompt`,
+the currently bound `session_id/run_id`, execution workspace preview,
+runtime target options, concurrency/queue preview, and `yolo`/`thinking` defaults.
+`request-changes` accepts `feedback`, `final_prompt`, optional `view_workspace_id`,
+`runtime_target_id`, `queue_if_full`, `yolo`, and `thinking`. It reuses the
+existing bound session/topology and `execution_workspace_id` for the follow-up
+run; this phase does not expose workspace switching in the handoff UI.
+Empty `final_prompt` is rejected before status changes, run creation, prompt
+snapshot creation, or attempt creation.
+
+Successful or queued `start` and `request-changes` calls create a handoff audit:
+`board_todo_handoff_prompts` stores the exact reviewed final prompt snapshot,
+and `board_todo_attempts` stores a `start` or `request_changes` attempt with
+the associated `prompt_ref`, execution workspace policy, runtime target,
+queue ticket, `session_id`, and `run_id`. `BoardTodoItem` contains only current
+execution references such as `current_attempt_id`, `active_attempt_id`,
+`execution_workspace_id`, `execution_policy`, `runtime_target_kind/id`, and
+`queue_ticket_id`; full history remains in the attempt table.
 
 `BoardTodoItem.status` is one of `todo`, `in_progress`, `review`, `done`, or
 `archived`. Run completion moves bound items to `review`; users can mark
