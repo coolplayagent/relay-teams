@@ -11,6 +11,7 @@ from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener
 from pydantic import JsonValue
 
 from relay_teams.env.proxy_env import load_proxy_env_config
+from relay_teams.logger import get_logger
 from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceCompatibility,
     PluginMarketplaceEntry,
@@ -29,6 +30,7 @@ _MAX_LIMIT = 100
 _CLAWHUB_FAMILIES = ("code-plugin", "bundle-plugin")
 _HTTP_TIMEOUT_SECONDS = 30.0
 _SRI_RE = re.compile(r"^(sha(?:256|384|512))-(.+)$")
+LOGGER = get_logger(__name__)
 
 
 class ClawHubMarketplaceProvider:
@@ -85,13 +87,10 @@ class ClawHubMarketplaceProvider:
                     break
             if family_cursor:
                 next_cursors[family] = family_cursor
-        entries = tuple(
-            self._entry_from_raw_package(
-                raw_package=item,
-                base_url=base_url,
-                include_versions=include_versions,
-            )
-            for item in items
+        entries = self._entries_from_raw_packages(
+            raw_packages=items,
+            base_url=base_url,
+            include_versions=include_versions,
         )
         return PluginMarketplaceIndex(
             version="1",
@@ -133,15 +132,36 @@ class ClawHubMarketplaceProvider:
         raw = _get_json(
             f"{base_url}/api/v1/packages/search?{urlencode({'q': normalized_query})}"
         )
-        entries = tuple(
-            self._entry_from_raw_package(
-                raw_package=item,
-                base_url=base_url,
-                include_versions=include_versions,
-            )
-            for item in _object_list_field(raw, "items")
+        entries = self._entries_from_raw_packages(
+            raw_packages=_object_list_field(raw, "items"),
+            base_url=base_url,
+            include_versions=include_versions,
         )
         return PluginMarketplaceIndex(version="1", plugins=entries)
+
+    def _entries_from_raw_packages(
+        self,
+        *,
+        raw_packages: tuple[Mapping[str, object], ...] | list[Mapping[str, object]],
+        base_url: str,
+        include_versions: bool = False,
+    ) -> tuple[PluginMarketplaceEntry, ...]:
+        entries: list[PluginMarketplaceEntry] = []
+        for raw_package in raw_packages:
+            if not _package_version_or_empty(raw_package):
+                LOGGER.warning(
+                    "Skipping ClawHub marketplace package without version: %s",
+                    _package_log_name(raw_package),
+                )
+                continue
+            entries.append(
+                self._entry_from_raw_package(
+                    raw_package=raw_package,
+                    base_url=base_url,
+                    include_versions=include_versions,
+                )
+            )
+        return tuple(entries)
 
     def _entry_from_raw_package(
         self,
@@ -419,6 +439,14 @@ def _package_description(raw: Mapping[str, object]) -> str:
     if description:
         return description
     return _optional_string(raw, "displayName")
+
+
+def _package_log_name(raw: Mapping[str, object]) -> str:
+    for key in ("name", "displayName", "runtimeId"):
+        value = _optional_string(raw, key)
+        if value:
+            return value
+    return "<unknown>"
 
 
 def _package_family(raw: Mapping[str, object]) -> str:

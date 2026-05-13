@@ -1694,6 +1694,45 @@ def test_clawhub_marketplace_provider_loads_lightweight_index(
     )
 
 
+def test_clawhub_marketplace_provider_skips_missing_version_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": []}
+        assert (
+            url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100"
+        )
+        return {
+            "items": [
+                {
+                    "name": "draft-plugin",
+                    "summary": "Draft package",
+                    "family": "code-plugin",
+                    "latestVersion": None,
+                },
+                {
+                    "name": "market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["market-plugin"]
+
+
 def test_clawhub_marketplace_provider_searches_packages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1724,6 +1763,42 @@ def test_clawhub_marketplace_provider_searches_packages(
     assert [entry.name for entry in index.plugins] == ["market-plugin"]
     assert index.plugins[0].latest == "1.0.1"
     assert not index.plugins[0].versions[0].unsupported_reason
+
+
+def test_clawhub_marketplace_provider_search_skips_missing_version_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        assert url == "https://clawhub.test/api/v1/packages/search?q=market"
+        return {
+            "items": [
+                {
+                    "name": "draft-plugin",
+                    "summary": "Draft package",
+                    "family": "code-plugin",
+                    "latestVersion": None,
+                },
+                {
+                    "name": "market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().search_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        query="market",
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["market-plugin"]
 
 
 def test_clawhub_marketplace_provider_blank_search_loads_index(
