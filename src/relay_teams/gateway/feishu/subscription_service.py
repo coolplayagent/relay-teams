@@ -563,8 +563,10 @@ class _FeishuWsController:
         if handler_task is None:
             return
         handler_task.cancel()
-        with suppress(asyncio.CancelledError):
+        try:
             await handler_task
+        except asyncio.CancelledError:
+            pass
         self._handler_task = None
 
     def _enqueue_sdk_event(
