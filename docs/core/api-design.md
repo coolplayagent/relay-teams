@@ -4196,7 +4196,8 @@ Request: `RejectMemoryEvolutionDraftRequest`
 - `reason`: optional rejection reason.
 
 Response: `MemoryEvolutionDraft` with `status=rejected`. Returns `409` when the
-draft is no longer in `draft` status.
+draft is no longer in `draft` status or another apply/reject request has already
+claimed it.
 
 ### `GET /workspaces/{workspace_id}/memories/{memory_id}`
 

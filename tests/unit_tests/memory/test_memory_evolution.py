@@ -488,6 +488,56 @@ class TestMemoryEvolutionService:
         assert applied[0].status == MemoryEvolutionStatus.APPLIED
         assert reload_recorder.count == 1
 
+    async def test_apply_and_reject_cannot_both_claim_draft(
+        self, tmp_path: Path
+    ) -> None:
+        memory_service, evolution_service, reload_recorder = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="apply-reject-race",
+                runtime_name="apply-reject-race",
+            )
+        )
+
+        results = await asyncio.gather(
+            evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(),
+            ),
+            evolution_service.reject_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                RejectMemoryEvolutionDraftRequest(reason="not reusable"),
+            ),
+            return_exceptions=True,
+        )
+
+        completed: list[MemoryEvolutionDraft] = []
+        conflicts: list[MemoryEvolutionConflictError] = []
+        for result in results:
+            if isinstance(result, MemoryEvolutionConflictError):
+                conflicts.append(result)
+            elif isinstance(result, BaseException):
+                raise result
+            elif result is not None:
+                completed.append(result)
+        assert len(completed) == 1
+        assert len(conflicts) == 1
+        assert completed[0].status in {
+            MemoryEvolutionStatus.APPLIED,
+            MemoryEvolutionStatus.REJECTED,
+        }
+        assert reload_recorder.count in {0, 1}
+        if completed[0].status == MemoryEvolutionStatus.REJECTED:
+            assert reload_recorder.count == 0
+        else:
+            assert reload_recorder.count == 1
+
     async def test_apply_draft_rejects_blank_instructions(self, tmp_path: Path) -> None:
         memory_service, evolution_service, _ = _build_services(tmp_path)
         memory_id = await _create_memory(memory_service)

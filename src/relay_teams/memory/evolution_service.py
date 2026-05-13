@@ -190,15 +190,16 @@ class MemoryEvolutionService:
             message = f"Memory evolution draft is not rejectable: {draft.status.value}"
             raise MemoryEvolutionConflictError(message)
         now = datetime.now(tz=timezone.utc)
-        rejected = draft.model_copy(
-            update={
-                "status": MemoryEvolutionStatus.REJECTED,
-                "rejection_reason": request.reason.strip(),
-                "updated_at": now,
-                "rejected_at": now,
-            }
+        rejected = await self._repo.claim_evolution_draft_reject_async(
+            draft_id=draft.draft_id,
+            rejection_reason=request.reason.strip(),
+            updated_at=now,
+            rejected_at=now,
         )
-        return await self._repo.update_evolution_draft_async(draft=rejected)
+        if rejected is None:
+            message = "Memory evolution draft is not rejectable: already claimed"
+            raise MemoryEvolutionConflictError(message)
+        return rejected
 
     async def _load_active_source_entries_async(
         self, request: CreateMemoryEvolutionDraftRequest
