@@ -45,6 +45,28 @@ from relay_teams.memory.models import (
     RejectMemoryEvolutionDraftRequest,
     UpdateMemoryEntryRequest,
 )
+from relay_teams.memory.skill_draft_models import (
+    GenerateMemorySkillDraftsRequest,
+    MemorySkillDraft,
+    MemorySkillDraftApplyResult,
+    MemorySkillDraftFile,
+    MemorySkillDraftGenerationKind,
+    MemorySkillDraftGenerationResult,
+    MemorySkillDraftKind,
+    MemorySkillDraftQuery,
+    MemorySkillDraftQueryResult,
+    MemorySkillDraftScopeKind,
+    MemorySkillDraftStatus,
+    MemorySkillDraftSummary,
+    MemorySkillDraftValidationMessage,
+    MemorySkillDraftValidationSeverity,
+    UpdateMemorySkillDraftRequest,
+)
+from relay_teams.memory.skill_draft_repository import (
+    MemorySkillDraftRepository,
+    generate_memory_skill_draft_id,
+)
+from relay_teams.memory.skill_synthesis_service import MemorySkillSynthesisService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.memory.evolution_service import MemoryEvolutionService
 from relay_teams.memory.repository import (
@@ -61,6 +83,7 @@ __all__ = [
     "CreateMemoryEntryRequest",
     "CreateMemoryEvolutionDraftRequest",
     "GlobalMemorySearchRequest",
+    "GenerateMemorySkillDraftsRequest",
     "INJECTION_LIMIT",
     "INJECTION_MIN_CONFIDENCE",
     "MAX_MEDIUM_TERM_PER_SESSION_ROLE",
@@ -92,13 +115,30 @@ __all__ = [
     "MemorySearchHit",
     "MemorySearchRequest",
     "MemorySearchResult",
+    "MemorySkillDraft",
+    "MemorySkillDraftApplyResult",
+    "MemorySkillDraftFile",
+    "MemorySkillDraftGenerationKind",
+    "MemorySkillDraftGenerationResult",
+    "MemorySkillDraftKind",
+    "MemorySkillDraftQuery",
+    "MemorySkillDraftQueryResult",
+    "MemorySkillDraftRepository",
+    "MemorySkillDraftScopeKind",
+    "MemorySkillDraftStatus",
+    "MemorySkillDraftSummary",
+    "MemorySkillDraftValidationMessage",
+    "MemorySkillDraftValidationSeverity",
+    "MemorySkillSynthesisService",
     "MemorySourceKind",
     "MemoryTier",
     "PERSISTENT_DECAY_FACTOR",
     "RejectMemoryEvolutionDraftRequest",
     "UpdateMemoryEntryRequest",
+    "UpdateMemorySkillDraftRequest",
     "WORKING_DECAY_FACTOR",
     "WORKING_TTL",
     "generate_memory_evolution_draft_id",
     "generate_memory_id",
+    "generate_memory_skill_draft_id",
 ]

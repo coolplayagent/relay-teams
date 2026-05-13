@@ -1944,3 +1944,58 @@ Notes:
 - Applying a draft writes through the app-scoped ClawHub skill service, reloads
   the runtime skill registry, and records the applied draft and skill ref in
   source memory metadata.
+
+### `memory_skill_drafts`
+
+```sql
+CREATE TABLE IF NOT EXISTS memory_skill_drafts (
+    draft_id                 TEXT PRIMARY KEY,
+    status                   TEXT NOT NULL,
+    scope_kind               TEXT NOT NULL,
+    workspace_id             TEXT,
+    workspace_ids_json       TEXT NOT NULL DEFAULT '[]',
+    source_memory_ids_json   TEXT NOT NULL DEFAULT '[]',
+    draft_kind               TEXT NOT NULL,
+    runtime_name             TEXT NOT NULL,
+    description              TEXT NOT NULL DEFAULT '',
+    instructions             TEXT NOT NULL DEFAULT '',
+    files_json               TEXT NOT NULL DEFAULT '[]',
+    validation_messages_json TEXT NOT NULL DEFAULT '[]',
+    generation_error         TEXT NOT NULL DEFAULT '',
+    applied_skill_id         TEXT,
+    applied_ref              TEXT,
+    created_at               TEXT NOT NULL,
+    updated_at               TEXT NOT NULL,
+    validated_at             TEXT,
+    applied_at               TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_skill_drafts_status_updated
+    ON memory_skill_drafts(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_skill_drafts_workspace_updated
+    ON memory_skill_drafts(workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_skill_drafts_kind_updated
+    ON memory_skill_drafts(draft_kind, updated_at DESC);
+```
+
+Purpose: stores reviewable skill drafts synthesized from workspace or
+cross-workspace Memory Bank entries. Drafts must be queried, edited, and
+validated before they can be applied as app-scoped skills.
+
+Notes:
+- `draft_id` is generated as `msd-{uuid_hex}`.
+- `status` is one of: `draft`, `validated`, `applying`, `applied`, `rejected`.
+- `scope_kind` is `workspace` or `cross_workspace`.
+- `draft_kind` is `skill` or `sop_skill`.
+- `workspace_ids_json` records all workspaces represented by the source
+  memories; `workspace_id` is populated for workspace-scoped drafts.
+- `source_memory_ids_json` records the Memory Bank entries used to synthesize
+  the draft. The generator consolidates related memories and does not create
+  one skill per memory entry.
+- `runtime_name`, `description`, `instructions`, and `files_json` are editable
+  until the draft is applied.
+- `validation_messages_json` stores skill-creator-compatible validation errors
+  and warnings.
+- `applied_skill_id` and `applied_ref` record the ClawHub-managed app skill
+  created when a validated draft is applied.
+- Repository: `src/relay_teams/memory/skill_draft_repository.py`

@@ -8,6 +8,11 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from relay_teams.interfaces.server.deps import (
+    get_memory_bank_service,
+    get_memory_evolution_service,
+    get_memory_skill_synthesis_service,
+)
 from relay_teams.interfaces.server.routers.memories import router
 from relay_teams.memory.evolution_service import MemoryEvolutionConflictError
 from relay_teams.memory.models import (
@@ -26,7 +31,15 @@ from relay_teams.memory.models import (
     MemorySourceKind,
     MemoryTier,
 )
-from relay_teams.memory.service import MemoryBankService
+from relay_teams.memory.skill_draft_models import (
+    MemorySkillDraft,
+    MemorySkillDraftGenerationResult,
+    MemorySkillDraftKind,
+    MemorySkillDraftQueryResult,
+    MemorySkillDraftScopeKind,
+    MemorySkillDraftStatus,
+    draft_to_summary,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,13 +66,20 @@ def _make_entry(**overrides: object) -> MemoryEntry:
 
 
 _ENTRY = _make_entry()
-
-
-def _build_client(service: MemoryBankService) -> TestClient:
-    app = FastAPI()
-    app.include_router(router, prefix="/api")
-    app.dependency_overrides[router.routes[0].depend()] = lambda: service  # type: ignore[union-attr]
-    return TestClient(app)
+_DRAFT = MemorySkillDraft(
+    id="msd-test001",
+    status=MemorySkillDraftStatus.DRAFT,
+    scope_kind=MemorySkillDraftScopeKind.WORKSPACE,
+    workspace_id="ws-1",
+    workspace_ids=("ws-1",),
+    source_memory_ids=("mem-test001",),
+    draft_kind=MemorySkillDraftKind.SKILL,
+    runtime_name="workspace-memory",
+    description="Use workspace memory.",
+    instructions="Use the captured workspace memory.",
+    created_at=datetime.now(tz=timezone.utc),
+    updated_at=datetime.now(tz=timezone.utc),
+)
 
 
 def _make_draft(**overrides: object) -> MemoryEvolutionDraft:
@@ -88,15 +108,20 @@ def _make_draft(**overrides: object) -> MemoryEvolutionDraft:
 
 
 class TestRouteRegistration:
-    def test_router_has_fourteen_routes(self) -> None:
+    def test_router_has_twenty_routes(self) -> None:
         routes = [r for r in router.routes if isinstance(r, APIRoute)]
-        assert len(routes) == 14
+        assert len(routes) == 20
 
     def test_router_paths_match_spec(self) -> None:
         paths = {r.path for r in router.routes if isinstance(r, APIRoute)}
         wid = "/workspaces/{workspace_id}"
         assert "/memories" in paths
         assert "/memories/search" in paths
+        assert "/memories/skill-drafts:generate" in paths
+        assert "/memories/skill-drafts" in paths
+        assert "/memories/skill-drafts/{draft_id}" in paths
+        assert "/memories/skill-drafts/{draft_id}:validate" in paths
+        assert "/memories/skill-drafts/{draft_id}:apply" in paths
         assert f"{wid}/memories" in paths
         assert f"{wid}/memories/evolutions" in paths
         assert f"{wid}/memories/evolutions/{{draft_id}}" in paths
@@ -114,6 +139,14 @@ class TestRouteRegistration:
         wid = "/workspaces/{workspace_id}"
         assert "GET" in route_map.get("/memories", set())
         assert "POST" in route_map.get("/memories/search", set())
+        assert "POST" in route_map.get("/memories/skill-drafts:generate", set())
+        assert "GET" in route_map.get("/memories/skill-drafts", set())
+        assert "GET" in route_map.get("/memories/skill-drafts/{draft_id}", set())
+        assert "PUT" in route_map.get("/memories/skill-drafts/{draft_id}", set())
+        assert "POST" in route_map.get(
+            "/memories/skill-drafts/{draft_id}:validate", set()
+        )
+        assert "POST" in route_map.get("/memories/skill-drafts/{draft_id}:apply", set())
         assert "GET" in route_map.get(f"{wid}/memories", set())
         assert "POST" in route_map.get(f"{wid}/memories", set())
         assert "GET" in route_map.get(f"{wid}/memories/evolutions", set())
@@ -162,6 +195,30 @@ class _FakeMemoryBankService:
         self.search_global_async: AsyncMock = AsyncMock(
             return_value=MemorySearchResult(items=(), total_count=0)
         )
+        self.generate_drafts_async: AsyncMock = AsyncMock(
+            return_value=MemorySkillDraftGenerationResult(
+                items=(draft_to_summary(_DRAFT),),
+                source_memory_count=1,
+            )
+        )
+        self.list_drafts_async: AsyncMock = AsyncMock(
+            return_value=MemorySkillDraftQueryResult(
+                items=(),
+                total_count=0,
+                offset=0,
+                limit=20,
+            )
+        )
+        self.get_draft_async: AsyncMock = AsyncMock(return_value=_DRAFT)
+        self.update_draft_async: AsyncMock = AsyncMock(return_value=_DRAFT)
+        self.validate_draft_async: AsyncMock = AsyncMock(return_value=_DRAFT)
+        self.apply_draft_async: AsyncMock = AsyncMock(
+            return_value={
+                "draft": _DRAFT.model_dump(mode="json"),
+                "skill_id": "workspace-memory",
+                "ref": "workspace-memory",
+            }
+        )
 
 
 class _FakeMemoryEvolutionService:
@@ -207,14 +264,9 @@ def _client_with_evolution() -> tuple[
     app = FastAPI()
     app.include_router(router, prefix="/api")
 
-    # Override the DI dependency
-    from relay_teams.interfaces.server.deps import (
-        get_memory_bank_service,
-        get_memory_evolution_service,
-    )
-
     app.dependency_overrides[get_memory_bank_service] = lambda: svc
     app.dependency_overrides[get_memory_evolution_service] = lambda: evolution_svc
+    app.dependency_overrides[get_memory_skill_synthesis_service] = lambda: svc
     return TestClient(app), svc, evolution_svc
 
 
@@ -276,6 +328,64 @@ class TestGlobalSearchMemories:
         call_req = svc.search_global_async.call_args[0][0]
         assert call_req.workspace_id == "ws-1"
         assert call_req.text_query == "pydantic"
+
+
+class TestMemorySkillDraftEndpoints:
+    def test_generate_skill_drafts_returns_201(self) -> None:
+        client, svc = _client()
+        response = client.post(
+            "/api/memories/skill-drafts:generate",
+            json={"workspace_id": "ws-1"},
+        )
+        assert response.status_code == 201
+        svc.generate_drafts_async.assert_awaited_once()
+
+    def test_list_skill_drafts_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.get(
+            "/api/memories/skill-drafts",
+            params={"workspace_id": "ws-1", "status": "draft"},
+        )
+        assert response.status_code == 200
+        svc.list_drafts_async.assert_awaited_once()
+
+    def test_get_skill_draft_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.get("/api/memories/skill-drafts/msd-test001")
+        assert response.status_code == 200
+        svc.get_draft_async.assert_awaited_once()
+
+    def test_update_skill_draft_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.put(
+            "/api/memories/skill-drafts/msd-test001",
+            json={"description": "Updated description"},
+        )
+        assert response.status_code == 200
+        svc.update_draft_async.assert_awaited_once()
+
+    def test_validate_skill_draft_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.post("/api/memories/skill-drafts/msd-test001:validate")
+        assert response.status_code == 200
+        svc.validate_draft_async.assert_awaited_once()
+
+    def test_validate_skill_draft_invalid_state_returns_400(self) -> None:
+        client, svc = _client()
+        svc.validate_draft_async.side_effect = ValueError(
+            "Applying skill drafts cannot be validated"
+        )
+        response = client.post("/api/memories/skill-drafts/msd-test001:validate")
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Applying skill drafts cannot be validated"
+        svc.validate_draft_async.assert_awaited_once()
+
+    def test_apply_skill_draft_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.post("/api/memories/skill-drafts/msd-test001:apply")
+        assert response.status_code == 200
+        svc.apply_draft_async.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

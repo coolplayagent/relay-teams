@@ -4094,6 +4094,79 @@ Request: `GlobalMemorySearchRequest`
 
 Response: `MemorySearchResult`.
 
+### `POST /memories/skill-drafts:generate`
+
+Generates one or more memory-derived skill drafts. This endpoint creates
+reviewable drafts only; it does not write to the runtime skills directory.
+
+Request: `GenerateMemorySkillDraftsRequest`
+- `scope_kind`: `workspace` or `cross_workspace`.
+- `workspace_id`: workspace source for workspace-scoped generation.
+- `workspace_ids`: optional source filter for cross-workspace generation.
+- `source_memory_ids`: optional explicit memory entry IDs.
+- `draft_kind`: `auto`, `skill`, or `sop_skill`.
+- `text_query`: optional memory search text.
+- `max_drafts`: maximum drafts to create.
+- `limit`: maximum source memories to inspect.
+- `min_confidence`: minimum source memory confidence.
+
+Response: `MemorySkillDraftGenerationResult` with draft summaries, source
+memory count, and optional `error_message`.
+
+### `GET /memories/skill-drafts`
+
+Lists memory-derived skill drafts.
+
+Query fields:
+- `scope_kind`: optional `workspace` or `cross_workspace`.
+- `workspace_id`: optional workspace filter.
+- `status`: optional `draft`, `validated`, `applying`, `applied`, or `rejected`.
+- `draft_kind`: optional `skill` or `sop_skill`.
+- `text_query`: optional text filter across name, description, and instructions.
+- `limit`: page size `1..100`, default `20`.
+- `offset`: default `0`.
+
+Response: `MemorySkillDraftQueryResult`.
+
+### `GET /memories/skill-drafts/{draft_id}`
+
+Returns one memory-derived skill draft, including editable structured fields,
+source memory IDs, generated files, validation messages, and applied skill
+metadata.
+
+### `PUT /memories/skill-drafts/{draft_id}`
+
+Updates editable draft fields before application.
+
+Request: `UpdateMemorySkillDraftRequest`
+- `runtime_name`: optional skill runtime name.
+- `description`: optional `SKILL.md` front matter description.
+- `instructions`: optional `SKILL.md` body.
+- `files`: optional full replacement file list.
+- `status`: optional `draft`, `validated`, or `rejected`. Use the apply
+  endpoint for `applying` and `applied`.
+
+Changing content clears previous validation and returns the draft to `draft`
+status.
+
+### `POST /memories/skill-drafts/{draft_id}:validate`
+
+Runs skill-creator-compatible validation. Validation checks lowercase hyphen
+runtime names, required `description`, non-empty instructions, managed
+`SKILL.md`, safe file paths, and rejects auxiliary documentation files such as
+`README.md`.
+
+Response: updated `MemorySkillDraft`. Drafts with errors remain `draft`; drafts
+without errors become `validated`.
+
+### `POST /memories/skill-drafts/{draft_id}:apply`
+
+Applies a validated draft as an app-scoped skill through the existing ClawHub
+skill service, then reloads the skill registry.
+
+Response: `MemorySkillDraftApplyResult`. Returns `400` when the draft is not
+validated or validation no longer passes.
+
 ### `GET /workspaces/{workspace_id}/memories`
 
 Lists memory entries with optional filters.

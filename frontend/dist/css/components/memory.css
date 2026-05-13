@@ -6,6 +6,34 @@
     min-width: 0;
 }
 
+.memory-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    height: 34px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.memory-tab {
+    height: 34px;
+    padding: 0 0.55rem;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.memory-tab:hover,
+.memory-tab.is-active {
+    color: var(--text-primary);
+}
+
+.memory-tab.is-active {
+    border-bottom-color: var(--primary);
+}
+
 .memory-search-input,
 .memory-filter-select {
     height: 34px;
@@ -29,6 +57,11 @@
 
 .memory-refresh-btn {
     width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+}
+
+.memory-generate-btn {
     height: 34px;
     flex: 0 0 auto;
 }
@@ -181,6 +214,171 @@
     grid-template-columns: minmax(280px, 0.82fr) minmax(340px, 1.18fr);
     gap: 1rem;
     min-height: max(360px, calc(100vh - 324px));
+}
+
+.memory-draft-shell {
+    display: grid;
+    grid-template-columns: minmax(300px, 0.78fr) minmax(420px, 1.22fr);
+    gap: 1rem;
+    min-height: max(420px, calc(100vh - 250px));
+}
+
+.memory-draft-list,
+.memory-draft-detail {
+    min-width: 0;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+}
+
+.memory-draft-row {
+    display: grid;
+    width: 100%;
+    gap: 0.4rem;
+    padding: 0.82rem 0.9rem;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+}
+
+.memory-draft-row:last-child {
+    border-bottom: 0;
+}
+
+.memory-draft-row:hover,
+.memory-draft-row.is-selected {
+    background: var(--bg-hover);
+}
+
+.memory-draft-row.is-selected {
+    box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.memory-draft-empty {
+    display: grid;
+    min-height: 260px;
+    place-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+}
+
+.memory-draft-editor {
+    display: grid;
+    gap: 1rem;
+    padding: 1rem;
+}
+
+.memory-draft-editor-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.memory-draft-editor-head h4 {
+    margin: 0;
+    overflow: hidden;
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memory-draft-editor-head p {
+    margin: 0.18rem 0 0;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.memory-draft-editor-head span {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.memory-draft-form-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(160px, 0.42fr);
+    gap: 0.75rem;
+}
+
+.memory-draft-field,
+.memory-draft-form-grid label {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.memory-draft-field input,
+.memory-draft-field textarea,
+.memory-draft-form-grid input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.memory-draft-field input,
+.memory-draft-form-grid input {
+    height: 34px;
+    padding: 0 0.65rem;
+}
+
+.memory-draft-field textarea {
+    min-height: 260px;
+    padding: 0.7rem;
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.memory-draft-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.memory-draft-validation {
+    display: grid;
+    gap: 0.45rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    border-radius: 8px;
+    padding: 0.65rem;
+    background: var(--bg-surface-muted);
+}
+
+.memory-draft-validation.is-empty {
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+.memory-draft-validation-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.32fr) minmax(0, 1fr);
+    gap: 0.65rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.memory-draft-validation-row strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.memory-draft-validation-row.is-error strong {
+    color: var(--danger);
 }
 
 .memory-list {
@@ -358,61 +556,6 @@
     color: var(--text-secondary);
 }
 
-.memory-evolution-panel {
-    display: grid;
-    gap: 0.75rem;
-    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
-    border-radius: 8px;
-    padding: 0.85rem;
-    background: var(--bg-surface-muted);
-}
-
-.memory-evolution-fields {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.65rem;
-}
-
-.memory-evolution-fields label {
-    display: grid;
-    gap: 0.32rem;
-    min-width: 0;
-    color: var(--text-secondary);
-    font-size: 0.76rem;
-}
-
-.memory-evolution-fields input {
-    min-width: 0;
-    height: 34px;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 0 0.62rem;
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    font: inherit;
-}
-
-.memory-evolution-actions {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-}
-
-.memory-evolution-actions .primary-btn,
-.memory-evolution-actions .secondary-btn {
-    min-height: 32px;
-}
-
-.memory-evolution-status {
-    color: var(--text-secondary);
-    font-size: 0.78rem;
-    line-height: 1.4;
-}
-
-.memory-evolution-status.is-error {
-    color: var(--danger);
-}
-
 .agent-panel-memory-list {
     display: grid;
     gap: 0.55rem;
@@ -497,8 +640,15 @@
         min-height: auto;
     }
 
+    .memory-draft-shell {
+        grid-template-columns: 1fr;
+        min-height: auto;
+    }
+
     .memory-list,
-    .memory-detail {
+    .memory-detail,
+    .memory-draft-list,
+    .memory-draft-detail {
         max-height: none;
     }
 
@@ -523,7 +673,8 @@
         grid-template-columns: 1fr;
     }
 
-    .memory-evolution-fields {
+    .memory-draft-form-grid,
+    .memory-draft-validation-row {
         grid-template-columns: 1fr;
     }
 }

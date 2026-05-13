@@ -14,6 +14,8 @@ from relay_teams.interfaces.cli.memories_cli import (
     _render_evolution_table,
     _render_memories_table,
     _render_search_table,
+    _render_skill_draft_detail,
+    _render_skill_drafts_table,
     _require_object_response,
     build_memories_app,
 )
@@ -88,6 +90,29 @@ class _FakeRequestJson:
             }
         if method == "DELETE":
             return {"ok": True}
+        if "skill-drafts" in path:
+            draft = {
+                "id": "msd-001",
+                "status": "draft",
+                "draft_kind": "skill",
+                "runtime_name": "workspace-memory",
+                "description": "Use workspace memory.",
+                "instructions": "Use the captured workspace memory.",
+                "source_memory_count": 2,
+                "updated_at": "2026-01-01T00:00:00Z",
+                "validation_messages": [],
+            }
+            if path.endswith(":apply"):
+                return {
+                    "draft": draft,
+                    "skill_id": "workspace-memory",
+                    "ref": "workspace-memory",
+                }
+            if method == "GET" and normalized_path.endswith("/skill-drafts"):
+                return {"items": [draft], "total_count": 1, "offset": 0}
+            if method == "POST" and path.endswith(":generate"):
+                return {"items": [draft], "source_memory_count": 2}
+            return draft
         if normalized_path.endswith("/consolidate"):
             return {
                 "source_entry_count": 3,
@@ -188,6 +213,7 @@ class TestCommandRegistration:
             "search",
             "consolidate",
             "evolve",
+            "skill-drafts",
         ):
             assert cmd in output
 
@@ -288,6 +314,234 @@ class TestGetCommand:
         assert r.exit_code == 0
         data = json.loads(r.output)
         assert data["id"] == "mem-det01"
+
+
+class TestSkillDraftCommands:
+    def test_generate_skill_drafts_table_output(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "generate", "--workspace-id", "ws-1"],
+        )
+
+        assert result.exit_code == 0
+        assert "msd-001" in result.output
+        assert fake_req.calls[0][1] == "POST"
+        assert fake_req.calls[0][2] == "/api/memories/skill-drafts:generate"
+
+    def test_generate_skill_drafts_json_passes_filters(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            [
+                "skill-drafts",
+                "generate",
+                "--workspace-id",
+                " ws-1 ",
+                "--kind",
+                "sop_skill",
+                "--query",
+                " review ",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["source_memory_count"] == 2
+        body = fake_req.calls[0][3]
+        assert isinstance(body, dict)
+        assert body["workspace_id"] == "ws-1"
+        assert body["draft_kind"] == "sop_skill"
+        assert body["text_query"] == "review"
+
+    def test_cross_workspace_generate_passes_workspace_ids(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            [
+                "skill-drafts",
+                "generate",
+                "--cross-workspace",
+                "--workspace-id",
+                "ws-1",
+            ],
+        )
+
+        assert result.exit_code == 0
+        body = fake_req.calls[0][3]
+        assert isinstance(body, dict)
+        assert body["scope_kind"] == "cross_workspace"
+        assert body["workspace_ids"] == ["ws-1"]
+        assert "workspace_id" not in body
+
+    def test_list_skill_drafts_table_passes_status_filter(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            [
+                "skill-drafts",
+                "list",
+                "--workspace-id",
+                "ws-1",
+                "--status",
+                "validated",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "msd-001" in result.output
+        assert "workspace_id=ws-1" in fake_req.calls[0][2]
+        assert "status=validated" in fake_req.calls[0][2]
+
+    def test_list_skill_drafts_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "list", "--workspace-id", "ws-1", "--format", "json"],
+        )
+
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["total_count"] == 1
+
+    def test_get_skill_draft_table_and_json_output(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        table_result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "get", "--draft-id", "msd-001"],
+        )
+        json_result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "get", "--draft-id", "msd-001", "--format", "json"],
+        )
+
+        assert table_result.exit_code == 0
+        assert "Runtime Name" in table_result.output
+        assert json_result.exit_code == 0
+        assert json.loads(json_result.output)["id"] == "msd-001"
+        assert fake_req.calls[-1][2] == "/api/memories/skill-drafts/msd-001"
+
+    def test_update_skill_draft_json_passes_fields(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            [
+                "skill-drafts",
+                "update",
+                "--draft-id",
+                "msd-001",
+                "--runtime-name",
+                "workspace-memory",
+                "--description",
+                "Updated description",
+                "--instructions",
+                "Updated instructions",
+                "--status",
+                "rejected",
+                "--format",
+                "json",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["runtime_name"] == "workspace-memory"
+        body = fake_req.calls[0][3]
+        assert isinstance(body, dict)
+        assert body["description"] == "Updated description"
+        assert body["instructions"] == "Updated instructions"
+        assert body["status"] == "rejected"
+
+    def test_validate_skill_draft_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "validate", "--draft-id", "msd-001", "--format", "json"],
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["id"] == "msd-001"
+
+    def test_apply_skill_draft_json_output(self) -> None:
+        app_obj, _, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "apply", "--draft-id", "msd-001", "--format", "json"],
+        )
+
+        assert result.exit_code == 0
+        assert json.loads(result.output)["ref"] == "workspace-memory"
+
+    def test_validate_and_apply_skill_draft(self) -> None:
+        app_obj, fake_req, _ = _build_app()
+        from typer.testing import CliRunner as _CR
+
+        validate_result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "validate", "--draft-id", "msd-001"],
+        )
+        apply_result = _CR().invoke(
+            app_obj,
+            ["skill-drafts", "apply", "--draft-id", "msd-001"],
+        )
+
+        assert validate_result.exit_code == 0
+        assert apply_result.exit_code == 0
+        assert "workspace-memory" in apply_result.output
+        assert fake_req.calls[-1][2] == "/api/memories/skill-drafts/msd-001:apply"
+
+    def test_render_empty_skill_draft_tables(self) -> None:
+        assert _render_skill_drafts_table({"items": []}) == "No skill drafts found."
+        assert (
+            _render_skill_drafts_table(
+                {"items": [], "error_message": "No eligible memory entries found"}
+            )
+            == "No skill drafts. No eligible memory entries found"
+        )
+
+    def test_render_skill_draft_detail_with_validation_messages(self) -> None:
+        detail = _render_skill_draft_detail(
+            {
+                "id": "msd-001",
+                "status": "draft",
+                "draft_kind": "skill",
+                "runtime_name": "workspace-memory",
+                "description": "Use workspace memory.",
+                "applied_ref": None,
+                "updated_at": "2026-01-01T00:00:00Z",
+                "instructions": "Use memory.",
+                "validation_messages": [
+                    {
+                        "severity": "error",
+                        "code": "missing_description",
+                        "message": "description is required",
+                    },
+                    "ignored",
+                ],
+            }
+        )
+
+        assert "Validation:" in detail
+        assert "missing_description" in detail
 
 
 # ---------------------------------------------------------------------------

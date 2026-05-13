@@ -100,6 +100,91 @@ export async function applyMemoryEvolutionDraft(workspaceId, draftId, payload = 
     );
 }
 
+function buildSkillDraftQuery(filters = {}) {
+    const params = new URLSearchParams();
+    appendParam(params, 'scope_kind', filters.scopeKind || filters.scope_kind);
+    appendParam(params, 'workspace_id', filters.workspaceId || filters.workspace_id);
+    appendParam(params, 'status', filters.status);
+    appendParam(params, 'draft_kind', filters.draftKind || filters.draft_kind);
+    appendParam(params, 'text_query', filters.textQuery || filters.text_query);
+    appendParam(params, 'limit', filters.limit);
+    appendParam(params, 'offset', filters.offset);
+    return params.toString();
+}
+
+export async function generateMemorySkillDrafts(payload, options = {}) {
+    invalidateManagedRequests('memory-skill-drafts:');
+    return requestJson(
+        '/api/memories/skill-drafts:generate',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: options.signal,
+        },
+        'Failed to generate memory skill drafts',
+    );
+}
+
+export async function fetchMemorySkillDrafts(filters = {}, options = {}) {
+    const query = buildSkillDraftQuery(filters);
+    const url = query ? `/api/memories/skill-drafts?${query}` : '/api/memories/skill-drafts';
+    return requestJsonManaged(
+        `memory-skill-drafts:list:${query}`,
+        url,
+        { signal: options.signal },
+        'Failed to fetch memory skill drafts',
+        { ttlMs: 700, lane: 'heavy', priority: options.priority },
+    );
+}
+
+export async function getMemorySkillDraft(draftId, options = {}) {
+    const safeDraftId = String(draftId || '').trim();
+    return requestJsonManaged(
+        `memory-skill-drafts:entry:${safeDraftId}`,
+        `/api/memories/skill-drafts/${encodeURIComponent(safeDraftId)}`,
+        { signal: options.signal },
+        'Failed to fetch memory skill draft',
+        { ttlMs: 900, lane: 'heavy', priority: options.priority },
+    );
+}
+
+export async function updateMemorySkillDraft(draftId, payload, options = {}) {
+    const safeDraftId = String(draftId || '').trim();
+    invalidateManagedRequests('memory-skill-drafts:');
+    return requestJson(
+        `/api/memories/skill-drafts/${encodeURIComponent(safeDraftId)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: options.signal,
+        },
+        'Failed to update memory skill draft',
+    );
+}
+
+export async function validateMemorySkillDraft(draftId, options = {}) {
+    const safeDraftId = String(draftId || '').trim();
+    invalidateManagedRequests('memory-skill-drafts:');
+    return requestJson(
+        `/api/memories/skill-drafts/${encodeURIComponent(safeDraftId)}:validate`,
+        { method: 'POST', signal: options.signal },
+        'Failed to validate memory skill draft',
+    );
+}
+
+export async function applyMemorySkillDraft(draftId, options = {}) {
+    const safeDraftId = String(draftId || '').trim();
+    invalidateManagedRequests('memory-skill-drafts:');
+    return requestJson(
+        `/api/memories/skill-drafts/${encodeURIComponent(safeDraftId)}:apply`,
+        { method: 'POST', signal: options.signal },
+        'Failed to apply memory skill draft',
+    );
+}
+
 export function invalidateMemoryCache() {
     invalidateManagedRequests('memories:');
+    invalidateManagedRequests('memory-skill-drafts:');
 }
