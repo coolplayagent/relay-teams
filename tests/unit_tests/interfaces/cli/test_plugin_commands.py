@@ -507,6 +507,54 @@ def test_plugin_install_clawhub_override_flags(
     )
 
 
+def test_plugin_update_clawhub_override_flags(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured_policy: dict[str, PluginMarketplaceInstallPolicy | None] = {}
+
+    def fake_update_plugin(
+        self,
+        *,
+        name: str,
+        scope: PluginScope,
+        version: str | None = None,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> SimpleNamespace:
+        _ = self
+        _ = name
+        _ = version
+        captured_policy["value"] = install_policy
+        return SimpleNamespace(name="quality", scope=scope, version="1.0.0")
+
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(tmp_path / "app"))
+    monkeypatch.setattr(
+        "relay_teams.plugins.config_manager.PluginConfigManager.update_plugin",
+        fake_update_plugin,
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        [
+            "plugin",
+            "update",
+            "quality",
+            "--allow-community-plugins",
+            "--allow-executes-code",
+            "--allow-missing-digest",
+            "--allow-unclean-scan",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured_policy["value"] == PluginMarketplaceInstallPolicy(
+        allow_community_plugins=True,
+        allow_executes_code=True,
+        require_digest=False,
+        allow_unclean_scan=True,
+    )
+
+
 def test_plugin_install_clawhub_shorthand_strips_prefix_with_explicit_marketplace(
     monkeypatch,
     tmp_path: Path,

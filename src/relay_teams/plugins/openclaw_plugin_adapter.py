@@ -37,7 +37,11 @@ def adapt_openclaw_plugin_tree(
         )
         return
     raw_manifest = json.loads(openclaw_manifest_path.read_text(encoding="utf-8-sig"))
-    manifest = _relay_manifest_from_openclaw(raw_manifest, plugin_root=plugin_root)
+    manifest = _relay_manifest_from_openclaw(
+        raw_manifest,
+        plugin_root=plugin_root,
+        source_version=source_version,
+    )
     if _native_only_openclaw_plugin(raw_manifest=raw_manifest, manifest=manifest):
         raise ValueError(
             "OpenClaw native runtime extension plugins are not supported unless "
@@ -75,6 +79,7 @@ def _relay_manifest_from_openclaw(
     raw_manifest: object,
     *,
     plugin_root: Path,
+    source_version: str | None,
 ) -> dict[str, object]:
     raw = _string_key_mapping(raw_manifest)
     name = _safe_plugin_name(
@@ -85,7 +90,8 @@ def _relay_manifest_from_openclaw(
     )
     manifest: dict[str, object] = {
         "name": name,
-        "version": _string_field(raw, "version") or "local",
+        "version": _string_field(raw, "version")
+        or _static_manifest_version(source_version),
         "description": _string_field(raw, "description")
         or _string_field(raw, "displayName"),
     }

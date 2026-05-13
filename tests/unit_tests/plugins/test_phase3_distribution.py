@@ -2740,6 +2740,27 @@ def test_openclaw_adapter_maps_config_and_static_roots(tmp_path: Path) -> None:
     assert manifest["user_config"]["token"]["sensitive"] is True
 
 
+def test_openclaw_adapter_uses_source_version_when_manifest_omits_version(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "mapped"
+    (plugin_root / "skills").mkdir(parents=True)
+    (plugin_root / "openclaw.plugin.json").write_text(
+        json.dumps({"id": "mapped/runtime"}),
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="3.4.5",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["version"] == "3.4.5"
+
+
 def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
     tmp_path: Path,
 ) -> None:

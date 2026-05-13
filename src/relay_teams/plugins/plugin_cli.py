@@ -278,12 +278,48 @@ def plugin_update(
         "--version",
         help="Version to install when updating marketplace plugins.",
     ),
+    allow_community_plugins: bool = typer.Option(
+        False,
+        "--allow-community-plugins",
+        help="Allow ClawHub community or non-official plugin channels for this update.",
+    ),
+    allow_executes_code: bool = typer.Option(
+        False,
+        "--allow-executes-code",
+        help="Allow ClawHub packages that declare code execution for this update.",
+    ),
+    allow_missing_digest: bool = typer.Option(
+        False,
+        "--allow-missing-digest",
+        help="Allow ClawHub packages without artifact digest metadata for this update.",
+    ),
+    allow_unclean_scan: bool = typer.Option(
+        False,
+        "--allow-unclean-scan",
+        help="Allow ClawHub packages without a clean scan for this update.",
+    ),
 ) -> None:
     try:
+        install_policy = None
+        if (
+            allow_community_plugins
+            or allow_executes_code
+            or allow_missing_digest
+            or allow_unclean_scan
+        ):
+            install_policy = load_plugin_marketplace_install_policy(
+                get_app_config_dir()
+            ).with_overrides(
+                allow_community_plugins=allow_community_plugins,
+                allow_executes_code=allow_executes_code,
+                allow_missing_digest=allow_missing_digest,
+                allow_unclean_scan=allow_unclean_scan,
+            )
         record = _build_manager().update_plugin(
             name=name,
             scope=_to_model_scope(scope),
             version=version,
+            install_policy=install_policy,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
