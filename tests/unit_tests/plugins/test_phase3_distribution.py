@@ -2574,6 +2574,85 @@ def test_clawhub_install_policy_leaves_unrelated_versions_unchanged() -> None:
     )
 
 
+def test_clawhub_marketplace_service_preserves_paged_request_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_index(
+        self: clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        *,
+        source: PluginMarketplaceSource,
+        limit: int = 100,
+        cursor: str = "",
+        fetch_all: bool = True,
+        include_versions: bool = False,
+    ) -> PluginMarketplaceIndex:
+        _ = (self, source, limit, include_versions)
+        captured["cursor"] = cursor
+        captured["fetch_all"] = fetch_all
+        return PluginMarketplaceIndex(plugins=())
+
+    monkeypatch.setattr(
+        clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        "load_index",
+        fake_load_index,
+    )
+
+    PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=tmp_path / "app",
+        cursor='{"code-plugin":"next"}',
+    )
+
+    assert captured == {
+        "cursor": '{"code-plugin":"next"}',
+        "fetch_all": False,
+    }
+
+
+def test_clawhub_marketplace_service_preserves_partial_page_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_index(
+        self: clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        *,
+        source: PluginMarketplaceSource,
+        limit: int = 100,
+        cursor: str = "",
+        fetch_all: bool = True,
+        include_versions: bool = False,
+    ) -> PluginMarketplaceIndex:
+        _ = (self, source, limit, include_versions)
+        captured["cursor"] = cursor
+        captured["fetch_all"] = fetch_all
+        return PluginMarketplaceIndex(plugins=())
+
+    monkeypatch.setattr(
+        clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        "load_index",
+        fake_load_index,
+    )
+
+    PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=tmp_path / "app",
+        fetch_all=False,
+    )
+
+    assert captured == {"cursor": "", "fetch_all": False}
+
+
 def test_marketplace_install_rejects_clawhub_policy_block(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

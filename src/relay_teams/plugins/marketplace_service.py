@@ -146,6 +146,7 @@ class PluginMarketplaceService:
 
 
 def _clawhub_full_load_options(*, cursor: str, fetch_all: bool) -> tuple[str, bool]:
-    if cursor.strip() or not fetch_all:
-        return "", True
-    return cursor, fetch_all
+    normalized_cursor = cursor.strip()
+    if normalized_cursor:
+        return normalized_cursor, False
+    return "", fetch_all
