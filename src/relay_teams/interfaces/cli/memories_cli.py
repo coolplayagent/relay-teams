@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 import json
+from urllib.parse import urlencode
 
 import typer
 
@@ -63,11 +64,12 @@ def build_memories_app(
             params["scope"] = scope
         if role_id is not None:
             params["role_id"] = role_id
+        path = _path_with_query(f"/api/workspaces/{workspace_id}/memories", params)
         payload = request_json(
             base_url,
             "GET",
-            f"/api/workspaces/{workspace_id}/memories",
-            params if params else None,
+            path,
+            None,
         )
         response = _require_object_response(
             payload, f"/api/workspaces/{workspace_id}/memories"
@@ -269,6 +271,195 @@ def build_memories_app(
             f"{response.get('source_entry_count', 0)} source entries examined"
         )
 
+    evolve_app = typer.Typer(
+        no_args_is_help=True,
+        pretty_exceptions_enable=False,
+        help="Promote Memory Bank entries into reviewable capability drafts.",
+    )
+
+    @evolve_app.command("create")
+    def create_evolution_draft(
+        workspace_id: str = typer.Option(..., "--workspace-id"),
+        memory_ids: list[str] = typer.Option(..., "--memory-id"),
+        target: str = typer.Option("sop_skill", "--target"),
+        skill_id: str = typer.Option(..., "--skill-id"),
+        runtime_name: str = typer.Option(..., "--runtime-name"),
+        description: str = typer.Option("", "--description"),
+        objective: str = typer.Option("", "--objective"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        body: dict[str, object] = {
+            "workspace_id": workspace_id,
+            "source_memory_ids": memory_ids,
+            "target": target,
+            "skill_id": skill_id,
+            "runtime_name": runtime_name,
+            "description": description,
+            "objective": objective,
+        }
+        payload = request_json(
+            base_url,
+            "POST",
+            f"/api/workspaces/{workspace_id}/memories/evolutions",
+            body,
+        )
+        response = _require_object_response(
+            payload, f"/api/workspaces/{workspace_id}/memories/evolutions"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(f"Created memory evolution draft: {response.get('draft_id', '-')}")
+
+    @evolve_app.command("list")
+    def list_evolution_drafts(
+        workspace_id: str = typer.Option(..., "--workspace-id"),
+        target: str | None = typer.Option(None, "--target"),
+        status: str | None = typer.Option(None, "--status"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        params: dict[str, object] = {}
+        if target is not None:
+            params["target"] = target
+        if status is not None:
+            params["status"] = status
+        path = _path_with_query(
+            f"/api/workspaces/{workspace_id}/memories/evolutions",
+            params,
+        )
+        payload = request_json(
+            base_url,
+            "GET",
+            path,
+            None,
+        )
+        response = _require_object_response(
+            payload, f"/api/workspaces/{workspace_id}/memories/evolutions"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_evolution_table(response))
+
+    @evolve_app.command("apply")
+    def apply_evolution_draft(
+        workspace_id: str = typer.Option(..., "--workspace-id"),
+        draft_id: str = typer.Option(..., "--draft-id"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        payload = request_json(
+            base_url,
+            "POST",
+            f"/api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:apply",
+            {},
+        )
+        response = _require_object_response(
+            payload,
+            f"/api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:apply",
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(
+            "Applied memory evolution draft: "
+            f"{response.get('draft_id', '-')} -> {response.get('applied_skill_ref', '-')}"
+        )
+
+    @evolve_app.command("reject")
+    def reject_evolution_draft(
+        workspace_id: str = typer.Option(..., "--workspace-id"),
+        draft_id: str = typer.Option(..., "--draft-id"),
+        reason: str = typer.Option("", "--reason"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        payload = request_json(
+            base_url,
+            "POST",
+            f"/api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject",
+            {"reason": reason},
+        )
+        response = _require_object_response(
+            payload,
+            f"/api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject",
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(f"Rejected memory evolution draft: {response.get('draft_id', '-')}")
+
+    memories_app.add_typer(evolve_app, name="evolve")
     return memories_app
 
 
@@ -309,6 +500,12 @@ def _render_memories_table(payload: dict[str, object]) -> str:
             + score
         )
     return "\n".join(lines)
+
+
+def _path_with_query(path: str, params: dict[str, object]) -> str:
+    if not params:
+        return path
+    return f"{path}?{urlencode(params)}"
 
 
 def _render_entry_detail(payload: dict[str, object]) -> str:
@@ -364,6 +561,43 @@ def _render_search_table(payload: dict[str, object]) -> str:
         snippet = item.get("snippet")
         if isinstance(snippet, str) and snippet:
             lines.append(f"       {snippet[:100]}")
+    return "\n".join(lines)
+
+
+def _render_evolution_table(payload: dict[str, object]) -> str:
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return "No memory evolution drafts found."
+
+    raw_total = payload.get("total_count", len(items))
+    total_count = (
+        int(str(raw_total)) if isinstance(raw_total, (int, float)) else len(items)
+    )
+    lines = [
+        f"Total: {total_count}",
+        "",
+        "Draft ID".ljust(34)
+        + "Status".ljust(12)
+        + "Target".ljust(12)
+        + "Runtime".ljust(26)
+        + "Skill",
+        "-" * 100,
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        draft_id = str(item.get("draft_id", ""))[:32]
+        status = str(item.get("status", ""))[:10]
+        target = str(item.get("target", ""))[:10]
+        runtime_name = str(item.get("runtime_name", ""))[:24]
+        skill_id = str(item.get("skill_id", ""))[:24]
+        lines.append(
+            draft_id.ljust(34)
+            + status.ljust(12)
+            + target.ljust(12)
+            + runtime_name.ljust(26)
+            + skill_id
+        )
     return "\n".join(lines)
 
 

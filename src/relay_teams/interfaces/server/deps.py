@@ -48,6 +48,7 @@ from relay_teams.mcp.mcp_service import McpService
 from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.media import MediaAssetService
 from relay_teams.memory.service import MemoryBankService
+from relay_teams.memory.evolution_service import MemoryEvolutionService
 from relay_teams.metrics import MetricsService
 from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
 from relay_teams.net.github_connectivity import (
@@ -352,3 +353,7 @@ def get_artifact_query_service(request: Request) -> ArtifactQueryService:
 
 def get_memory_bank_service(request: Request) -> MemoryBankService:
     return get_container(request).memory_bank_service
+
+
+def get_memory_evolution_service(request: Request) -> MemoryEvolutionService:
+    return get_container(request).memory_evolution_service

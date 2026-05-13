@@ -9,12 +9,17 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from relay_teams.interfaces.server.routers.memories import router
+from relay_teams.memory.evolution_service import MemoryEvolutionConflictError
 from relay_teams.memory.models import (
     MemoryContent,
     MemoryConsolidationResult,
     MemoryEntry,
     MemoryEntryKind,
     MemoryEntryStatus,
+    MemoryEvolutionDraft,
+    MemoryEvolutionDraftQueryResult,
+    MemoryEvolutionStatus,
+    MemoryEvolutionTarget,
     MemoryQueryResult,
     MemoryScope,
     MemorySearchResult,
@@ -57,15 +62,35 @@ def _build_client(service: MemoryBankService) -> TestClient:
     return TestClient(app)
 
 
+def _make_draft(**overrides: object) -> MemoryEvolutionDraft:
+    now = datetime.now(tz=timezone.utc)
+    draft = MemoryEvolutionDraft(
+        draft_id="mem-evo-test001",
+        workspace_id="ws-1",
+        source_memory_ids=("mem-test001",),
+        target=MemoryEvolutionTarget.SOP_SKILL,
+        status=MemoryEvolutionStatus.DRAFT,
+        skill_id="test-sop",
+        runtime_name="test-sop",
+        description="Test SOP",
+        instructions="# test-sop\n\n## Purpose\nTest",
+        created_at=now,
+        updated_at=now,
+    )
+    if overrides:
+        draft = draft.model_copy(update=overrides)
+    return draft
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
 
 class TestRouteRegistration:
-    def test_router_has_nine_routes(self) -> None:
+    def test_router_has_fourteen_routes(self) -> None:
         routes = [r for r in router.routes if isinstance(r, APIRoute)]
-        assert len(routes) == 9
+        assert len(routes) == 14
 
     def test_router_paths_match_spec(self) -> None:
         paths = {r.path for r in router.routes if isinstance(r, APIRoute)}
@@ -73,6 +98,10 @@ class TestRouteRegistration:
         assert "/memories" in paths
         assert "/memories/search" in paths
         assert f"{wid}/memories" in paths
+        assert f"{wid}/memories/evolutions" in paths
+        assert f"{wid}/memories/evolutions/{{draft_id}}" in paths
+        assert f"{wid}/memories/evolutions/{{draft_id}}:apply" in paths
+        assert f"{wid}/memories/evolutions/{{draft_id}}:reject" in paths
         assert f"{wid}/memories/{{memory_id}}" in paths
         assert f"{wid}/memories/consolidate" in paths
         assert f"{wid}/memories/search" in paths
@@ -87,6 +116,15 @@ class TestRouteRegistration:
         assert "POST" in route_map.get("/memories/search", set())
         assert "GET" in route_map.get(f"{wid}/memories", set())
         assert "POST" in route_map.get(f"{wid}/memories", set())
+        assert "GET" in route_map.get(f"{wid}/memories/evolutions", set())
+        assert "POST" in route_map.get(f"{wid}/memories/evolutions", set())
+        assert "GET" in route_map.get(f"{wid}/memories/evolutions/{{draft_id}}", set())
+        assert "POST" in route_map.get(
+            f"{wid}/memories/evolutions/{{draft_id}}:apply", set()
+        )
+        assert "POST" in route_map.get(
+            f"{wid}/memories/evolutions/{{draft_id}}:reject", set()
+        )
         assert "GET" in route_map.get(f"{wid}/memories/{{memory_id}}", set())
         assert "PUT" in route_map.get(f"{wid}/memories/{{memory_id}}", set())
         assert "DELETE" in route_map.get(f"{wid}/memories/{{memory_id}}", set())
@@ -126,16 +164,58 @@ class _FakeMemoryBankService:
         )
 
 
+class _FakeMemoryEvolutionService:
+    def __init__(self) -> None:
+        draft = _make_draft()
+        self.create_draft_async: AsyncMock = AsyncMock(return_value=draft)
+        self.list_drafts_async: AsyncMock = AsyncMock(
+            return_value=MemoryEvolutionDraftQueryResult(
+                items=(draft,),
+                total_count=1,
+                offset=0,
+                limit=20,
+            )
+        )
+        self.get_draft_async: AsyncMock = AsyncMock(return_value=draft)
+        self.apply_draft_async: AsyncMock = AsyncMock(
+            return_value=draft.model_copy(
+                update={
+                    "status": MemoryEvolutionStatus.APPLIED,
+                    "applied_skill_ref": "test-sop",
+                }
+            )
+        )
+        self.reject_draft_async: AsyncMock = AsyncMock(
+            return_value=draft.model_copy(
+                update={"status": MemoryEvolutionStatus.REJECTED}
+            )
+        )
+
+
 def _client() -> tuple[TestClient, _FakeMemoryBankService]:
+    client, svc, _ = _client_with_evolution()
+    return client, svc
+
+
+def _client_with_evolution() -> tuple[
+    TestClient,
+    _FakeMemoryBankService,
+    _FakeMemoryEvolutionService,
+]:
     svc = _FakeMemoryBankService()
+    evolution_svc = _FakeMemoryEvolutionService()
     app = FastAPI()
     app.include_router(router, prefix="/api")
 
     # Override the DI dependency
-    from relay_teams.interfaces.server.deps import get_memory_bank_service
+    from relay_teams.interfaces.server.deps import (
+        get_memory_bank_service,
+        get_memory_evolution_service,
+    )
 
     app.dependency_overrides[get_memory_bank_service] = lambda: svc
-    return TestClient(app), svc
+    app.dependency_overrides[get_memory_evolution_service] = lambda: evolution_svc
+    return TestClient(app), svc, evolution_svc
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +373,248 @@ class TestCreateMemory:
             },
         )
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Memory evolution draft endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryEvolutionDrafts:
+    def test_create_evolution_draft_returns_201(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "workspace_id": "ws-original",
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "test-sop",
+            },
+        )
+        assert response.status_code == 201
+        evolution_svc.create_draft_async.assert_awaited_once()
+        call_req = evolution_svc.create_draft_async.call_args[0][0]
+        assert call_req.workspace_id == "ws-1"
+
+    def test_create_evolution_draft_allows_path_derived_workspace(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 201
+        call_req = evolution_svc.create_draft_async.call_args[0][0]
+        assert call_req.workspace_id == "ws-1"
+
+    def test_create_evolution_draft_rejects_invalid_skill_id(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "   ",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 422
+        evolution_svc.create_draft_async.assert_not_awaited()
+
+    def test_create_evolution_draft_rejects_invalid_runtime_name(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "source_memory_ids": ["mem-test001"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "bad/runtime",
+            },
+        )
+
+        assert response.status_code == 422
+        evolution_svc.create_draft_async.assert_not_awaited()
+
+    def test_create_evolution_draft_returns_400_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.create_draft_async = AsyncMock(
+            side_effect=ValueError("Unknown source memory entry")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions",
+            json={
+                "workspace_id": "ws-original",
+                "source_memory_ids": ["mem-missing"],
+                "target": "sop_skill",
+                "skill_id": "test-sop",
+                "runtime_name": "test-sop",
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Unknown source memory entry" in response.json()["detail"]
+
+    def test_list_evolution_drafts_returns_200(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.get(
+            "/api/workspaces/ws-1/memories/evolutions",
+            params={"status": "draft", "target": "sop_skill"},
+        )
+        assert response.status_code == 200
+        evolution_svc.list_drafts_async.assert_awaited_once()
+        call_req = evolution_svc.list_drafts_async.call_args[0][0]
+        assert call_req.status == MemoryEvolutionStatus.DRAFT
+        assert call_req.target == MemoryEvolutionTarget.SOP_SKILL
+
+    def test_get_evolution_draft_returns_200(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.get(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001"
+        )
+        assert response.status_code == 200
+        evolution_svc.get_draft_async.assert_awaited_once_with(
+            "ws-1", "mem-evo-test001"
+        )
+
+    def test_get_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.get_draft_async = AsyncMock(return_value=None)
+
+        response = client.get(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing"
+        )
+
+        assert response.status_code == 404
+
+    def test_apply_evolution_draft_returns_200(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply",
+            json={},
+        )
+        assert response.status_code == 200
+        evolution_svc.apply_draft_async.assert_awaited_once()
+        assert response.json()["status"] == "applied"
+
+    def test_apply_evolution_draft_accepts_empty_body(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply"
+        )
+
+        assert response.status_code == 200
+        call_req = evolution_svc.apply_draft_async.call_args[0][2]
+        assert call_req.skill_id is None
+
+    def test_apply_evolution_draft_returns_409_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(
+            side_effect=MemoryEvolutionConflictError("not applicable")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply",
+            json={},
+        )
+
+        assert response.status_code == 409
+        assert "not applicable" in response.json()["detail"]
+
+    def test_apply_evolution_draft_returns_400_for_invalid_payload(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(
+            side_effect=ValueError("instructions must be non-empty")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:apply",
+            json={},
+        )
+
+        assert response.status_code == 400
+        assert "instructions must be non-empty" in response.json()["detail"]
+
+    def test_apply_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.apply_draft_async = AsyncMock(return_value=None)
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing:apply",
+            json={},
+        )
+
+        assert response.status_code == 404
+
+    def test_reject_evolution_draft_returns_200(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject",
+            json={"reason": "duplicate"},
+        )
+        assert response.status_code == 200
+        evolution_svc.reject_draft_async.assert_awaited_once()
+        assert response.json()["status"] == "rejected"
+
+    def test_reject_evolution_draft_accepts_empty_body(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject"
+        )
+
+        assert response.status_code == 200
+        call_req = evolution_svc.reject_draft_async.call_args[0][2]
+        assert call_req.reason == ""
+
+    def test_reject_evolution_draft_returns_409_for_service_error(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(
+            side_effect=MemoryEvolutionConflictError("not rejectable")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject",
+            json={},
+        )
+
+        assert response.status_code == 409
+        assert "not rejectable" in response.json()["detail"]
+
+    def test_reject_evolution_draft_returns_400_for_invalid_payload(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(
+            side_effect=ValueError("invalid rejection")
+        )
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-test001:reject",
+            json={},
+        )
+
+        assert response.status_code == 400
+        assert "invalid rejection" in response.json()["detail"]
+
+    def test_reject_evolution_draft_returns_404_when_missing(self) -> None:
+        client, _, evolution_svc = _client_with_evolution()
+        evolution_svc.reject_draft_async = AsyncMock(return_value=None)
+
+        response = client.post(
+            "/api/workspaces/ws-1/memories/evolutions/mem-evo-missing:reject",
+            json={},
+        )
+
+        assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------

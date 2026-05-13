@@ -11,7 +11,7 @@
 Memory Bank is the durable memory architecture for Relay Teams. It captures
 task results, manual notes, and condensed session context as typed, tagged,
 versioned entries in `memory_entries`, then makes those entries available
-through search and prompt injection.
+through search, prompt injection, and governed capability evolution.
 
 The system is organized as three memory tiers:
 
@@ -20,7 +20,7 @@ capture sources
 -> working memory
 -> medium-term memory
 -> persistent memory
--> search and prompt injection
+-> search, prompt injection, and reviewed skill drafts
 ```
 
 This tiered shape lets short-lived execution observations decay or expire
@@ -45,8 +45,9 @@ keep memory lifecycle explicit.
 
 Entries move through the architecture by consolidation. Runtime task completion
 creates working memory, consolidation can promote useful information into
-medium-term or persistent memory, and retrieval selects active entries for
-Memory page search and `## Project Memory` prompt injection.
+medium-term or persistent memory, retrieval selects active entries for
+Memory page search and `## Project Memory` prompt injection, and selected
+entries can be promoted into reviewable skill or SOP-skill drafts.
 
 ## Goals
 
@@ -54,6 +55,8 @@ Memory page search and `## Project Memory` prompt injection.
 - Support Working, Medium-term, and Persistent memory tiers.
 - Provide query, search, create, update, delete, and consolidation APIs.
 - Inject relevant Memory Bank entries into role prompts as `## Project Memory`.
+- Promote selected memory into draft skills or SOP skills before applying them
+  to the runtime skill registry.
 - Surface a global Memory page in the main frontend feature navigation.
 - Keep session compaction separate from durable memory.
 
@@ -121,6 +124,31 @@ resolve role
 Memory Bank is used before local, ACP, A2A, and CLI runtime dispatch. Adapters
 consume the already-prepared prompt and do not implement their own memory reads.
 
+Capability evolution is explicit and review-first:
+
+```text
+select active Memory Bank entries
+-> create memory_evolution_drafts row
+-> inspect generated skill/SOP draft
+-> apply through ClawHubSkillService.save_skill(...)
+-> reload runtime skill registry
+```
+
+No background path silently writes skills. Draft application is a user or API
+mutation, and source memory metadata records the applied draft and skill ref.
+Draft creation derives `workspace_id` from the API path and validates the target
+skill identifiers before persisting the draft, so invalid drafts do not fail
+later during skill application. Draft apply and reject mutations atomically
+claim a draft before persisting the transition or writing the skill, preventing
+concurrent requests from creating multiple skill outputs or reporting
+conflicting final states for one draft. Apply releases the claim on skill-write
+failure or cancellation, retries final applied-state persistence, and treats
+source-memory metadata tagging as a best-effort follow-up. Tagging patches only
+metadata keys, so concurrent content, tag, status, and scoring edits are not
+overwritten by draft application. Applied timestamps are recorded after the
+skill write completes, and source-memory tag patches use their own current
+patch time for recency ordering.
+
 ## API Surface
 
 Global read/search:
@@ -137,6 +165,11 @@ Workspace-scoped operations:
 - `DELETE /api/workspaces/{workspace_id}/memories/{memory_id}`
 - `POST /api/workspaces/{workspace_id}/memories/search`
 - `POST /api/workspaces/{workspace_id}/memories/consolidate`
+- `POST /api/workspaces/{workspace_id}/memories/evolutions`
+- `GET /api/workspaces/{workspace_id}/memories/evolutions`
+- `GET /api/workspaces/{workspace_id}/memories/evolutions/{draft_id}`
+- `POST /api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:apply`
+- `POST /api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject`
 
 The frontend Memory page uses the global endpoints for browsing and text search.
 The subagent memory tab uses the workspace list endpoint filtered by
@@ -161,6 +194,8 @@ The Memory page provides:
 - result list with tags and timestamps
 - detail pane for selected entries, including lifecycle fields such as status,
   source, confidence, update time, and expiry
+- controls to draft a skill or SOP skill from a selected active memory entry,
+  then apply the reviewed draft into the app-scoped skill directory
 
 The old subagent UI page for manual role summaries is removed. The subagent
 drawer now shows Memory Bank entries only.
@@ -196,5 +231,7 @@ Required coverage:
 - role prompt injection reads Memory Bank entries
 - global memory list/search endpoints work
 - workspace memory CRUD/search/consolidation endpoints work
+- memory evolution draft APIs create, list, apply, and reject drafts
+- applying a memory evolution draft writes a valid skill and reloads skills
 - subagent UI no longer renders manual summary controls
 - sidebar renders Memory below IM Gateway

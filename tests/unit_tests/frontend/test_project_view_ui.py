@@ -7559,6 +7559,40 @@ export async function getMemory() {
     };
 }
 
+export async function createMemoryEvolutionDraft() {
+    return {
+        draft_id: "mem-evo-1",
+        workspace_id: "alpha-project",
+        source_memory_ids: ["mem_1"],
+        target: "sop_skill",
+        status: "draft",
+        skill_id: "memory-entry-sop",
+        runtime_name: "memory-entry-sop",
+        description: "Memory entry",
+        instructions: "# memory-entry-sop",
+        created_at: "2026-05-10T08:00:00Z",
+        updated_at: "2026-05-10T08:00:00Z",
+    };
+}
+
+export async function applyMemoryEvolutionDraft() {
+    return {
+        draft_id: "mem-evo-1",
+        workspace_id: "alpha-project",
+        source_memory_ids: ["mem_1"],
+        target: "sop_skill",
+        status: "applied",
+        skill_id: "memory-entry-sop",
+        runtime_name: "memory-entry-sop",
+        description: "Memory entry",
+        instructions: "# memory-entry-sop",
+        applied_skill_ref: "memory-entry-sop",
+        created_at: "2026-05-10T08:00:00Z",
+        updated_at: "2026-05-10T08:00:00Z",
+        applied_at: "2026-05-10T08:00:01Z",
+    };
+}
+
 export async function fetchConfigStatus() {
     if (globalThis.__deferredConfigStatusPromise) {
         return await globalThis.__deferredConfigStatusPromise;

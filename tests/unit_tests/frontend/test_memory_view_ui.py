@@ -52,6 +52,34 @@ def test_memory_detail_exposes_lifecycle_fields() -> None:
     assert "function formatExpiry(value)" in source
 
 
+def test_memory_view_exposes_evolution_controls() -> None:
+    source = Path("frontend/dist/js/components/memoryView.js").read_text(
+        encoding="utf-8"
+    )
+    api_source = Path("frontend/dist/js/core/api/memories.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "createMemoryEvolutionDraft" in source
+    assert "applyMemoryEvolutionDraft" in source
+    assert 'data-memory-evolve-target="skill"' in source
+    assert 'data-memory-evolve-target="sop_skill"' in source
+    assert "data-memory-evolution-apply" in source
+    assert "/memories/evolutions" in api_source
+    assert ":apply" in api_source
+
+
+def test_memory_evolution_ignores_stale_async_responses() -> None:
+    source = Path("frontend/dist/js/components/memoryView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function isSelectedMemoryContext(workspaceId, memoryId)" in source
+    assert "function isSelectedDraftContext(workspaceId, memoryId, draftId)" in source
+    assert "if (!isSelectedMemoryContext(workspaceId, memoryId))" in source
+    assert "if (!isSelectedDraftContext(workspaceId, memoryId, draftId))" in source
+
+
 def test_memory_architecture_i18n_keys_exist() -> None:
     source = Path("frontend/dist/js/utils/i18n.js").read_text(encoding="utf-8")
 
@@ -68,6 +96,10 @@ def test_memory_architecture_i18n_keys_exist() -> None:
         "feature.memory.source",
         "feature.memory.expires",
         "feature.memory.no_expiry",
+        "feature.memory.evolution.create_skill",
+        "feature.memory.evolution.create_sop",
+        "feature.memory.evolution.apply",
+        "feature.memory.evolution.draft_status",
     ]:
         assert source.count(f"'{key}'") == 2
 

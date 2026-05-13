@@ -1908,3 +1908,39 @@ Notes:
 - Server startup reindexes active Memory Bank rows into retrieval so migrated
   records are searchable through FTS-backed memory search.
 - Repository: `src/relay_teams/memory/repository.py`
+
+### `memory_evolution_drafts`
+
+```sql
+CREATE TABLE IF NOT EXISTS memory_evolution_drafts (
+    draft_id               TEXT PRIMARY KEY,
+    workspace_id           TEXT NOT NULL,
+    target                 TEXT NOT NULL,
+    status                 TEXT NOT NULL,
+    source_memory_ids_json TEXT NOT NULL,
+    skill_id               TEXT NOT NULL,
+    runtime_name           TEXT NOT NULL,
+    description            TEXT NOT NULL DEFAULT '',
+    instructions           TEXT NOT NULL,
+    applied_skill_ref      TEXT,
+    rejection_reason       TEXT NOT NULL DEFAULT '',
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL,
+    applied_at             TEXT,
+    rejected_at            TEXT
+);
+```
+
+Purpose: reviewable Memory Bank evolution drafts. A draft captures selected
+active memory entries and renders a proposed `SKILL.md` payload before any
+runtime skill directory is mutated.
+
+Notes:
+- `draft_id` is generated as `mem-evo-{uuid_hex}`.
+- `target` is one of: `skill`, `sop_skill`.
+- `status` is one of: `draft`, `applied`, `rejected`, `superseded`.
+- `source_memory_ids_json` stores the ordered source memory IDs used to render
+  the proposal.
+- Applying a draft writes through the app-scoped ClawHub skill service, reloads
+  the runtime skill registry, and records the applied draft and skill ref in
+  source memory metadata.

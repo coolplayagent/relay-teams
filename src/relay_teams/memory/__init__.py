@@ -18,7 +18,9 @@ from relay_teams.memory.memory_defaults import (
 )
 from relay_teams.memory.models import (
     ConsolidationMode,
+    ApplyMemoryEvolutionDraftRequest,
     CreateMemoryEntryRequest,
+    CreateMemoryEvolutionDraftRequest,
     GlobalMemorySearchRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
@@ -27,6 +29,11 @@ from relay_teams.memory.models import (
     MemoryEntryKind,
     MemoryEntryStatus,
     MemoryEntrySummary,
+    MemoryEvolutionDraft,
+    MemoryEvolutionDraftQuery,
+    MemoryEvolutionDraftQueryResult,
+    MemoryEvolutionStatus,
+    MemoryEvolutionTarget,
     MemoryQuery,
     MemoryQueryResult,
     MemoryScope,
@@ -35,16 +42,24 @@ from relay_teams.memory.models import (
     MemorySearchResult,
     MemorySourceKind,
     MemoryTier,
+    RejectMemoryEvolutionDraftRequest,
     UpdateMemoryEntryRequest,
 )
 from relay_teams.memory.event_handler import MemoryEventHandler
-from relay_teams.memory.repository import MemoryBankRepository, generate_memory_id
+from relay_teams.memory.evolution_service import MemoryEvolutionService
+from relay_teams.memory.repository import (
+    MemoryBankRepository,
+    generate_memory_evolution_draft_id,
+    generate_memory_id,
+)
 from relay_teams.memory.service import MemoryBankService
 
 __all__ = [
+    "ApplyMemoryEvolutionDraftRequest",
     "ConsolidationMode",
     "MemoryEventHandler",
     "CreateMemoryEntryRequest",
+    "CreateMemoryEvolutionDraftRequest",
     "GlobalMemorySearchRequest",
     "INJECTION_LIMIT",
     "INJECTION_MIN_CONFIDENCE",
@@ -65,6 +80,12 @@ __all__ = [
     "MemoryEntryKind",
     "MemoryEntryStatus",
     "MemoryEntrySummary",
+    "MemoryEvolutionDraft",
+    "MemoryEvolutionDraftQuery",
+    "MemoryEvolutionDraftQueryResult",
+    "MemoryEvolutionService",
+    "MemoryEvolutionStatus",
+    "MemoryEvolutionTarget",
     "MemoryQuery",
     "MemoryQueryResult",
     "MemoryScope",
@@ -74,8 +95,10 @@ __all__ = [
     "MemorySourceKind",
     "MemoryTier",
     "PERSISTENT_DECAY_FACTOR",
+    "RejectMemoryEvolutionDraftRequest",
     "UpdateMemoryEntryRequest",
     "WORKING_DECAY_FACTOR",
     "WORKING_TTL",
+    "generate_memory_evolution_draft_id",
     "generate_memory_id",
 ]

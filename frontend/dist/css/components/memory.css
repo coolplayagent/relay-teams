@@ -358,6 +358,61 @@
     color: var(--text-secondary);
 }
 
+.memory-evolution-panel {
+    display: grid;
+    gap: 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    border-radius: 8px;
+    padding: 0.85rem;
+    background: var(--bg-surface-muted);
+}
+
+.memory-evolution-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.memory-evolution-fields label {
+    display: grid;
+    gap: 0.32rem;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+}
+
+.memory-evolution-fields input {
+    min-width: 0;
+    height: 34px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0 0.62rem;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font: inherit;
+}
+
+.memory-evolution-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.memory-evolution-actions .primary-btn,
+.memory-evolution-actions .secondary-btn {
+    min-height: 32px;
+}
+
+.memory-evolution-status {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.memory-evolution-status.is-error {
+    color: var(--danger);
+}
+
 .agent-panel-memory-list {
     display: grid;
     gap: 0.55rem;
@@ -465,6 +520,10 @@
     }
 
     .memory-detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .memory-evolution-fields {
         grid-template-columns: 1fr;
     }
 }

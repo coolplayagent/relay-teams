@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -407,3 +408,153 @@ class MemorySearchResult(BaseModel):
 
     items: tuple[MemorySearchHit, ...]
     total_count: int
+
+
+# ---------------------------------------------------------------------------
+# Evolution models
+# ---------------------------------------------------------------------------
+
+
+class MemoryEvolutionTarget(str, Enum):
+    SKILL = "skill"
+    SOP_SKILL = "sop_skill"
+
+
+class MemoryEvolutionStatus(str, Enum):
+    DRAFT = "draft"
+    APPLYING = "applying"
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+_CLAW_HUB_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _normalize_claw_hub_identifier(value: str, *, field_name: str) -> str:
+    normalized = value.strip()
+    if not _CLAW_HUB_IDENTIFIER_PATTERN.fullmatch(normalized):
+        message = (
+            f"{field_name} must start with an alphanumeric character and only use "
+            "letters, digits, dot, underscore, or hyphen"
+        )
+        raise ValueError(message)
+    return normalized
+
+
+class CreateMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = ""
+    source_memory_ids: tuple[str, ...] = Field(min_length=1, max_length=50)
+    target: MemoryEvolutionTarget = MemoryEvolutionTarget.SOP_SKILL
+    skill_id: str = Field(min_length=1, max_length=128)
+    runtime_name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    objective: str = ""
+
+    @field_validator("source_memory_ids")
+    @classmethod
+    def _validate_source_memory_ids(
+        cls, source_memory_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for memory_id in source_memory_ids:
+            normalized = memory_id.strip()
+            if not normalized:
+                message = "source_memory_ids must contain non-empty values"
+                raise ValueError(message)
+            if normalized in seen:
+                message = f"Duplicate source memory id: {normalized}"
+                raise ValueError(message)
+            seen.add(normalized)
+            cleaned.append(normalized)
+        return tuple(cleaned)
+
+    @field_validator("skill_id")
+    @classmethod
+    def _validate_skill_id(cls, skill_id: str) -> str:
+        return _normalize_claw_hub_identifier(skill_id, field_name="skill_id")
+
+    @field_validator("runtime_name")
+    @classmethod
+    def _validate_runtime_name(cls, runtime_name: str) -> str:
+        return _normalize_claw_hub_identifier(
+            runtime_name,
+            field_name="runtime_name",
+        )
+
+
+class ApplyMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skill_id: str | None = Field(default=None, min_length=1, max_length=128)
+    runtime_name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = None
+    instructions: str | None = None
+
+    @field_validator("skill_id")
+    @classmethod
+    def _validate_optional_skill_id(cls, skill_id: str | None) -> str | None:
+        if skill_id is None:
+            return None
+        return _normalize_claw_hub_identifier(skill_id, field_name="skill_id")
+
+    @field_validator("runtime_name")
+    @classmethod
+    def _validate_optional_runtime_name(
+        cls,
+        runtime_name: str | None,
+    ) -> str | None:
+        if runtime_name is None:
+            return None
+        return _normalize_claw_hub_identifier(
+            runtime_name,
+            field_name="runtime_name",
+        )
+
+
+class RejectMemoryEvolutionDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = ""
+
+
+class MemoryEvolutionDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: str = Field(min_length=1)
+    workspace_id: str = Field(min_length=1)
+    source_memory_ids: tuple[str, ...] = Field(min_length=1)
+    target: MemoryEvolutionTarget
+    status: MemoryEvolutionStatus = MemoryEvolutionStatus.DRAFT
+    skill_id: str = Field(min_length=1)
+    runtime_name: str = Field(min_length=1)
+    description: str = ""
+    instructions: str = Field(min_length=1)
+    applied_skill_ref: str | None = None
+    rejection_reason: str = ""
+    created_at: datetime
+    updated_at: datetime
+    applied_at: datetime | None = None
+    rejected_at: datetime | None = None
+
+
+class MemoryEvolutionDraftQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    target: MemoryEvolutionTarget | None = None
+    status: MemoryEvolutionStatus | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class MemoryEvolutionDraftQueryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[MemoryEvolutionDraft, ...]
+    total_count: int = Field(ge=0)
+    offset: int
+    limit: int

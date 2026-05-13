@@ -1,0 +1,497 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+import asyncio
+import sqlite3
+from datetime import datetime, timezone
+
+from relay_teams.logger import get_logger
+from relay_teams.memory.models import (
+    ApplyMemoryEvolutionDraftRequest,
+    CreateMemoryEvolutionDraftRequest,
+    MemoryEntry,
+    MemoryEntryStatus,
+    MemoryEvolutionDraft,
+    MemoryEvolutionDraftQuery,
+    MemoryEvolutionDraftQueryResult,
+    MemoryEvolutionStatus,
+    MemoryEvolutionTarget,
+    RejectMemoryEvolutionDraftRequest,
+)
+from relay_teams.memory.repository import (
+    MemoryBankRepository,
+    generate_memory_evolution_draft_id,
+)
+from relay_teams.skills.clawhub_models import ClawHubSkillWriteRequest
+from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
+
+LOGGER = get_logger(__name__)
+_MAX_MEMORY_METADATA_KEYS = 20
+_RECOVERY_ATTEMPTS = 3
+
+
+class MemoryEvolutionConflictError(ValueError):
+    pass
+
+
+class MemoryEvolutionService:
+    def __init__(
+        self,
+        *,
+        repository: MemoryBankRepository,
+        skill_service: ClawHubSkillService,
+    ) -> None:
+        self._repo = repository
+        self._skill_service = skill_service
+
+    async def create_draft_async(
+        self, request: CreateMemoryEvolutionDraftRequest
+    ) -> MemoryEvolutionDraft:
+        workspace_id = request.workspace_id.strip()
+        if not workspace_id:
+            message = "workspace_id is required when creating a memory evolution draft"
+            raise ValueError(message)
+        request = request.model_copy(update={"workspace_id": workspace_id})
+        source_entries = await self._load_active_source_entries_async(request)
+        now = datetime.now(tz=timezone.utc)
+        description = request.description.strip() or _default_description(
+            target=request.target,
+            runtime_name=request.runtime_name,
+            entries=source_entries,
+        )
+        instructions = _render_skill_instructions(
+            target=request.target,
+            runtime_name=request.runtime_name,
+            description=description,
+            objective=request.objective,
+            entries=source_entries,
+        )
+        draft = MemoryEvolutionDraft(
+            draft_id=generate_memory_evolution_draft_id(),
+            workspace_id=workspace_id,
+            source_memory_ids=request.source_memory_ids,
+            target=request.target,
+            status=MemoryEvolutionStatus.DRAFT,
+            skill_id=request.skill_id,
+            runtime_name=request.runtime_name,
+            description=description,
+            instructions=instructions,
+            created_at=now,
+            updated_at=now,
+        )
+        return await self._repo.create_evolution_draft_async(draft=draft)
+
+    async def get_draft_async(
+        self, workspace_id: str, draft_id: str
+    ) -> MemoryEvolutionDraft | None:
+        draft = await self._repo.get_evolution_draft_async(draft_id)
+        if draft is None or draft.workspace_id != workspace_id:
+            return None
+        return draft
+
+    async def list_drafts_async(
+        self, query: MemoryEvolutionDraftQuery
+    ) -> MemoryEvolutionDraftQueryResult:
+        return await self._repo.list_evolution_drafts_async(query)
+
+    async def apply_draft_async(
+        self,
+        workspace_id: str,
+        draft_id: str,
+        request: ApplyMemoryEvolutionDraftRequest,
+    ) -> MemoryEvolutionDraft | None:
+        draft = await self.get_draft_async(workspace_id, draft_id)
+        if draft is None:
+            return None
+        if draft.status != MemoryEvolutionStatus.DRAFT:
+            message = f"Memory evolution draft is not applicable: {draft.status.value}"
+            raise MemoryEvolutionConflictError(message)
+
+        skill_id = (request.skill_id or draft.skill_id).strip()
+        runtime_name = (request.runtime_name or draft.runtime_name).strip()
+        description = (
+            draft.description if request.description is None else request.description
+        ).strip()
+        instructions = (
+            draft.instructions if request.instructions is None else request.instructions
+        ).strip()
+        if not description:
+            description = _default_description(
+                target=draft.target,
+                runtime_name=runtime_name,
+                entries=await self._load_source_entries_by_id_async(draft),
+            )
+        if not instructions:
+            message = (
+                "instructions must be non-empty when applying a memory evolution draft"
+            )
+            raise ValueError(message)
+
+        now = datetime.now(tz=timezone.utc)
+        claimed = await self._repo.claim_evolution_draft_apply_async(
+            draft_id=draft.draft_id,
+            updated_at=now,
+        )
+        if claimed is None:
+            message = "Memory evolution draft is not applicable: already claimed"
+            raise MemoryEvolutionConflictError(message)
+        draft = claimed
+
+        try:
+            saved = await asyncio.to_thread(
+                self._skill_service.save_skill,
+                skill_id,
+                ClawHubSkillWriteRequest(
+                    runtime_name=runtime_name,
+                    description=description,
+                    instructions=instructions,
+                    files=(),
+                ),
+            )
+        except asyncio.CancelledError:
+            await self._release_apply_claim_async(draft, reason="cancelled")
+            raise
+        except Exception:
+            await self._release_apply_claim_async(draft, reason="save failed")
+            raise
+        applied_at = datetime.now(tz=timezone.utc)
+        applied_ref = saved.ref or runtime_name
+        applied = draft.model_copy(
+            update={
+                "status": MemoryEvolutionStatus.APPLIED,
+                "skill_id": skill_id,
+                "runtime_name": runtime_name,
+                "description": description,
+                "instructions": instructions,
+                "applied_skill_ref": applied_ref,
+                "updated_at": applied_at,
+                "applied_at": applied_at,
+            }
+        )
+        try:
+            updated = await self._complete_apply_claim_async(applied)
+        except asyncio.CancelledError:
+            await self._finalize_apply_claim_after_cancellation_async(applied)
+            raise
+        try:
+            await self._mark_source_memories_applied_async(updated)
+        except (RuntimeError, sqlite3.Error, ValueError):
+            LOGGER.exception(
+                "Failed to tag source memories for Memory Bank evolution draft %s",
+                updated.draft_id,
+            )
+        LOGGER.info(
+            "Applied Memory Bank evolution draft %s as skill %s",
+            updated.draft_id,
+            applied_ref,
+        )
+        return updated
+
+    async def reject_draft_async(
+        self,
+        workspace_id: str,
+        draft_id: str,
+        request: RejectMemoryEvolutionDraftRequest,
+    ) -> MemoryEvolutionDraft | None:
+        draft = await self.get_draft_async(workspace_id, draft_id)
+        if draft is None:
+            return None
+        if draft.status != MemoryEvolutionStatus.DRAFT:
+            message = f"Memory evolution draft is not rejectable: {draft.status.value}"
+            raise MemoryEvolutionConflictError(message)
+        now = datetime.now(tz=timezone.utc)
+        rejected = await self._repo.claim_evolution_draft_reject_async(
+            draft_id=draft.draft_id,
+            rejection_reason=request.reason.strip(),
+            updated_at=now,
+            rejected_at=now,
+        )
+        if rejected is None:
+            message = "Memory evolution draft is not rejectable: already claimed"
+            raise MemoryEvolutionConflictError(message)
+        return rejected
+
+    async def _load_active_source_entries_async(
+        self, request: CreateMemoryEvolutionDraftRequest
+    ) -> tuple[MemoryEntry, ...]:
+        entries: list[MemoryEntry] = []
+        for memory_id in request.source_memory_ids:
+            entry = await self._repo.get_by_id_async(memory_id)
+            if entry is None:
+                message = f"Unknown source memory entry: {memory_id}"
+                raise ValueError(message)
+            if entry.workspace_id != request.workspace_id:
+                message = (
+                    f"Source memory entry belongs to a different workspace: {memory_id}"
+                )
+                raise ValueError(message)
+            if entry.status != MemoryEntryStatus.ACTIVE:
+                message = f"Source memory entry is not active: {memory_id}"
+                raise ValueError(message)
+            entries.append(entry)
+        return tuple(entries)
+
+    async def _load_source_entries_by_id_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> tuple[MemoryEntry, ...]:
+        entries: list[MemoryEntry] = []
+        for memory_id in draft.source_memory_ids:
+            entry = await self._repo.get_by_id_async(memory_id)
+            if entry is not None and entry.workspace_id == draft.workspace_id:
+                entries.append(entry)
+        return tuple(entries)
+
+    async def _mark_source_memories_applied_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> None:
+        metadata_patch = {
+            "evolution_draft_id": draft.draft_id,
+            "evolution_skill_ref": draft.applied_skill_ref or draft.runtime_name,
+        }
+        for memory_id in draft.source_memory_ids:
+            patched = await self._repo.patch_entry_metadata_async(
+                memory_id=memory_id,
+                workspace_id=draft.workspace_id,
+                metadata_patch=metadata_patch,
+                metadata_limit=_MAX_MEMORY_METADATA_KEYS,
+                updated_at=datetime.now(tz=timezone.utc),
+            )
+            if not patched:
+                LOGGER.warning(
+                    "Skipped missing source memory %s while tagging "
+                    "Memory Bank evolution draft %s",
+                    memory_id,
+                    draft.draft_id,
+                )
+
+    async def _release_apply_claim_async(
+        self, draft: MemoryEvolutionDraft, *, reason: str
+    ) -> None:
+        for attempt in range(1, _RECOVERY_ATTEMPTS + 1):
+            try:
+                released = await asyncio.shield(
+                    self._repo.release_evolution_draft_apply_claim_async(
+                        draft_id=draft.draft_id,
+                        updated_at=datetime.now(tz=timezone.utc),
+                    )
+                )
+            except Exception as exc:
+                if attempt == _RECOVERY_ATTEMPTS:
+                    LOGGER.exception(
+                        "Failed to release Memory Bank evolution draft %s "
+                        "after %s attempts during %s",
+                        draft.draft_id,
+                        attempt,
+                        reason,
+                    )
+                    return
+                LOGGER.warning(
+                    "Retrying Memory Bank evolution draft %s claim release "
+                    "after %s failure: %s",
+                    draft.draft_id,
+                    reason,
+                    exc,
+                )
+                await asyncio.sleep(0)
+                continue
+            if not released:
+                LOGGER.warning(
+                    "Memory Bank evolution draft %s apply claim was already "
+                    "moved while handling %s",
+                    draft.draft_id,
+                    reason,
+                )
+            return
+
+    async def _complete_apply_claim_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> MemoryEvolutionDraft:
+        for attempt in range(1, _RECOVERY_ATTEMPTS + 1):
+            try:
+                updated = await self._repo.complete_evolution_draft_apply_async(
+                    draft=draft
+                )
+            except Exception as exc:
+                if attempt == _RECOVERY_ATTEMPTS:
+                    LOGGER.exception(
+                        "Failed to persist applied Memory Bank evolution draft %s "
+                        "after %s attempts",
+                        draft.draft_id,
+                        attempt,
+                    )
+                    raise
+                LOGGER.warning(
+                    "Retrying applied Memory Bank evolution draft %s persistence "
+                    "after failure: %s",
+                    draft.draft_id,
+                    exc,
+                )
+                await asyncio.sleep(0)
+                continue
+            if updated is None:
+                message = (
+                    "Memory evolution draft is not applicable: apply claim was lost"
+                )
+                raise MemoryEvolutionConflictError(message)
+            return updated
+        message = "Memory evolution draft apply persistence did not complete"
+        raise RuntimeError(message)
+
+    async def _finalize_apply_claim_after_cancellation_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> None:
+        try:
+            await asyncio.shield(self._complete_apply_claim_async(draft))
+        except (MemoryEvolutionConflictError, RuntimeError, sqlite3.Error, ValueError):
+            LOGGER.exception(
+                "Failed to finalize Memory Bank evolution draft %s after "
+                "apply cancellation",
+                draft.draft_id,
+            )
+
+
+def _default_description(
+    *,
+    target: MemoryEvolutionTarget,
+    runtime_name: str,
+    entries: tuple[MemoryEntry, ...],
+) -> str:
+    if entries:
+        title = entries[0].content.title.strip()
+        if title:
+            return f"{_target_label(target)} distilled from Memory Bank: {title}"
+    return f"{_target_label(target)} distilled from Memory Bank for {runtime_name}"
+
+
+def _render_skill_instructions(
+    *,
+    target: MemoryEvolutionTarget,
+    runtime_name: str,
+    description: str,
+    objective: str,
+    entries: tuple[MemoryEntry, ...],
+) -> str:
+    if target == MemoryEvolutionTarget.SOP_SKILL:
+        return _render_sop_skill_instructions(
+            runtime_name=runtime_name,
+            description=description,
+            objective=objective,
+            entries=entries,
+        )
+    return _render_general_skill_instructions(
+        runtime_name=runtime_name,
+        description=description,
+        objective=objective,
+        entries=entries,
+    )
+
+
+def _render_general_skill_instructions(
+    *,
+    runtime_name: str,
+    description: str,
+    objective: str,
+    entries: tuple[MemoryEntry, ...],
+) -> str:
+    purpose = objective.strip() or description.strip()
+    return "\n".join(
+        (
+            f"# {runtime_name}",
+            "",
+            "## Purpose",
+            purpose,
+            "",
+            "## Source Memory",
+            _render_source_memory(entries),
+            "",
+            "## Operating Guidance",
+            "- Use this skill when the task matches the source memory context.",
+            "- Apply the captured constraints, decisions, and preferences directly.",
+            "- Prefer current repository evidence when it conflicts with older memory.",
+            "",
+            "## Verification",
+            "- Confirm the final result still satisfies the source memory constraints.",
+            "- Record any new durable lesson back into Memory Bank.",
+        )
+    )
+
+
+def _render_sop_skill_instructions(
+    *,
+    runtime_name: str,
+    description: str,
+    objective: str,
+    entries: tuple[MemoryEntry, ...],
+) -> str:
+    purpose = objective.strip() or description.strip()
+    return "\n".join(
+        (
+            f"# {runtime_name}",
+            "",
+            "## Purpose",
+            purpose,
+            "",
+            "## Preconditions",
+            "- Confirm the current task matches the source memory context.",
+            "- Inspect current repository state before applying remembered guidance.",
+            "- Treat source memory as guidance, not as a substitute for fresh evidence.",
+            "",
+            "## Procedure",
+            "1. Read the relevant task, repository files, and current constraints.",
+            "2. Compare current evidence with the source memory below.",
+            "3. Apply the remembered SOP only where it remains compatible.",
+            "4. Keep implementation changes scoped to the requested outcome.",
+            "5. Update Memory Bank when the SOP needs correction or extension.",
+            "",
+            "## Source Memory",
+            _render_source_memory(entries),
+            "",
+            "## Failure Modes",
+            _render_failure_modes(entries),
+            "",
+            "## Verification",
+            "- Run the smallest relevant checks for the affected behavior.",
+            "- Verify docs, APIs, UI, or runtime prompts are refreshed when contracts change.",
+            "- Report any source-memory conflicts in the final response.",
+        )
+    )
+
+
+def _render_source_memory(entries: tuple[MemoryEntry, ...]) -> str:
+    lines: list[str] = []
+    for index, entry in enumerate(entries, start=1):
+        lines.extend(
+            (
+                f"{index}. {entry.content.title}",
+                f"   - ID: {entry.id}",
+                f"   - Kind: {entry.kind.value}",
+                f"   - Confidence: {entry.confidence_score:.2f}",
+                f"   - Body: {_single_line(entry.content.body)}",
+            )
+        )
+        if entry.content.context:
+            lines.append(f"   - Context: {_single_line(entry.content.context)}")
+        if entry.content.outcome:
+            lines.append(f"   - Outcome: {_single_line(entry.content.outcome)}")
+    return "\n".join(lines) if lines else "- No source memory entries were provided."
+
+
+def _render_failure_modes(entries: tuple[MemoryEntry, ...]) -> str:
+    failure_entries = [
+        entry for entry in entries if entry.kind.value in {"failure_mode", "constraint"}
+    ]
+    if not failure_entries:
+        return "- Do not apply stale memory without checking current repository state."
+    return "\n".join(
+        f"- {_single_line(entry.content.body)}" for entry in failure_entries
+    )
+
+
+def _single_line(value: str) -> str:
+    return " ".join(value.strip().split())
+
+
+def _target_label(target: MemoryEvolutionTarget) -> str:
+    if target == MemoryEvolutionTarget.SOP_SKILL:
+        return "SOP skill"
+    return "Skill"
