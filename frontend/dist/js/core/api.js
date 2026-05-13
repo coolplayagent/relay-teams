@@ -4,6 +4,7 @@
  */
 export {
     answerUserQuestion,
+    applyMemorySkillDraft,
     fetchSessions,
     startNewSession,
     fetchSessionHistory,
@@ -20,9 +21,14 @@ export {
     applyMemoryEvolutionDraft,
     createMemoryEvolutionDraft,
     fetchMemories,
+    fetchMemorySkillDrafts,
+    generateMemorySkillDrafts,
     getMemory,
+    getMemorySkillDraft,
     invalidateMemoryCache,
     searchMemories,
+    updateMemorySkillDraft,
+    validateMemorySkillDraft,
     updateSession,
     sendUserPrompt,
     resolveGate,

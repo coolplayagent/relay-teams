@@ -112,6 +112,8 @@ from relay_teams.gateway.discord import (
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.memory.evolution_service import MemoryEvolutionService
+from relay_teams.memory.skill_draft_repository import MemorySkillDraftRepository
+from relay_teams.memory.skill_synthesis_service import MemorySkillSynthesisService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
@@ -603,6 +605,9 @@ class ServerContainer:
         )
         self.memory_bank_repo: MemoryBankRepository = MemoryBankRepository(
             runtime.paths.db_path
+        )
+        self.memory_skill_draft_repo: MemorySkillDraftRepository = (
+            MemorySkillDraftRepository(runtime.paths.db_path)
         )
         self.memory_bank_service: MemoryBankService = MemoryBankService(
             repository=self.memory_bank_repo,
@@ -1215,6 +1220,9 @@ class ServerContainer:
             repository=self.memory_bank_repo,
             skill_service=self.clawhub_skill_service,
         )
+        self.memory_skill_synthesis_service: MemorySkillSynthesisService = (
+            self._build_memory_skill_synthesis_service()
+        )
         self._async_closeables: tuple[AsyncCloseableRepository, ...] = (
             self.task_repo,
             self.artifact_repo,
@@ -1250,6 +1258,7 @@ class ServerContainer:
             self.automation_delivery_repo,
             self.automation_bound_session_queue_repo,
             self.memory_bank_repo,
+            self.memory_skill_draft_repo,
             self.temporary_role_repo,
             self.monitor_repository,
             self.xiaoluban_account_repository,
@@ -1405,6 +1414,30 @@ class ServerContainer:
         session_id: str | None,
     ) -> LLMProvider:
         return self._provider_factory(role_definition, session_id)
+
+    def _build_memory_skill_synthesis_service(self) -> MemorySkillSynthesisService:
+        return MemorySkillSynthesisService(
+            draft_repository=self.memory_skill_draft_repo,
+            memory_bank_service=self.memory_bank_service,
+            clawhub_skill_service=self.clawhub_skill_service,
+            llm_provider_resolver=self._resolve_memory_skill_provider,
+        )
+
+    def _resolve_memory_skill_provider(self) -> LLMProvider | None:
+        profile_name = self._resolve_auxiliary_model_profile_name()
+        if profile_name is None:
+            return None
+        return self.create_provider(
+            RoleDefinition(
+                role_id="memory-skill-synthesis",
+                name="Memory Skill Synthesis",
+                description="Synthesize Memory Bank entries into reusable skills.",
+                version="1",
+                system_prompt="internal",
+                model_profile=profile_name,
+            ),
+            None,
+        )
 
     def _resolve_hook_model_config(
         self,
@@ -1631,6 +1664,9 @@ class ServerContainer:
         self.memory_evolution_service = MemoryEvolutionService(
             repository=self.memory_bank_repo,
             skill_service=self.clawhub_skill_service,
+        )
+        self.memory_skill_synthesis_service = (
+            self._build_memory_skill_synthesis_service()
         )
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()

@@ -41,6 +41,41 @@ def test_memory_view_renders_architecture_map() -> None:
     assert "feature.memory.arch.persistent.title" in source
 
 
+def test_memory_view_renders_skill_draft_workflow() -> None:
+    source = Path("frontend/dist/js/components/memoryView.js").read_text(
+        encoding="utf-8"
+    )
+    api_source = Path("frontend/dist/js/core/api/memories.js").read_text(
+        encoding="utf-8"
+    )
+    css_source = Path("frontend/dist/css/components/memory.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-memory-tab="skill-drafts"' in source
+    assert "generateMemorySkillDrafts(payload)" in source
+    assert "validateMemorySkillDraft(draftId)" in source
+    assert "applyMemorySkillDraft(draftId)" in source
+    assert "updateMemorySkillDraft(draftId, payload)" in source
+    assert "feature.memory.drafts.reject_failed" in source
+    assert "draftWorkspaceId || memoryState.workspaceId" not in source
+    assert "draft.status !== 'applied' && draft.status !== 'applying'" in source
+    assert "function reloadSkillDraftRowsIfActive()" in source
+    assert "memoryState.activeTab !== 'skill-drafts'" in source
+    assert "data-draft-instructions]')?.value || '').trimEnd()" in source
+    assert "scopeKind: memoryState.draftScopeKind" in source
+    assert (
+        "draftKind: memoryState.draftKind === 'auto' ? '' : memoryState.draftKind"
+        in source
+    )
+    assert "feature.memory.drafts.validate_failed" in source
+    assert "data-memory-evolve-target" not in source
+    assert "renderMemoryEvolutionPanel" not in source
+    assert "/api/memories/skill-drafts:generate" in api_source
+    assert "memory-draft-shell" in css_source
+    assert "memory-draft-editor" in css_source
+
+
 def test_memory_detail_exposes_lifecycle_fields() -> None:
     source = Path("frontend/dist/js/components/memoryView.js").read_text(
         encoding="utf-8"
@@ -50,34 +85,6 @@ def test_memory_detail_exposes_lifecycle_fields() -> None:
     assert "feature.memory.source" in source
     assert "feature.memory.expires" in source
     assert "function formatExpiry(value)" in source
-
-
-def test_memory_view_exposes_evolution_controls() -> None:
-    source = Path("frontend/dist/js/components/memoryView.js").read_text(
-        encoding="utf-8"
-    )
-    api_source = Path("frontend/dist/js/core/api/memories.js").read_text(
-        encoding="utf-8"
-    )
-
-    assert "createMemoryEvolutionDraft" in source
-    assert "applyMemoryEvolutionDraft" in source
-    assert 'data-memory-evolve-target="skill"' in source
-    assert 'data-memory-evolve-target="sop_skill"' in source
-    assert "data-memory-evolution-apply" in source
-    assert "/memories/evolutions" in api_source
-    assert ":apply" in api_source
-
-
-def test_memory_evolution_ignores_stale_async_responses() -> None:
-    source = Path("frontend/dist/js/components/memoryView.js").read_text(
-        encoding="utf-8"
-    )
-
-    assert "function isSelectedMemoryContext(workspaceId, memoryId)" in source
-    assert "function isSelectedDraftContext(workspaceId, memoryId, draftId)" in source
-    assert "if (!isSelectedMemoryContext(workspaceId, memoryId))" in source
-    assert "if (!isSelectedDraftContext(workspaceId, memoryId, draftId))" in source
 
 
 def test_memory_architecture_i18n_keys_exist() -> None:
@@ -96,10 +103,13 @@ def test_memory_architecture_i18n_keys_exist() -> None:
         "feature.memory.source",
         "feature.memory.expires",
         "feature.memory.no_expiry",
-        "feature.memory.evolution.create_skill",
-        "feature.memory.evolution.create_sop",
-        "feature.memory.evolution.apply",
-        "feature.memory.evolution.draft_status",
+        "feature.memory.entries_tab",
+        "feature.memory.skill_drafts_tab",
+        "feature.memory.drafts.generate",
+        "feature.memory.drafts.validate",
+        "feature.memory.drafts.validate_failed",
+        "feature.memory.drafts.apply",
+        "feature.memory.drafts.reject_failed",
     ]:
         assert source.count(f"'{key}'") == 2
 

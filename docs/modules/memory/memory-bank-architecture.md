@@ -155,6 +155,12 @@ Global read/search:
 
 - `GET /api/memories`
 - `POST /api/memories/search`
+- `POST /api/memories/skill-drafts:generate`
+- `GET /api/memories/skill-drafts`
+- `GET /api/memories/skill-drafts/{draft_id}`
+- `PUT /api/memories/skill-drafts/{draft_id}`
+- `POST /api/memories/skill-drafts/{draft_id}:validate`
+- `POST /api/memories/skill-drafts/{draft_id}:apply`
 
 Workspace-scoped operations:
 
@@ -172,6 +178,11 @@ Workspace-scoped operations:
 - `POST /api/workspaces/{workspace_id}/memories/evolutions/{draft_id}:reject`
 
 The frontend Memory page uses the global endpoints for browsing and text search.
+Its Skill Drafts tab uses the memory-derived skill draft endpoints to generate,
+review, edit, validate, and apply consolidated workspace or cross-workspace
+skills. Draft generation is collection-scoped: related memories are integrated
+into one or more skill/SOP drafts instead of creating one skill under each
+memory entry.
 The subagent memory tab uses the workspace list endpoint filtered by
 `scope=role`, `role_id`, and `status=active`.
 

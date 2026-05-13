@@ -7593,6 +7593,30 @@ export async function applyMemoryEvolutionDraft() {
     };
 }
 
+export async function fetchMemorySkillDrafts() {
+    return { total_count: 0, items: [] };
+}
+
+export async function getMemorySkillDraft() {
+    return null;
+}
+
+export async function generateMemorySkillDrafts() {
+    return { source_memory_count: 0, items: [] };
+}
+
+export async function updateMemorySkillDraft() {
+    return { id: "msd_1", status: "draft" };
+}
+
+export async function validateMemorySkillDraft() {
+    return { id: "msd_1", status: "validated" };
+}
+
+export async function applyMemorySkillDraft() {
+    return { skill_id: "workspace-memory", ref: "workspace-memory" };
+}
+
 export async function fetchConfigStatus() {
     if (globalThis.__deferredConfigStatusPromise) {
         return await globalThis.__deferredConfigStatusPromise;
@@ -8736,6 +8760,7 @@ export function unmountBoardTodoBoard() {
         .replace("../core/state.js", "./mockState.mjs")
         .replace("../utils/dom.js", "./mockDom.mjs")
         .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")

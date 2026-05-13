@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query, Respon
 from relay_teams.interfaces.server.deps import (
     get_memory_bank_service,
     get_memory_evolution_service,
+    get_memory_skill_synthesis_service,
 )
 from relay_teams.memory.models import (
     ApplyMemoryEvolutionDraftRequest,
@@ -36,6 +37,19 @@ from relay_teams.memory.evolution_service import (
     MemoryEvolutionService,
 )
 from relay_teams.memory.service import MemoryBankService
+from relay_teams.memory.skill_draft_models import (
+    GenerateMemorySkillDraftsRequest,
+    MemorySkillDraft,
+    MemorySkillDraftApplyResult,
+    MemorySkillDraftGenerationResult,
+    MemorySkillDraftKind,
+    MemorySkillDraftQuery,
+    MemorySkillDraftQueryResult,
+    MemorySkillDraftScopeKind,
+    MemorySkillDraftStatus,
+    UpdateMemorySkillDraftRequest,
+)
+from relay_teams.memory.skill_synthesis_service import MemorySkillSynthesisService
 from relay_teams.validation import RequiredIdentifierStr
 
 router = APIRouter(tags=["Memories"])
@@ -85,6 +99,112 @@ async def search_all_memories(
     service: MemoryBankService = Depends(get_memory_bank_service),
 ) -> MemorySearchResult:
     return await service.search_global_async(body)
+
+
+@router.post(
+    "/memories/skill-drafts:generate",
+    response_model=MemorySkillDraftGenerationResult,
+    status_code=201,
+)
+async def generate_memory_skill_drafts(
+    body: GenerateMemorySkillDraftsRequest = Body(...),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraftGenerationResult:
+    return await service.generate_drafts_async(body)
+
+
+@router.get(
+    "/memories/skill-drafts",
+    response_model=MemorySkillDraftQueryResult,
+)
+async def list_memory_skill_drafts(
+    scope_kind: MemorySkillDraftScopeKind | None = Query(default=None),
+    workspace_id: str | None = Query(default=None),
+    status: MemorySkillDraftStatus | None = Query(default=None),
+    draft_kind: MemorySkillDraftKind | None = Query(default=None),
+    text_query: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraftQueryResult:
+    return await service.list_drafts_async(
+        MemorySkillDraftQuery(
+            scope_kind=scope_kind,
+            workspace_id=workspace_id,
+            status=status,
+            draft_kind=draft_kind,
+            text_query=text_query,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@router.get(
+    "/memories/skill-drafts/{draft_id}",
+    response_model=MemorySkillDraft,
+)
+async def get_memory_skill_draft(
+    draft_id: RequiredIdentifierStr = Path(),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraft:
+    draft = await service.get_draft_async(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory skill draft not found")
+    return draft
+
+
+@router.put(
+    "/memories/skill-drafts/{draft_id}",
+    response_model=MemorySkillDraft,
+)
+async def update_memory_skill_draft(
+    draft_id: RequiredIdentifierStr = Path(),
+    body: UpdateMemorySkillDraftRequest = Body(...),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraft:
+    try:
+        draft = await service.update_draft_async(draft_id, body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory skill draft not found")
+    return draft
+
+
+@router.post(
+    "/memories/skill-drafts/{draft_id}:validate",
+    response_model=MemorySkillDraft,
+)
+async def validate_memory_skill_draft(
+    draft_id: RequiredIdentifierStr = Path(),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraft:
+    try:
+        draft = await service.validate_draft_async(draft_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Memory skill draft not found")
+    return draft
+
+
+@router.post(
+    "/memories/skill-drafts/{draft_id}:apply",
+    response_model=MemorySkillDraftApplyResult,
+)
+async def apply_memory_skill_draft(
+    draft_id: RequiredIdentifierStr = Path(),
+    service: MemorySkillSynthesisService = Depends(get_memory_skill_synthesis_service),
+) -> MemorySkillDraftApplyResult:
+    try:
+        return await service.apply_draft_async(draft_id)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="Memory skill draft not found"
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get(

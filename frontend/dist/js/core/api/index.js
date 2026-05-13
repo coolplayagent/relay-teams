@@ -24,10 +24,16 @@ export {
 export {
     applyMemoryEvolutionDraft,
     createMemoryEvolutionDraft,
+    applyMemorySkillDraft,
     fetchMemories,
+    fetchMemorySkillDrafts,
+    generateMemorySkillDrafts,
     getMemory,
+    getMemorySkillDraft,
     invalidateMemoryCache,
     searchMemories,
+    updateMemorySkillDraft,
+    validateMemorySkillDraft,
 } from './memories.js';
 
 export {

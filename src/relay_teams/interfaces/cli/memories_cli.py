@@ -30,6 +30,11 @@ def build_memories_app(
         pretty_exceptions_enable=False,
         help="Memory Bank commands.",
     )
+    skill_drafts_app = typer.Typer(
+        no_args_is_help=True,
+        pretty_exceptions_enable=False,
+        help="Memory-derived skill draft commands.",
+    )
 
     @memories_app.command("list")
     def list_memories(
@@ -293,17 +298,8 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-        daemon: bool = typer.Option(
-            False,
-            "--daemon",
-            "-d",
-            help="Run the server as a background process when autostarting.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Force kill any existing server process before autostarting.",
-        ),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
     ) -> None:
         auto_start_if_needed(base_url, autostart, daemon, force)
         body: dict[str, object] = {
@@ -341,17 +337,8 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-        daemon: bool = typer.Option(
-            False,
-            "--daemon",
-            "-d",
-            help="Run the server as a background process when autostarting.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Force kill any existing server process before autostarting.",
-        ),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
     ) -> None:
         auto_start_if_needed(base_url, autostart, daemon, force)
         params: dict[str, object] = {}
@@ -363,12 +350,7 @@ def build_memories_app(
             f"/api/workspaces/{workspace_id}/memories/evolutions",
             params,
         )
-        payload = request_json(
-            base_url,
-            "GET",
-            path,
-            None,
-        )
+        payload = request_json(base_url, "GET", path, None)
         response = _require_object_response(
             payload, f"/api/workspaces/{workspace_id}/memories/evolutions"
         )
@@ -388,17 +370,8 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-        daemon: bool = typer.Option(
-            False,
-            "--daemon",
-            "-d",
-            help="Run the server as a background process when autostarting.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Force kill any existing server process before autostarting.",
-        ),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
     ) -> None:
         auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
@@ -431,17 +404,8 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-        daemon: bool = typer.Option(
-            False,
-            "--daemon",
-            "-d",
-            help="Run the server as a background process when autostarting.",
-        ),
-        force: bool = typer.Option(
-            False,
-            "--force",
-            help="Force kill any existing server process before autostarting.",
-        ),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
     ) -> None:
         auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
@@ -459,7 +423,215 @@ def build_memories_app(
             return
         typer.echo(f"Rejected memory evolution draft: {response.get('draft_id', '-')}")
 
+    @skill_drafts_app.command("generate")
+    def generate_skill_drafts(
+        workspace_id: str | None = typer.Option(None, "--workspace-id"),
+        cross_workspace: bool = typer.Option(
+            False,
+            "--cross-workspace/--workspace",
+            help="Generate from cross-workspace memory instead of one workspace.",
+        ),
+        kind: str = typer.Option("auto", "--kind"),
+        query: str = typer.Option("", "--query"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        body: dict[str, object] = {
+            "scope_kind": "cross_workspace" if cross_workspace else "workspace",
+            "draft_kind": kind,
+        }
+        if workspace_id is not None and workspace_id.strip():
+            if cross_workspace:
+                body["workspace_ids"] = [workspace_id.strip()]
+            else:
+                body["workspace_id"] = workspace_id.strip()
+        if query.strip():
+            body["text_query"] = query.strip()
+        payload = request_json(
+            base_url,
+            "POST",
+            "/api/memories/skill-drafts:generate",
+            body,
+        )
+        response = _require_object_response(
+            payload, "/api/memories/skill-drafts:generate"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_skill_drafts_table(response))
+
+    @skill_drafts_app.command("list")
+    def list_skill_drafts(
+        workspace_id: str | None = typer.Option(None, "--workspace-id"),
+        status: str | None = typer.Option(None, "--status"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        params: dict[str, object] = {}
+        if workspace_id is not None and workspace_id.strip():
+            params["workspace_id"] = workspace_id.strip()
+        if status is not None and status.strip():
+            params["status"] = status.strip()
+        path = _path_with_query("/api/memories/skill-drafts", params)
+        payload = request_json(
+            base_url,
+            "GET",
+            path,
+            None,
+        )
+        response = _require_object_response(payload, "/api/memories/skill-drafts")
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_skill_drafts_table(response))
+
+    @skill_drafts_app.command("get")
+    def get_skill_draft(
+        draft_id: str = typer.Option(..., "--draft-id"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        payload = request_json(
+            base_url,
+            "GET",
+            f"/api/memories/skill-drafts/{draft_id}",
+            None,
+        )
+        response = _require_object_response(
+            payload, f"/api/memories/skill-drafts/{draft_id}"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_skill_draft_detail(response))
+
+    @skill_drafts_app.command("update")
+    def update_skill_draft(
+        draft_id: str = typer.Option(..., "--draft-id"),
+        runtime_name: str | None = typer.Option(None, "--runtime-name"),
+        description: str | None = typer.Option(None, "--description"),
+        instructions: str | None = typer.Option(None, "--instructions"),
+        status: str | None = typer.Option(None, "--status"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        body: dict[str, object] = {}
+        if runtime_name is not None:
+            body["runtime_name"] = runtime_name
+        if description is not None:
+            body["description"] = description
+        if instructions is not None:
+            body["instructions"] = instructions
+        if status is not None:
+            body["status"] = status
+        payload = request_json(
+            base_url,
+            "PUT",
+            f"/api/memories/skill-drafts/{draft_id}",
+            body,
+        )
+        response = _require_object_response(
+            payload, f"/api/memories/skill-drafts/{draft_id}"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_skill_draft_detail(response))
+
+    @skill_drafts_app.command("validate")
+    def validate_skill_draft(
+        draft_id: str = typer.Option(..., "--draft-id"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        payload = request_json(
+            base_url,
+            "POST",
+            f"/api/memories/skill-drafts/{draft_id}:validate",
+            None,
+        )
+        response = _require_object_response(
+            payload, f"/api/memories/skill-drafts/{draft_id}:validate"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(_render_skill_draft_detail(response))
+
+    @skill_drafts_app.command("apply")
+    def apply_skill_draft(
+        draft_id: str = typer.Option(..., "--draft-id"),
+        output_format: MemoriesOutputFormat = typer.Option(
+            MemoriesOutputFormat.TABLE,
+            "--format",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(False, "--daemon", "-d"),
+        force: bool = typer.Option(False, "--force"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart, daemon, force)
+        payload = request_json(
+            base_url,
+            "POST",
+            f"/api/memories/skill-drafts/{draft_id}:apply",
+            None,
+        )
+        response = _require_object_response(
+            payload, f"/api/memories/skill-drafts/{draft_id}:apply"
+        )
+        if output_format == MemoriesOutputFormat.JSON:
+            typer.echo(json.dumps(response, ensure_ascii=False))
+            return
+        typer.echo(
+            f"Applied skill draft: {response.get('ref', response.get('skill_id', '-'))}"
+        )
+
     memories_app.add_typer(evolve_app, name="evolve")
+    memories_app.add_typer(skill_drafts_app, name="skill-drafts")
+
     return memories_app
 
 
@@ -598,6 +770,60 @@ def _render_evolution_table(payload: dict[str, object]) -> str:
             + runtime_name.ljust(26)
             + skill_id
         )
+    return "\n".join(lines)
+
+
+def _render_skill_drafts_table(payload: dict[str, object]) -> str:
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        error_message = payload.get("error_message")
+        if isinstance(error_message, str) and error_message:
+            return f"No skill drafts. {error_message}"
+        return "No skill drafts found."
+    lines = [
+        "ID".ljust(30)
+        + "Status".ljust(13)
+        + "Kind".ljust(12)
+        + "Name".ljust(34)
+        + "Sources",
+        "-" * 100,
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            str(item.get("id", ""))[:28].ljust(30)
+            + str(item.get("status", ""))[:11].ljust(13)
+            + str(item.get("draft_kind", ""))[:10].ljust(12)
+            + str(item.get("runtime_name", ""))[:32].ljust(34)
+            + str(item.get("source_memory_count", 0))
+        )
+    return "\n".join(lines)
+
+
+def _render_skill_draft_detail(payload: dict[str, object]) -> str:
+    lines = [
+        f"ID            : {payload.get('id', '-')}",
+        f"Status        : {payload.get('status', '-')}",
+        f"Kind          : {payload.get('draft_kind', '-')}",
+        f"Runtime Name  : {payload.get('runtime_name', '-')}",
+        f"Description   : {payload.get('description', '-')}",
+        f"Applied Ref   : {payload.get('applied_ref', '-')}",
+        f"Updated       : {payload.get('updated_at', '-')}",
+        "",
+        "Instructions:",
+        str(payload.get("instructions", "")),
+    ]
+    messages = payload.get("validation_messages")
+    if isinstance(messages, list) and messages:
+        lines.extend(("", "Validation:"))
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            lines.append(
+                f"- {message.get('severity', '-')}: "
+                f"{message.get('code', '-')} - {message.get('message', '-')}"
+            )
     return "\n".join(lines)
 
 
