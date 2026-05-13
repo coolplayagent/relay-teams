@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 
 from pydantic import JsonValue
 from pydantic_ai.models.anthropic import AnthropicModelSettings
@@ -44,8 +44,13 @@ from relay_teams.computer import (
     describe_builtin_tool,
     describe_mcp_tool,
 )
+from relay_teams.env.w3_auth_token_env import env_declares_w3_x_auth_token
 from relay_teams.media import UserPromptContent
-from relay_teams.mcp.mcp_models import McpToolSchema
+from relay_teams.mcp.mcp_models import (
+    McpDiscoveryStatus,
+    McpServerSpec,
+    McpToolSchema,
+)
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.agents.execution.model_builder import (
     is_anthropic_provider,
@@ -154,6 +159,44 @@ class _NullCommitMessageRepo:
         return self.get_history_for_conversation(conversation_id)
 
 
+@runtime_checkable
+class _W3AuthEnvPreparer(Protocol):
+    async def prepare_w3_auth_env(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+
+@runtime_checkable
+class _W3AuthEnvRuntime(Protocol):
+    def runtime_w3_x_auth_token(self) -> str | None:  # pragma: no cover
+        raise NotImplementedError
+
+
+class _McpSpecProvider(Protocol):
+    def get_w3_auth_env_spec(self, name: str) -> McpServerSpec:  # pragma: no cover
+        raise NotImplementedError
+
+
+def _mcp_server_declares_w3_auth_env(
+    registry: _McpSpecProvider,
+    server_name: str,
+) -> bool:
+    try:
+        spec = registry.get_w3_auth_env_spec(server_name)
+    except ValueError:
+        return False
+    raw_env = spec.server_config.get("env")
+    if not isinstance(raw_env, dict):
+        return False
+    env = {str(key): value for key, value in raw_env.items() if isinstance(key, str)}
+    return env_declares_w3_x_auth_token(env)
+
+
 class SessionPromptMixin(AgentLlmSessionMixinBase):
     async def _prepare_prompt_context(
         self,
@@ -192,6 +235,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         str,
         object,
     ]:
+        await self._prepare_w3_mcp_runtime_auth(allowed_mcp_servers)
         prepared_prompt = await self._prepare_prompt_context(
             request=request,
             conversation_id=conversation_id,
@@ -247,6 +291,51 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             skill_registry=self._skill_registry,
         )
         return prepared_prompt, history, prepared_system_prompt, cast(object, agent)
+
+    async def _prepare_w3_mcp_runtime_auth(
+        self,
+        allowed_mcp_servers: tuple[str, ...],
+    ) -> None:
+        if not allowed_mcp_servers:
+            return
+        if not isinstance(self._mcp_registry, _W3AuthEnvPreparer):
+            return
+        await self._mcp_registry.prepare_w3_auth_env(
+            allowed_mcp_servers,
+            strict=False,
+            consumer="agents.execution.session_prompt",
+        )
+        await self._refresh_failed_w3_mcp_discovery_after_auth(allowed_mcp_servers)
+
+    async def _refresh_failed_w3_mcp_discovery_after_auth(
+        self,
+        allowed_mcp_servers: tuple[str, ...],
+    ) -> None:
+        discovery_service = self._mcp_discovery_service
+        if discovery_service is None:
+            return
+        if not isinstance(self._mcp_registry, _W3AuthEnvRuntime):
+            return
+        if self._mcp_registry.runtime_w3_x_auth_token() is None:
+            return
+        resolved_names = self._mcp_registry.resolve_server_names(
+            allowed_mcp_servers,
+            strict=False,
+            consumer="agents.execution.session_prompt.w3_discovery_refresh",
+        )
+        for server_name in resolved_names:
+            if not _mcp_server_declares_w3_auth_env(self._mcp_registry, server_name):
+                continue
+            summary = discovery_service.get_tools_summary(server_name)
+            if summary.status == McpDiscoveryStatus.FAILED:
+                try:
+                    tools = await self._mcp_registry.list_tools_for_discovery(
+                        server_name
+                    )
+                except Exception as exc:
+                    discovery_service.mark_failed(server_name, exc)
+                else:
+                    discovery_service.mark_ready(server_name, tools)
 
     def _first_tool_replayable_history_index(
         self,

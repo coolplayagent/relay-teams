@@ -19,6 +19,7 @@ from relay_teams.agent_runtimes.models import (
     StdioTransportConfig,
     StreamableHttpTransportConfig,
 )
+from relay_teams.env.w3_auth_token_env import overlay_w3_x_auth_token_env
 from relay_teams.logger import get_logger, log_event
 from relay_teams.net.clients import create_async_http_client
 
@@ -173,9 +174,17 @@ class StdioAcpTransportClient:
         if self._process is not None and self._process.returncode is None:
             return
         env = os.environ.copy()
+        declared_env: dict[str, object] = {}
         for item in self._config.env:
-            if item.value is not None:
-                env[item.name] = item.value
+            declared_env[item.name] = item.value
+            if item.value is None:
+                continue
+            env[item.name] = item.value
+        env = await overlay_w3_x_auth_token_env(
+            env,
+            declared_env=declared_env,
+            inject_missing_declared=True,
+        )
         self._process = await asyncio.create_subprocess_exec(
             self._config.command,
             *self._config.args,

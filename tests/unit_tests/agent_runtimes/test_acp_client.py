@@ -6,8 +6,12 @@ import asyncio
 import pytest
 from pydantic import JsonValue
 
+from relay_teams.agent_runtimes.clients import acp as acp_module
 from relay_teams.agent_runtimes.clients.acp import StdioAcpTransportClient
-from relay_teams.agent_runtimes.models import StdioTransportConfig
+from relay_teams.agent_runtimes.models import (
+    ExternalAgentSecretBinding,
+    StdioTransportConfig,
+)
 
 
 @pytest.mark.asyncio
@@ -49,6 +53,67 @@ async def test_stdio_transport_starts_in_runtime_workspace(monkeypatch) -> None:
         await transport.start()
 
     assert captured["cwd"] == "/tmp/project"
+
+
+@pytest.mark.asyncio
+async def test_stdio_transport_applies_w3_auth_token_overlay_to_declared_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_env: dict[str, str] = {}
+
+    async def fake_overlay(
+        env: dict[str, str],
+        *,
+        declared_env: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "xAuthToken" in declared_env:
+            result["xAuthToken"] = "runtime-token"
+        return result
+
+    async def fake_create_subprocess_exec(
+        command: str,
+        *args: str,
+        stdin: int,
+        stdout: int,
+        stderr: int,
+        cwd: str | None,
+        env: dict[str, str],
+    ) -> object:
+        _ = command, args, stdin, stdout, stderr, cwd
+        captured_env.update(env)
+        raise RuntimeError("stop-after-capture")
+
+    async def ignore_message(
+        _method: str,
+        _params: dict[str, JsonValue],
+        _message_id: str | int | None,
+    ) -> dict[str, JsonValue]:
+        return {}
+
+    monkeypatch.setattr(acp_module, "overlay_w3_x_auth_token_env", fake_overlay)
+    monkeypatch.setattr(
+        asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    transport = StdioAcpTransportClient(
+        config=StdioTransportConfig(
+            command="agent",
+            env=(
+                ExternalAgentSecretBinding(name="xAuthToken", value=None),
+                ExternalAgentSecretBinding(name="WEB_TOKEN", value="keep"),
+            ),
+        ),
+        on_message=ignore_message,
+    )
+
+    with pytest.raises(RuntimeError, match="stop-after-capture"):
+        await transport.start()
+
+    assert captured_env["xAuthToken"] == "runtime-token"
+    assert captured_env["WEB_TOKEN"] == "keep"
 
 
 @pytest.mark.asyncio

@@ -640,6 +640,62 @@ def test_build_mcp_servers_for_role_ignores_unknown_servers() -> None:
     assert servers == [{"command": "npx", "id": "docs", "name": "docs"}]
 
 
+@pytest.mark.asyncio
+async def test_build_mcp_servers_for_role_overlays_declared_w3_auth_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    role = RoleDefinition(
+        role_id="writer",
+        name="Writer",
+        description="Writes documents.",
+        version="1.0.0",
+        tools=(),
+        mcp_servers=("docs",),
+        skills=(),
+        model_profile="default",
+        system_prompt="Write clearly.",
+    )
+    server_config = {
+        "command": "npx",
+        "env": {"X_AUTH_TOKEN": "placeholder", "AUTH_TOKEN": "keep"},
+        "headers": {"X-Auth-Token": "header-placeholder"},
+    }
+    mcp_registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="docs",
+                config={"mcpServers": {"docs": server_config}},
+                server_config=server_config,
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    await mcp_registry.prepare_w3_auth_env(("docs",), consumer="test")
+
+    servers = _build_mcp_servers_for_role(
+        role=role,
+        mcp_registry=mcp_registry,
+    )
+
+    assert servers == [
+        {
+            "command": "npx",
+            "env": {"X_AUTH_TOKEN": "runtime-token", "AUTH_TOKEN": "keep"},
+            "headers": {"X-Auth-Token": "header-placeholder"},
+            "id": "docs",
+            "name": "docs",
+        }
+    ]
+    assert server_config["env"]["X_AUTH_TOKEN"] == "placeholder"
+
+
 def _cast_bridge(bridge: _FakeHostToolBridge) -> ExternalAcpHostToolBridge:
     return cast(ExternalAcpHostToolBridge, bridge)
 

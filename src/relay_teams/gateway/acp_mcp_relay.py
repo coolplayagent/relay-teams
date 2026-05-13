@@ -14,6 +14,10 @@ import mcp.types as mcp_types
 from pydantic import JsonValue
 from pydantic_ai.mcp import MCPServer
 
+from relay_teams.env.w3_auth_token_env import (
+    env_declares_w3_x_auth_token,
+    resolve_w3_x_auth_token,
+)
 from relay_teams.gateway.gateway_models import (
     GatewayMcpServerSpec,
     GatewaySessionRecord,
@@ -28,6 +32,7 @@ from relay_teams.mcp.mcp_models import (
 from relay_teams.mcp.mcp_registry import (
     McpRegistry,
     build_mcp_server,
+    detect_mcp_transport,
     get_effective_mcp_tool_name,
     get_mcp_tool_prefix,
 )
@@ -125,6 +130,66 @@ class GatewayAwareMcpRegistry(McpRegistry):
         except ValueError:
             return self._relay.current_session_spec(name)
 
+    def get_w3_auth_env_spec(self, name: str) -> McpServerSpec:
+        session_spec = self._relay.current_session_gateway_spec(name)
+        if session_spec is not None:
+            return _gateway_spec_to_mcp_spec(session_spec)
+        return self._base_registry.get_w3_auth_env_spec(name)
+
+    async def prepare_w3_auth_env(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> None:
+        resolved_names = self.resolve_server_names(
+            names,
+            strict=strict,
+            consumer=consumer,
+        )
+        base_server_names = set(self._base_registry.list_names())
+        session_server_names = {
+            name
+            for name in resolved_names
+            if self._relay.current_session_gateway_spec(name) is not None
+        }
+        base_names = tuple(
+            name
+            for name in resolved_names
+            if name in base_server_names and name not in session_server_names
+        )
+        if base_names:
+            await self._base_registry.prepare_w3_auth_env(
+                base_names,
+                strict=False,
+                consumer=consumer,
+            )
+        session_names = tuple(
+            name
+            for name in resolved_names
+            if _gateway_server_declares_w3_auth_env(
+                self._relay.current_session_gateway_spec(name)
+            )
+        )
+        if session_names:
+            token = await resolve_w3_x_auth_token()
+            if token is None:
+                return
+            self._relay.prepare_current_session_w3_auth_token(
+                session_names,
+                token=token,
+            )
+            session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+            if session_id is not None:
+                for name in session_names:
+                    self._disabled_session_servers.discard((session_id, name))
+
+    def runtime_w3_x_auth_token(self) -> str | None:
+        for token in self._relay.current_session_w3_auth_tokens():
+            return token
+        return self._base_registry.runtime_w3_x_auth_token()
+
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[MCPServer, ...]:
         self.validate_known(names)
         toolsets: list[MCPServer] = []
@@ -164,6 +229,56 @@ class GatewayAwareMcpRegistry(McpRegistry):
                 exc=exc,
             )
             return ()
+        return tuple(
+            McpToolInfo(
+                name=get_effective_mcp_tool_name(name, str(tool.name)),
+                description=tool.description
+                if isinstance(tool.description, str)
+                else "",
+            )
+            for tool in tools
+        )
+
+    async def list_tools_for_discovery(self, name: str) -> tuple[McpToolInfo, ...]:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        spec = self._relay.current_session_gateway_spec(name)
+        if session_id is None or spec is None:
+            return await self._base_registry.list_tools_for_discovery(name)
+        if (session_id, name) in self._disabled_session_servers:
+            return ()
+        try:
+            toolset = self._relay.current_session_toolset(name)
+        except Exception as exc:
+            self._disable_session_server(
+                name,
+                consumer="gateway.acp_mcp_relay.list_tools_for_discovery",
+                reason="toolset_init_failed",
+                exc=exc,
+            )
+            raise
+        if toolset is None:
+            self._log_session_server_warning(
+                name,
+                consumer="gateway.acp_mcp_relay.list_tools_for_discovery",
+                reason=(
+                    "acp_connection_inactive"
+                    if spec.transport == "acp"
+                    else "toolset_unavailable"
+                ),
+                transport=spec.transport,
+            )
+            return ()
+        try:
+            async with toolset:
+                tools = await toolset.list_tools()
+        except Exception as exc:
+            self._disable_session_server(
+                name,
+                consumer="gateway.acp_mcp_relay.list_tools_for_discovery",
+                reason="tool_listing_failed",
+                exc=exc,
+            )
+            raise
         return tuple(
             McpToolInfo(
                 name=get_effective_mcp_tool_name(name, str(tool.name)),
@@ -308,6 +423,7 @@ class AcpMcpRelay:
         self._session_active_servers: dict[str, dict[str, str]] = {}
         self._session_specs: dict[str, dict[str, GatewayMcpServerSpec]] = {}
         self._session_toolsets: dict[tuple[str, str], MCPServer] = {}
+        self._session_w3_auth_tokens: dict[tuple[str, str], str] = {}
         self._metric_recorder = metric_recorder
         self._gateway_session_lookup = gateway_session_lookup
 
@@ -331,6 +447,12 @@ class AcpMcpRelay:
             if cache_key[1] in {spec.server_id for spec in specs}:
                 continue
             del self._session_toolsets[cache_key]
+        for cache_key in tuple(self._session_w3_auth_tokens.keys()):
+            if cache_key[0] != session_id:
+                continue
+            if cache_key[1] in {spec.server_id for spec in specs}:
+                continue
+            del self._session_w3_auth_tokens[cache_key]
         self._session_specs[session_id] = {spec.server_id: spec for spec in specs}
 
     @staticmethod
@@ -382,9 +504,41 @@ class AcpMcpRelay:
         cache_key = (session_id, name)
         toolset = self._session_toolsets.get(cache_key)
         if toolset is None:
-            toolset = build_mcp_server(_gateway_spec_to_mcp_spec(spec))
+            toolset = build_mcp_server(
+                _gateway_spec_to_mcp_spec(spec),
+                w3_x_auth_token=self._session_w3_auth_tokens.get(cache_key),
+            )
             self._session_toolsets[cache_key] = toolset
         return toolset
+
+    def prepare_current_session_w3_auth_token(
+        self,
+        server_names: tuple[str, ...],
+        *,
+        token: str | None,
+    ) -> None:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is None:
+            return
+        for name in server_names:
+            cache_key = (session_id, name)
+            previous_token = self._session_w3_auth_tokens.get(cache_key)
+            if token is None:
+                self._session_w3_auth_tokens.pop(cache_key, None)
+            else:
+                self._session_w3_auth_tokens[cache_key] = token
+            if previous_token != token:
+                self._session_toolsets.pop(cache_key, None)
+
+    def current_session_w3_auth_tokens(self) -> tuple[str, ...]:
+        session_id = _CURRENT_GATEWAY_SESSION_ID.get()
+        if session_id is None:
+            return ()
+        return tuple(
+            token
+            for (token_session_id, _), token in self._session_w3_auth_tokens.items()
+            if token_session_id == session_id
+        )
 
     def current_session_toolsets(self) -> dict[str, MCPServer]:
         session_id = _CURRENT_GATEWAY_SESSION_ID.get()
@@ -855,6 +1009,24 @@ def _gateway_spec_to_mcp_spec(spec: GatewayMcpServerSpec) -> McpServerSpec:
         server_config=server_config,
         source=McpConfigScope.SESSION,
     )
+
+
+def _gateway_server_declares_w3_auth_env(
+    spec: GatewayMcpServerSpec | None,
+) -> bool:
+    if spec is None:
+        return False
+    try:
+        transport = detect_mcp_transport(_gateway_spec_to_mcp_spec(spec).server_config)
+    except ValueError:
+        return False
+    if transport != "stdio":
+        return False
+    raw_env = spec.config.get("env")
+    if not isinstance(raw_env, dict):
+        return False
+    env = {str(key): value for key, value in raw_env.items() if isinstance(key, str)}
+    return env_declares_w3_x_auth_token(env)
 
 
 def _jsonrpc_message_from_acp_response(

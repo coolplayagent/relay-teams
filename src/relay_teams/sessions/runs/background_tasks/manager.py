@@ -33,6 +33,7 @@ except ImportError:
 
 from pydantic import JsonValue
 
+from relay_teams.env.w3_auth_token_env import overlay_w3_x_auth_token_env
 from relay_teams.logger import get_logger, log_event
 from relay_teams.monitors import MonitorEventEnvelope, MonitorService, MonitorSourceKind
 from relay_teams.sessions.runs.enums import RunEventType
@@ -992,11 +993,12 @@ class BackgroundTaskManager:
             raise ValueError(
                 f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
             )
+        remote_env = await _build_ssh_remote_env(env)  # pragma: no cover
         prepared = self._ssh_profile_service.prepare_remote_command(
             ssh_profile_id=provider_config.ssh_profile_id,
             command=command,
             cwd=remote_cwd,
-            env=env,
+            env=remote_env,
             tty=tty,
         )
         try:
@@ -1032,14 +1034,14 @@ class BackgroundTaskManager:
                 cleanup_root=cleanup_root,
             )
         if _windows_tty_supported():
-            return self._spawn_ssh_windows_conpty_transport(
+            return await self._spawn_ssh_windows_conpty_transport(
                 command=command,
                 ssh_context=ssh_context,
                 env=env,
             )
         raise ValueError(_tty_unsupported_message())
 
-    def _spawn_ssh_windows_conpty_transport(
+    async def _spawn_ssh_windows_conpty_transport(
         self,
         *,
         command: str,
@@ -1054,11 +1056,12 @@ class BackgroundTaskManager:
             raise ValueError(
                 f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
             )
+        remote_env = await _build_ssh_remote_env(env)
         prepared = self._ssh_profile_service.prepare_remote_command(
             ssh_profile_id=provider_config.ssh_profile_id,
             command=command,
             cwd=remote_cwd,
-            env=env,
+            env=remote_env,
             tty=True,
         )
         try:
@@ -1094,11 +1097,12 @@ class BackgroundTaskManager:
             raise ValueError(
                 f"Workspace ssh mount is missing ssh config: {mount.mount_name}"
             )
+        remote_env = await _build_ssh_remote_env(env)
         prepared = self._ssh_profile_service.prepare_remote_command(
             ssh_profile_id=provider_config.ssh_profile_id,
             command=command,
             cwd=remote_cwd,
-            env=env,
+            env=remote_env,
             tty=True,
         )
         assert pty is not None
@@ -1776,6 +1780,12 @@ def _posix_pty_supported() -> bool:
         and pty is not None
         and termios is not None
     )
+
+
+async def _build_ssh_remote_env(env: dict[str, str] | None) -> dict[str, str] | None:
+    if env is None:
+        return None
+    return await overlay_w3_x_auth_token_env(env, declared_env=env)
 
 
 def _windows_tty_supported() -> bool:

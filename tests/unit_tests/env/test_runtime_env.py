@@ -82,8 +82,8 @@ def test_sync_app_env_to_process_env_reads_secret_backed_values(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
-    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    runtime_env.PROCESS_ENV_BASELINE.clear()
+    runtime_env.SYNCED_APP_ENV_KEYS.clear()
     monkeypatch.delenv("APP_ONLY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -169,8 +169,8 @@ def test_sync_app_env_to_process_env_applies_and_removes_managed_keys(
     env_file = tmp_path / ".relay-teams" / ".env"
     env_file.parent.mkdir(parents=True)
     env_file.write_text("SYNCED_KEY=from-file\n", encoding="utf-8")
-    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
-    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    runtime_env.PROCESS_ENV_BASELINE.clear()
+    runtime_env.SYNCED_APP_ENV_KEYS.clear()
     monkeypatch.delenv("SYNCED_KEY", raising=False)
 
     synced_env = runtime_env.sync_app_env_to_process_env(env_file)
@@ -191,8 +191,9 @@ def test_sync_app_env_to_process_env_restores_baseline_values(
     env_file = tmp_path / ".relay-teams" / ".env"
     env_file.parent.mkdir(parents=True)
     env_file.write_text("RESTORE_KEY=overlay\n", encoding="utf-8")
-    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {"RESTORE_KEY": "base"})
-    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    runtime_env.PROCESS_ENV_BASELINE.clear()
+    runtime_env.PROCESS_ENV_BASELINE["RESTORE_KEY"] = "base"
+    runtime_env.SYNCED_APP_ENV_KEYS.clear()
     monkeypatch.setenv("RESTORE_KEY", "base")
 
     runtime_env.sync_app_env_to_process_env(env_file)

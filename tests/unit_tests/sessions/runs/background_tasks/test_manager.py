@@ -412,6 +412,80 @@ async def test_background_task_manager_ssh_pipe_uses_prepared_subprocess_helper(
 
 
 @pytest.mark.asyncio
+async def test_background_task_manager_ssh_pipe_overlays_declared_w3_auth_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-ssh-w3.db")
+    hub = RunEventHub()
+    ssh_service = _FakePreparedSshProfileService(tmp_path / "ssh-temp-w3")
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=hub,
+        ssh_profile_service=cast(SshProfileService, ssh_service),
+    )
+    workspace = _build_ssh_workspace_handle(tmp_path)
+    ssh_context = manager._resolve_ssh_execution_context(
+        workspace=workspace,
+        cwd=workspace.execution_root,
+    )
+    assert ssh_context is not None
+
+    async def fake_overlay_w3_x_auth_token_env(
+        env: dict[str, str],
+        *,
+        declared_env: dict[str, str] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "xAuthToken" in declared_env:
+            result["xAuthToken"] = "runtime-token"
+        return result
+
+    async def fake_create_prepared_subprocess(
+        *,
+        argv: tuple[str, ...],
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        stdin: int | None = None,
+        stdout: int | None = None,
+        stderr: int | None = None,
+    ) -> _FakePipeProcess:
+        _ = (argv, cwd, env, stdin, stdout, stderr)
+        return _FakePipeProcess()
+
+    monkeypatch.setattr(
+        manager_module,
+        "overlay_w3_x_auth_token_env",
+        fake_overlay_w3_x_auth_token_env,
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "create_prepared_subprocess",
+        fake_create_prepared_subprocess,
+    )
+
+    transport = await manager._spawn_ssh_pipe_transport(
+        command="pwd",
+        ssh_context=ssh_context,
+        env={"xAuthToken": "placeholder", "AUTH_TOKEN": "keep"},
+    )
+
+    assert ssh_service.calls == [
+        (
+            "prod",
+            "pwd",
+            "/srv/app",
+            {"xAuthToken": "runtime-token", "AUTH_TOKEN": "keep"},
+            False,
+        )
+    ]
+    await transport.close()
+
+
+@pytest.mark.asyncio
 async def test_background_task_manager_ssh_tty_uses_windows_conpty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -477,6 +551,89 @@ async def test_background_task_manager_ssh_tty_uses_windows_conpty(
     assert ssh_service.temp_root.is_dir()
     await transport.close()
     assert not ssh_service.temp_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_ssh_tty_overlays_declared_w3_auth_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-ssh-tty-w3.db")
+    hub = RunEventHub()
+    ssh_service = _FakePreparedSshProfileService(tmp_path / "ssh-temp-tty-w3")
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=hub,
+        ssh_profile_service=cast(SshProfileService, ssh_service),
+    )
+    workspace = _build_ssh_workspace_handle(tmp_path)
+    ssh_context = manager._resolve_ssh_execution_context(
+        workspace=workspace,
+        cwd=workspace.execution_root,
+    )
+    assert ssh_context is not None
+    fake_process = _FakeWindowsPtyProcess()
+
+    async def fake_overlay_w3_x_auth_token_env(
+        env: dict[str, str],
+        *,
+        declared_env: dict[str, str] | None = None,
+        **_kwargs: object,
+    ) -> dict[str, str]:
+        result = dict(env)
+        if declared_env is not None and "X_AUTH_TOKEN" in declared_env:
+            result["X_AUTH_TOKEN"] = "runtime-token"
+        return result
+
+    def fake_spawn_windows_pty_argv_process(
+        *,
+        argv: tuple[str, ...],
+        cwd: Path,
+        env: dict[str, str],
+        columns: int,
+        rows: int,
+    ) -> _FakeWindowsPtyProcess:
+        _ = (argv, cwd, env, columns, rows)
+        return fake_process
+
+    monkeypatch.setattr(manager_module, "_posix_pty_supported", lambda: False)
+    monkeypatch.setattr(manager_module, "_windows_tty_supported", lambda: True)
+    monkeypatch.setattr(
+        manager_module,
+        "overlay_w3_x_auth_token_env",
+        fake_overlay_w3_x_auth_token_env,
+    )
+    monkeypatch.setattr(
+        manager_module,
+        "_spawn_windows_pty_argv_process",
+        fake_spawn_windows_pty_argv_process,
+    )
+
+    transport = await manager._spawn_ssh_tty_transport(
+        command="bash",
+        ssh_context=ssh_context,
+        env={"X_AUTH_TOKEN": "placeholder", "AUTH_TOKEN": "keep"},
+    )
+
+    assert ssh_service.calls == [
+        (
+            "prod",
+            "bash",
+            "/srv/app",
+            {"X_AUTH_TOKEN": "runtime-token", "AUTH_TOKEN": "keep"},
+            True,
+        )
+    ]
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_build_ssh_remote_env_preserves_missing_env() -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    assert await manager_module._build_ssh_remote_env(None) is None
 
 
 @pytest.mark.asyncio

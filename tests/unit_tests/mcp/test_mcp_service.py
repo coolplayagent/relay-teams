@@ -10,6 +10,7 @@ from types import TracebackType
 
 import pytest
 import httpx
+from pydantic import JsonValue
 from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
 
 from relay_teams.env.proxy_env import ProxyEnvConfig
@@ -23,7 +24,11 @@ from relay_teams.mcp.mcp_models import (
     McpToolSchema,
 )
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
-from relay_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
+from relay_teams.mcp.mcp_registry import (
+    McpRegistry,
+    build_mcp_server,
+    overlay_mcp_server_config_w3_auth_env,
+)
 from relay_teams.mcp.mcp_service import McpService
 from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.trace import get_trace_context
@@ -607,9 +612,10 @@ async def test_registry_discovery_tools_do_not_mark_server_runtime_failed(
         *,
         proxy_env: Mapping[str, str] | None = None,
         stdio_default_timeout_seconds: float = 15.0,
+        w3_x_auth_token: str | None = None,
     ) -> _FailingAsyncToolset:
         nonlocal build_calls
-        _ = spec, proxy_env, stdio_default_timeout_seconds
+        _ = spec, proxy_env, stdio_default_timeout_seconds, w3_x_auth_token
         build_calls += 1
         return _FailingAsyncToolset()
 
@@ -1158,6 +1164,453 @@ def test_build_mcp_server_stdio_expands_explicit_env_references(
     assert server.env["MODE"] == "stdio"
     assert server.env["MISSING"] == "${MCP_MISSING}"
     assert server.env["TEMPLATE_MISSING"] == "{{MCP_MISSING}}"
+
+
+def test_build_mcp_server_overlays_declared_w3_auth_token_env() -> None:
+    server_config = {
+        "command": "npx",
+        "args": ["-y", "@example/w3-mcp"],
+        "env": {
+            "xAuthToken": "placeholder",
+            "AUTH_TOKEN": "keep",
+        },
+    }
+    server = build_mcp_server(
+        McpServerSpec(
+            name="w3",
+            config={"mcpServers": {"w3": server_config}},
+            server_config=server_config,
+            source=McpConfigScope.APP,
+        ),
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["xAuthToken"] == "runtime-token"
+    assert server.env["AUTH_TOKEN"] == "keep"
+    assert server_config["env"]["xAuthToken"] == "placeholder"
+
+
+def test_build_mcp_server_treats_local_transport_as_stdio_for_w3_env() -> None:
+    server_config = {
+        "type": "local",
+        "transport": "local",
+        "command": "npx",
+        "env": {"X_AUTH_TOKEN": "placeholder"},
+    }
+    server = build_mcp_server(
+        McpServerSpec(
+            name="local-w3",
+            config={"mcpServers": {"local-w3": server_config}},
+            server_config=server_config,
+            source=McpConfigScope.SESSION,
+        ),
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["X_AUTH_TOKEN"] == "runtime-token"
+
+
+def test_build_mcp_server_replaces_inherited_w3_auth_token_variants(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("X_AUTH_TOKEN", "ambient-token")
+    server_config = {
+        "command": "npx",
+        "args": ["-y", "@example/w3-mcp"],
+        "env": {"x_auth_token": "placeholder"},
+    }
+
+    server = build_mcp_server(
+        McpServerSpec(
+            name="w3",
+            config={"mcpServers": {"w3": server_config}},
+            server_config=server_config,
+            source=McpConfigScope.APP,
+        ),
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert "X_AUTH_TOKEN" not in server.env
+    assert server.env["x_auth_token"] == "runtime-token"
+
+
+def test_build_mcp_server_does_not_overlay_w3_auth_token_without_declared_key() -> None:
+    server = build_mcp_server(
+        McpServerSpec(
+            name="plain",
+            config={"mcpServers": {"plain": {"command": "npx"}}},
+            server_config={
+                "command": "npx",
+                "args": ["-y", "@example/plain-mcp"],
+                "env": {"AUTH_TOKEN": "keep"},
+            },
+            source=McpConfigScope.APP,
+        ),
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["AUTH_TOKEN"] == "keep"
+    assert "X_AUTH_TOKEN" not in server.env
+
+
+def test_overlay_mcp_server_config_w3_auth_env_only_updates_env_copy() -> None:
+    server_config = {
+        "command": "npx",
+        "headers": {"X-Auth-Token": "header-placeholder"},
+        "env": {"X-Auth-Token": "env-placeholder"},
+    }
+
+    overlay = overlay_mcp_server_config_w3_auth_env(
+        server_config,
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert overlay["headers"] == {"X-Auth-Token": "header-placeholder"}
+    assert overlay["env"] == {"X-Auth-Token": "runtime-token"}
+    assert server_config["env"]["X-Auth-Token"] == "env-placeholder"
+
+
+def test_overlay_mcp_server_config_w3_auth_env_skips_remote_servers() -> None:
+    server_config = {
+        "url": "https://example.com/mcp",
+        "headers": {"X-Auth-Token": "header-placeholder"},
+        "env": {"X-Auth-Token": "env-placeholder"},
+    }
+
+    overlay = overlay_mcp_server_config_w3_auth_env(
+        server_config,
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert overlay["headers"] == {"X-Auth-Token": "header-placeholder"}
+    assert overlay["env"] == {"X-Auth-Token": "env-placeholder"}
+
+
+@pytest.mark.parametrize(
+    "server_config",
+    (
+        {"env": {"X_AUTH_TOKEN": "placeholder"}},
+        {"command": "npx", "env": "X_AUTH_TOKEN=placeholder"},
+        {"command": "npx", "env": {"AUTH_TOKEN": "keep"}},
+    ),
+)
+def test_overlay_mcp_server_config_w3_auth_env_skips_non_declared_configs(
+    server_config: dict[str, JsonValue],
+) -> None:
+    overlay = overlay_mcp_server_config_w3_auth_env(
+        server_config,
+        w3_x_auth_token="runtime-token",
+    )
+
+    assert overlay == server_config
+
+
+def test_overlay_mcp_server_config_w3_auth_env_skips_without_token() -> None:
+    server_config = {"command": "npx", "env": {"X_AUTH_TOKEN": "placeholder"}}
+
+    overlay = overlay_mcp_server_config_w3_auth_env(
+        server_config,
+        w3_x_auth_token=None,
+    )
+
+    assert overlay == server_config
+
+
+@pytest.mark.asyncio
+async def test_registry_prepares_w3_auth_token_only_for_declared_mcp_env(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        nonlocal calls
+        calls += 1
+        return "runtime-token"
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"x-auth-token": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="plain",
+                config={"mcpServers": {"plain": {"command": "npx"}}},
+                server_config={"command": "npx", "env": {"AUTH_TOKEN": "keep"}},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("plain",), consumer="test")
+    assert calls == 0
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    assert calls == 1
+
+    server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["x-auth-token"] == "runtime-token"
+
+
+@pytest.mark.asyncio
+async def test_registry_does_not_prepare_w3_token_for_remote_mcp_env(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        nonlocal calls
+        calls += 1
+        return "runtime-token"
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="remote-w3",
+                config={
+                    "mcpServers": {"remote-w3": {"url": "https://example.com/mcp"}}
+                },
+                server_config={
+                    "url": "https://example.com/mcp",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("remote-w3",), consumer="test")
+
+    assert calls == 0
+    assert registry.runtime_w3_x_auth_token() is None
+
+
+@pytest.mark.asyncio
+async def test_registry_refreshes_w3_auth_token_for_cached_toolset(
+    monkeypatch,
+) -> None:
+    tokens = ["runtime-token-1", "runtime-token-2"]
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return tokens.pop(0)
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    first_server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(first_server, MCPServerStdio)
+    assert first_server.env is not None
+    assert first_server.env["X_AUTH_TOKEN"] == "runtime-token-1"
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    refreshed_server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(refreshed_server, MCPServerStdio)
+    assert refreshed_server is not first_server
+    assert refreshed_server.env is not None
+    assert refreshed_server.env["X_AUTH_TOKEN"] == "runtime-token-2"
+
+
+@pytest.mark.asyncio
+async def test_registry_preserves_w3_auth_token_on_transient_resolve_failure(
+    monkeypatch,
+) -> None:
+    tokens: list[str | None] = ["runtime-token", None]
+
+    async def fake_resolve_w3_x_auth_token() -> str | None:
+        return tokens.pop(0)
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    first_server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(first_server, MCPServerStdio)
+    assert first_server.env is not None
+    assert first_server.env["X_AUTH_TOKEN"] == "runtime-token"
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    preserved_server = registry.get_toolsets(("w3",))[0]
+
+    assert preserved_server is first_server
+    assert registry.runtime_w3_x_auth_token() == "runtime-token"
+
+
+@pytest.mark.asyncio
+async def test_registry_invalidates_all_w3_toolsets_when_token_rotates(
+    monkeypatch,
+) -> None:
+    tokens = ["runtime-token-1", "runtime-token-2", "runtime-token-2"]
+
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return tokens.pop(0)
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3-one",
+                config={"mcpServers": {"w3-one": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="w3-two",
+                config={"mcpServers": {"w3-two": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"xAuthToken": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("w3-one", "w3-two"), consumer="test")
+    first_two = registry.get_toolsets(("w3-two",))[0]
+    assert isinstance(first_two, MCPServerStdio)
+    assert first_two.env is not None
+    assert first_two.env["xAuthToken"] == "runtime-token-1"
+
+    await registry.prepare_w3_auth_env(("w3-one",), consumer="test")
+    await registry.prepare_w3_auth_env(("w3-two",), consumer="test")
+    refreshed_two = registry.get_toolsets(("w3-two",))[0]
+    assert isinstance(refreshed_two, MCPServerStdio)
+    assert refreshed_two is not first_two
+    assert refreshed_two.env is not None
+    assert refreshed_two.env["xAuthToken"] == "runtime-token-2"
+
+
+@pytest.mark.asyncio
+async def test_registry_rebuilds_cached_w3_toolset_when_token_becomes_available(
+    monkeypatch,
+) -> None:
+    tokens: list[str | None] = [None, "runtime-token"]
+
+    async def fake_resolve_w3_x_auth_token() -> str | None:
+        return tokens.pop(0)
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    placeholder_server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(placeholder_server, MCPServerStdio)
+    assert placeholder_server.env is not None
+    assert placeholder_server.env["X_AUTH_TOKEN"] == "placeholder"
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+    authenticated_server = registry.get_toolsets(("w3",))[0]
+    assert isinstance(authenticated_server, MCPServerStdio)
+    assert authenticated_server is not placeholder_server
+    assert authenticated_server.env is not None
+    assert authenticated_server.env["X_AUTH_TOKEN"] == "runtime-token"
+
+
+@pytest.mark.asyncio
+async def test_registry_clears_runtime_failed_w3_server_when_token_becomes_available(
+    monkeypatch,
+) -> None:
+    async def fake_resolve_w3_x_auth_token() -> str:
+        return "runtime-token"
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.resolve_w3_x_auth_token",
+        fake_resolve_w3_x_auth_token,
+    )
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="w3",
+                config={"mcpServers": {"w3": {"command": "npx"}}},
+                server_config={
+                    "command": "npx",
+                    "env": {"X_AUTH_TOKEN": "placeholder"},
+                },
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    registry.mark_server_runtime_failed("w3")
+
+    await registry.prepare_w3_auth_env(("w3",), consumer="test")
+
+    assert registry.is_server_runtime_failed("w3") is False
+    assert len(registry.get_toolsets(("w3",))) == 1
 
 
 def test_registry_resolve_server_names_ignores_unknown_servers_when_not_strict() -> (
