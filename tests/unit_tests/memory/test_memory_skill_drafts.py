@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import override
@@ -58,9 +58,11 @@ pytestmark = pytest.mark.asyncio
 class _JsonProvider(LLMProvider):
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
+        self.requests: list[LLMRequest] = []
 
     @override
-    async def generate(self, _request: LLMRequest) -> str:
+    async def generate(self, request: LLMRequest) -> str:
+        self.requests.append(request)
         return json.dumps(self._payload)
 
 
@@ -146,6 +148,46 @@ async def test_generation_merges_one_draft_per_memory_output(tmp_path: Path) -> 
     assert result.source_memory_count == 2
     assert len(result.items) == 1
     assert result.items[0].source_memory_count == 2
+
+
+async def test_generation_uses_non_blank_auxiliary_llm_identifiers(
+    tmp_path: Path,
+) -> None:
+    provider = _JsonProvider(
+        {
+            "drafts": [
+                {
+                    "draft_kind": "skill",
+                    "runtime_name": "workspace-memory",
+                    "description": "Use workspace memory.",
+                    "instructions": "Use captured workspace memory.",
+                    "source_memory_ids": [],
+                }
+            ]
+        }
+    )
+    memory_service, _, synthesis = _build_services(tmp_path, provider)
+    await _create_memory(
+        memory_service,
+        workspace_id="ws-1",
+        title="Workspace memory",
+        body="Generate a reusable skill from this memory.",
+    )
+
+    result = await synthesis.generate_drafts_async(
+        GenerateMemorySkillDraftsRequest(
+            scope_kind=MemorySkillDraftScopeKind.WORKSPACE,
+            workspace_id="ws-1",
+        )
+    )
+
+    assert result.error_message == ""
+    assert len(provider.requests) == 1
+    request = provider.requests[0]
+    assert request.session_id == "memory-skill-draft-generation"
+    assert request.task_id == "memory-skill-draft-generation"
+    assert request.run_id == "memory-skill-draft-generation"
+    assert request.trace_id == "memory-skill-draft-generation"
 
 
 async def test_cross_workspace_generation_uses_multiple_workspaces(

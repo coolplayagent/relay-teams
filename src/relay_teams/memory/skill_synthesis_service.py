@@ -78,6 +78,11 @@ Return only valid JSON matching the requested schema."""
 
 _RUNTIME_NAME_CLEANUP = re.compile(r"[^a-z0-9-]+")
 _DUPLICATE_HYPHENS = re.compile(r"-+")
+_SYNTHESIS_RUN_ID = "memory-skill-draft-generation"
+_SYNTHESIS_SESSION_ID = "memory-skill-draft-generation"
+_SYNTHESIS_TASK_ID = "memory-skill-draft-generation"
+_SYNTHESIS_INSTANCE_ID = "memory-skill-synthesis"
+_SYNTHESIS_ROLE_ID = "memory-skill-synthesis"
 
 
 class MemorySkillSynthesisService:
@@ -454,13 +459,13 @@ class MemorySkillSynthesisService:
         source_entries: tuple[MemoryEntry, ...],
     ) -> _GeneratedMemorySkillDrafts:
         llm_request = LLMRequest(
-            run_id="memory-skill-draft-generation",
-            trace_id="memory-skill-draft-generation",
-            task_id="",
-            session_id="",
+            run_id=_SYNTHESIS_RUN_ID,
+            trace_id=_SYNTHESIS_RUN_ID,
+            task_id=_SYNTHESIS_TASK_ID,
+            session_id=_SYNTHESIS_SESSION_ID,
             workspace_id=request.workspace_id or "",
-            instance_id="memory-skill-synthesis",
-            role_id="memory-skill-synthesis",
+            instance_id=_SYNTHESIS_INSTANCE_ID,
+            role_id=_SYNTHESIS_ROLE_ID,
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=_build_generation_prompt(request, source_entries),
         )
