@@ -162,6 +162,42 @@ def test_plugin_marketplace_api_lists_versions(
     ]
 
 
+def test_plugin_marketplace_api_searches_local_index(
+    api_client: httpx.Client,
+    tmp_path: Path,
+) -> None:
+    marketplace_path = tmp_path / "marketplace.json"
+    marketplace_path.write_text(
+        json.dumps(
+            {
+                "version": "1",
+                "plugins": [
+                    {
+                        "name": "quality",
+                        "description": "Quality tools",
+                        "latest": "1.0.0",
+                    },
+                    {
+                        "name": "market",
+                        "description": "Market data",
+                        "latest": "1.0.0",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = api_client.post(
+        "/api/system/configs/plugins/marketplace:search",
+        json={"marketplace": str(marketplace_path), "query": "quality"},
+    )
+
+    response.raise_for_status()
+    payload = response.json()
+    assert [plugin["name"] for plugin in payload["plugins"]] == ["quality"]
+
+
 def test_plugin_install_api_accepts_local_git_and_marketplace_sources(
     api_client: httpx.Client,
     tmp_path: Path,

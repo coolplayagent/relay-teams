@@ -46,6 +46,8 @@ def test_runtime_tools_render_as_separate_group_and_modal_only_list() -> None:
         check=False,
         cwd=str(repo_root),
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
     )
 

@@ -78,6 +78,13 @@ prompt composer：
 - `fetchSpeechConfig`
 - `createSpeechSttWebSocketUrl`
 
+plugin marketplace:
+
+- `fetchPluginMarketplace`
+- `searchPluginMarketplace`
+- `inspectPluginMarketplace`
+- `installPlugin`
+
 workspace/project：
 
 - `fetchWorkspaces`

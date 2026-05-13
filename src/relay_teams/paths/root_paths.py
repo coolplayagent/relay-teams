@@ -59,6 +59,9 @@ def format_app_config_file_reference(
 
 def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
     command_cwd = _resolve_start_dir(start_dir)
+    marker_root = _find_git_marker_root(command_cwd)
+    if marker_root is not None:
+        return marker_root
     try:
         completed = subprocess.run(
             list(_GIT_TOPLEVEL_CMD),
@@ -80,6 +83,19 @@ def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
     if not raw_stdout:
         return None
     return Path(raw_stdout).expanduser().resolve()
+
+
+def _find_git_marker_root(start_dir: Path) -> Path | None:
+    current = start_dir.expanduser()
+    if current.exists() and current.is_file():
+        current = current.parent
+    candidates = (current, *current.parents)
+    for candidate in candidates:
+        if candidate.name == ".pytest-tmp":
+            return None
+        if (candidate / ".git").exists():
+            return candidate.resolve()
+    return None
 
 
 def get_project_config_dir(project_root: Path | None = None) -> Path:

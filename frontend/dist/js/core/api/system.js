@@ -166,6 +166,30 @@ export async function fetchPluginMarketplace(marketplace, options = {}) {
     );
 }
 
+export async function searchPluginMarketplace(marketplace, query, options = {}) {
+    return requestJson(
+        '/api/system/configs/plugins/marketplace:search',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ marketplace, query, ...options }),
+        },
+        'Failed to search plugin marketplace',
+    );
+}
+
+export async function inspectPluginMarketplace(marketplace, options = {}) {
+    return requestJson(
+        '/api/system/configs/plugins/marketplace:inspect',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ marketplace, ...options }),
+        },
+        'Failed to inspect plugin marketplace',
+    );
+}
+
 export async function installPlugin(payload) {
     const result = await requestJson(
         '/api/system/configs/plugins:install',

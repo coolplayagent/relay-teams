@@ -20,6 +20,9 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 const CONFIGURED_SECRET_VALUE = '<configured>';
 const CLAUDE_MARKETPLACE_NAME = 'claude-plugins-official';
 const CLAUDE_MARKETPLACE_SOURCE = 'anthropics/claude-plugins-official';
+const CLAWHUB_MARKETPLACE_NAME = 'clawhub';
+const CLAWHUB_MARKETPLACE_SOURCE = 'https://clawhub.ai';
+const CLAWHUB_MARKETPLACE_PAGE_SIZE = 100;
 const MUTABLE_SCOPES = new Set(['user', 'project', 'project_local']);
 const COMPONENT_FIELDS = [
     ['skill_sources', 'Skills'],
@@ -288,10 +291,11 @@ function renderPluginDetail(plugin) {
 function renderInstallForm() {
     const marketplaceMode = installDraft.source_kind === 'marketplace';
     const claudeMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'claude';
+    const clawhubMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'clawhub';
     const gitMode = installDraft.source_kind === 'git';
-    const marketplacePlugins = Array.isArray(marketplaceBrowser.plugins) ? marketplaceBrowser.plugins : [];
+    const marketplacePlugins = visibleMarketplacePlugins();
     const selectedMarketplacePlugin = selectedMarketplaceEntry();
-    const versions = Array.isArray(selectedMarketplacePlugin?.versions) ? selectedMarketplacePlugin.versions : [];
+    const versions = marketplaceVisibleVersions(selectedMarketplacePlugin);
     const selectedVersion = selectedMarketplaceVersion();
     const selectedUnsupported = Boolean(marketplaceMode && versionUnsupportedReason(selectedVersion));
     return `
@@ -322,21 +326,22 @@ function renderInstallForm() {
                     <label class="plugins-form-field">
                         <span>${escapeHtml(t('settings.plugins.marketplace_provider'))}</span>
                         <select name="marketplace_provider">
-                            <option value="relay" ${installDraft.marketplace_provider !== 'claude' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_relay'))}</option>
+                            <option value="relay" ${installDraft.marketplace_provider === 'relay' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_relay'))}</option>
                             <option value="claude" ${claudeMarketplaceMode ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_claude'))}</option>
+                            <option value="clawhub" ${clawhubMarketplaceMode ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_clawhub'))}</option>
                         </select>
                     </label>
                     <label class="plugins-form-field plugins-form-field-with-action">
-                        <span>${escapeHtml(t(claudeMarketplaceMode ? 'settings.plugins.marketplace_name' : 'settings.plugins.marketplace_path'))}</span>
+                        <span>${escapeHtml(t(claudeMarketplaceMode || clawhubMarketplaceMode ? 'settings.plugins.marketplace_name' : 'settings.plugins.marketplace_path'))}</span>
                         <span class="plugins-input-row">
-                            <input type="text" name="marketplace" value="${escapeHtml(installDraft.marketplace)}" placeholder="${escapeHtml(t(claudeMarketplaceMode ? 'settings.plugins.claude_marketplace_placeholder' : 'settings.plugins.marketplace_placeholder'))}" spellcheck="false" />
+                            <input type="text" name="marketplace" value="${escapeHtml(installDraft.marketplace)}" placeholder="${escapeHtml(t(marketplacePlaceholderKey()))}" spellcheck="false" />
                             <button class="secondary-btn section-action-btn" type="button" data-plugin-action="load-marketplace">${escapeHtml(t('settings.plugins.load_marketplace'))}</button>
                         </span>
                     </label>
-                    ${claudeMarketplaceMode ? `
+                    ${claudeMarketplaceMode || clawhubMarketplaceMode ? `
                         <label class="plugins-form-field plugins-form-field-wide">
                             <span>${escapeHtml(t('settings.plugins.marketplace_source'))}</span>
-                            <input type="text" name="marketplace_source" value="${escapeHtml(installDraft.marketplace_source)}" placeholder="${escapeHtml(t('settings.plugins.claude_marketplace_source_placeholder'))}" spellcheck="false" />
+                            <input type="text" name="marketplace_source" value="${escapeHtml(installDraft.marketplace_source)}" placeholder="${escapeHtml(t(claudeMarketplaceMode ? 'settings.plugins.claude_marketplace_source_placeholder' : 'settings.plugins.clawhub_marketplace_source_placeholder'))}" spellcheck="false" />
                         </label>
                     ` : ''}
                     <label class="plugins-form-field">
@@ -426,11 +431,14 @@ function renderMarketplaceStatus() {
     if (!marketplaceBrowser.plugins.length) {
         return '';
     }
-    const unsupportedCount = marketplaceBrowser.plugins.filter(plugin => !installableMarketplaceVersions(plugin).length).length;
-    const detail = unsupportedCount
-        ? formatMessage('settings.plugins.marketplace_loaded_with_unsupported', { count: unsupportedCount })
-        : marketplaceBrowser.path;
-    return `<div class="plugin-validation-result"><strong>${escapeHtml(formatMessage('settings.plugins.marketplace_loaded', { count: marketplaceBrowser.plugins.length }))}</strong><span>${escapeHtml(detail)}</span></div>`;
+    const visibleCount = visibleMarketplacePlugins().length;
+    return `
+        <div class="plugin-validation-result">
+            <strong>${escapeHtml(formatMessage('settings.plugins.marketplace_loaded', { count: visibleCount }))}</strong>
+            <span>${escapeHtml(marketplaceBrowser.path)}</span>
+            ${marketplaceBrowser.next_cursor ? `<button class="secondary-btn section-action-btn" type="button" data-plugin-action="load-more-marketplace">${escapeHtml(t('settings.plugins.load_more_marketplace'))}</button>` : ''}
+        </div>
+    `;
 }
 
 function renderMarketplaceVersionDetails(version) {
@@ -696,6 +704,13 @@ async function handlePluginAction(action, plugin, button) {
         }
         return;
     }
+    if (action === 'load-more-marketplace') {
+        const form = button.closest('form');
+        if (form instanceof HTMLFormElement) {
+            await loadMarketplaceForInstall(form, { append: true });
+        }
+        return;
+    }
     if (!plugin) {
         return;
     }
@@ -723,16 +738,20 @@ async function submitPluginInstall(form) {
     const sourceKind = installDraft.source_kind || 'local';
     const marketplaceMode = sourceKind === 'marketplace';
     const claudeMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'claude';
+    const clawhubMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'clawhub';
     const marketplace = installDraft.marketplace;
     const version = installDraft.version;
     if (marketplaceMode) {
         payload.source = installDraft.marketplace_plugin || payload.source;
         payload.marketplace = marketplace;
         payload.version = version || null;
-        if (claudeMarketplaceMode) {
-            payload.marketplace_provider = 'claude';
+        if (claudeMarketplaceMode || clawhubMarketplaceMode) {
+            payload.marketplace_provider = installDraft.marketplace_provider;
             payload.marketplace_source = installDraft.marketplace_source;
             payload.marketplace_ref = installDraft.marketplace_ref;
+            if (clawhubMarketplaceMode) {
+                payload.allow_missing_digest = true;
+            }
         }
     } else {
         payload.source_kind = sourceKind;
@@ -748,7 +767,7 @@ async function submitPluginInstall(form) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_required') });
         return;
     }
-    if (claudeMarketplaceMode && !installDraft.marketplace_source) {
+    if ((claudeMarketplaceMode || clawhubMarketplaceMode) && !installDraft.marketplace_source) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_source_required') });
         return;
     }
@@ -767,53 +786,62 @@ async function submitPluginInstall(form) {
     }
 }
 
-async function loadMarketplaceForInstall(form) {
+async function loadMarketplaceForInstall(form, { append = false } = {}) {
     syncInstallDraftFromForm(form);
     const claudeMarketplaceMode = installDraft.source_kind === 'marketplace' && installDraft.marketplace_provider === 'claude';
+    const clawhubMarketplaceMode = installDraft.source_kind === 'marketplace' && installDraft.marketplace_provider === 'clawhub';
     if (!installDraft.marketplace) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_required') });
         return;
     }
-    if (claudeMarketplaceMode && !installDraft.marketplace_source) {
+    if ((claudeMarketplaceMode || clawhubMarketplaceMode) && !installDraft.marketplace_source) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_source_required') });
         return;
     }
+    const existingPlugins = append ? marketplaceBrowser.plugins : [];
+    const cursor = append ? marketplaceBrowser.next_cursor : '';
     marketplaceBrowser = {
-        ...defaultMarketplaceBrowser(),
+        ...marketplaceBrowser,
         path: installDraft.marketplace,
         loading: true,
+        error: '',
     };
     renderPluginsPanel();
     try {
         const marketplace = await fetchPluginMarketplace(
             installDraft.marketplace,
-            claudeMarketplaceMode
+            claudeMarketplaceMode || clawhubMarketplaceMode
                 ? {
-                    marketplace_provider: 'claude',
+                    marketplace_provider: installDraft.marketplace_provider,
                     marketplace_source: installDraft.marketplace_source,
                     marketplace_ref: installDraft.marketplace_ref,
+                    ...(clawhubMarketplaceMode ? clawhubMarketplaceRequestOptions(cursor) : {}),
                     refresh: true,
                 }
                 : {},
         );
         const plugins = Array.isArray(marketplace?.plugins) ? marketplace.plugins : [];
+        const mergedPlugins = append ? mergeMarketplacePlugins(existingPlugins, plugins) : plugins;
         marketplaceBrowser = {
             path: installDraft.marketplace,
-            plugins,
+            plugins: mergedPlugins,
+            next_cursor: String(marketplace?.next_cursor || '').trim(),
             error: '',
             loading: false,
         };
-        const currentSelection = plugins.find(plugin => plugin?.name === installDraft.marketplace_plugin);
-        const selected = currentSelection || plugins[0] || null;
+        const visiblePlugins = visibleMarketplacePlugins();
+        const currentSelection = visiblePlugins.find(plugin => plugin?.name === installDraft.marketplace_plugin);
+        const selected = currentSelection || visiblePlugins[0] || null;
         installDraft.marketplace_plugin = String(selected?.name || '').trim();
-        installDraft.source = installDraft.marketplace_plugin || installDraft.source;
+        installDraft.source = installDraft.marketplace_plugin;
         installDraft.version = '';
         renderPluginsPanel();
-        showToast({ tone: 'success', message: formatMessage('settings.plugins.marketplace_loaded', { count: plugins.length }) });
+        showToast({ tone: 'success', message: formatMessage('settings.plugins.marketplace_loaded', { count: visiblePlugins.length }) });
     } catch (error) {
         marketplaceBrowser = {
             path: installDraft.marketplace,
-            plugins: [],
+            plugins: existingPlugins,
+            next_cursor: cursor,
             error: String(error?.message || t('settings.plugins.marketplace_load_failed')),
             loading: false,
         };
@@ -975,6 +1003,9 @@ async function promptAndUpdateMarketplacePlugin(plugin) {
         await updatePlugin(plugin.name, {
             scope: plugin.scope,
             version: String(result.version || '').trim() || null,
+            ...(plugin?.source?.marketplace_provider === 'clawhub'
+                ? { allow_missing_digest: true }
+                : {}),
         });
         showToast({ tone: 'success', message: t('settings.plugins.updated') });
         await loadPluginsSettingsPanel({ force: true });
@@ -985,13 +1016,19 @@ async function promptAndUpdateMarketplacePlugin(plugin) {
 
 function pluginMarketplaceRequestOptions(plugin) {
     const provider = plugin?.source?.marketplace_provider;
-    if (provider !== 'claude') {
+    if (provider !== 'claude' && provider !== 'clawhub') {
         return {};
     }
     return {
         marketplace_provider: provider,
         marketplace_source: plugin?.source?.marketplace_source || '',
         marketplace_ref: plugin?.source?.marketplace_ref || '',
+        ...(provider === 'clawhub' ? {
+            limit: CLAWHUB_MARKETPLACE_PAGE_SIZE,
+            include_details: true,
+            fetch_all: true,
+            allow_missing_digest: true,
+        } : {}),
         refresh: true,
     };
 }
@@ -1051,6 +1088,7 @@ function defaultMarketplaceBrowser() {
     return {
         path: '',
         plugins: [],
+        next_cursor: '',
         error: '',
         loading: false,
     };
@@ -1078,21 +1116,37 @@ function updateInstallDraft(element) {
         installDraft.marketplace_provider = installDraft.marketplace_provider || 'relay';
     }
     if (name === 'marketplace_provider' && installDraft.marketplace_provider === 'relay') {
-        if (installDraft.marketplace === CLAUDE_MARKETPLACE_NAME) {
+        if (installDraft.marketplace === CLAUDE_MARKETPLACE_NAME || installDraft.marketplace === CLAWHUB_MARKETPLACE_NAME) {
             installDraft.marketplace = '';
         }
-        if (installDraft.marketplace_source === CLAUDE_MARKETPLACE_SOURCE) {
+        if (installDraft.marketplace_source === CLAUDE_MARKETPLACE_SOURCE || installDraft.marketplace_source === CLAWHUB_MARKETPLACE_SOURCE) {
             installDraft.marketplace_source = '';
         }
         installDraft.marketplace_ref = '';
     }
     if (name === 'marketplace_provider' && installDraft.marketplace_provider === 'claude') {
-        installDraft.marketplace = installDraft.marketplace || CLAUDE_MARKETPLACE_NAME;
-        installDraft.marketplace_source = installDraft.marketplace_source || CLAUDE_MARKETPLACE_SOURCE;
+        installDraft.marketplace = CLAUDE_MARKETPLACE_NAME;
+        installDraft.marketplace_source = CLAUDE_MARKETPLACE_SOURCE;
+        installDraft.marketplace_ref = '';
+    }
+    if (name === 'marketplace_provider' && installDraft.marketplace_provider === 'clawhub') {
+        installDraft.marketplace = CLAWHUB_MARKETPLACE_NAME;
+        installDraft.marketplace_source = CLAWHUB_MARKETPLACE_SOURCE;
+        installDraft.marketplace_ref = '';
     }
     if (name === 'marketplace_plugin') {
         installDraft.source = installDraft.marketplace_plugin;
     }
+}
+
+function marketplacePlaceholderKey() {
+    if (installDraft.marketplace_provider === 'claude') {
+        return 'settings.plugins.claude_marketplace_placeholder';
+    }
+    if (installDraft.marketplace_provider === 'clawhub') {
+        return 'settings.plugins.clawhub_marketplace_placeholder';
+    }
+    return 'settings.plugins.marketplace_placeholder';
 }
 
 function readPluginConfigInputValue(input, fieldType) {
@@ -1148,12 +1202,54 @@ function isUnchangedConfiguredSensitiveCheckbox(input, sensitive, configured) {
 
 function selectedMarketplaceEntry() {
     const selectedName = String(installDraft.marketplace_plugin || '').trim();
-    return marketplaceBrowser.plugins.find(plugin => plugin?.name === selectedName) || null;
+    return visibleMarketplacePlugins().find(plugin => plugin?.name === selectedName) || null;
+}
+
+function visibleMarketplacePlugins() {
+    const plugins = Array.isArray(marketplaceBrowser.plugins) ? marketplaceBrowser.plugins : [];
+    if (installDraft.marketplace_provider !== 'clawhub') {
+        return plugins;
+    }
+    return plugins.filter(isLowRiskClawHubMarketplacePlugin);
+}
+
+function clawhubMarketplaceRequestOptions(cursor = '') {
+    return {
+        limit: CLAWHUB_MARKETPLACE_PAGE_SIZE,
+        cursor,
+        include_details: false,
+        fetch_all: false,
+    };
+}
+
+function mergeMarketplacePlugins(existingPlugins, nextPlugins) {
+    const byName = new Map();
+    for (const plugin of existingPlugins) {
+        const name = String(plugin?.name || '').trim();
+        if (name) {
+            byName.set(name, plugin);
+        }
+    }
+    for (const plugin of nextPlugins) {
+        const name = String(plugin?.name || '').trim();
+        if (name) {
+            byName.set(name, plugin);
+        }
+    }
+    return Array.from(byName.values());
+}
+
+function isLowRiskClawHubMarketplacePlugin(plugin) {
+    if (!marketplaceVisibleVersions(plugin).length) {
+        return false;
+    }
+    const compatibility = String(plugin?.compatibility || '').trim();
+    return compatibility === 'direct';
 }
 
 function selectedMarketplaceVersion() {
     const entry = selectedMarketplaceEntry();
-    const versions = Array.isArray(entry?.versions) ? entry.versions : [];
+    const versions = marketplaceVisibleVersions(entry);
     if (!versions.length) {
         return null;
     }
@@ -1166,6 +1262,14 @@ function selectedMarketplaceVersion() {
 
 function installableMarketplaceVersions(plugin) {
     const versions = Array.isArray(plugin?.versions) ? plugin.versions : [];
+    return versions.filter(version => !versionUnsupportedReason(version));
+}
+
+function marketplaceVisibleVersions(plugin) {
+    const versions = Array.isArray(plugin?.versions) ? plugin.versions : [];
+    if (installDraft.marketplace_provider !== 'clawhub') {
+        return versions;
+    }
     return versions.filter(version => !versionUnsupportedReason(version));
 }
 
@@ -1192,8 +1296,39 @@ function versionUnsupportedReason(version) {
 
 function versionWarnings(version) {
     return Array.isArray(version?.warnings)
-        ? version.warnings.map(warning => String(warning || '').trim()).filter(Boolean)
+        ? version.warnings
+            .map(warning => translateMarketplaceWarning(String(warning || '').trim()))
+            .filter(Boolean)
         : [];
+}
+
+function translateMarketplaceWarning(warning) {
+    if (!warning) {
+        return '';
+    }
+    const channelPrefix = 'ClawHub package channel is ';
+    const channelSuffix = '; review before install.';
+    if (warning.startsWith(channelPrefix) && warning.endsWith(channelSuffix)) {
+        return formatMessage('settings.plugins.warning_clawhub_channel', {
+            channel: warning.slice(channelPrefix.length, -channelSuffix.length),
+        });
+    }
+    const scanPrefix = 'ClawHub scan status is ';
+    const scanSuffix = '.';
+    if (warning.startsWith(scanPrefix) && warning.endsWith(scanSuffix)) {
+        return formatMessage('settings.plugins.warning_clawhub_scan_status', {
+            status: warning.slice(scanPrefix.length, -scanSuffix.length),
+        });
+    }
+    const warningKeys = {
+        'ClawHub package executes code.': 'settings.plugins.warning_clawhub_executes_code',
+        'ClawHub package uses a legacy ZIP artifact.': 'settings.plugins.warning_clawhub_legacy_zip',
+        'ClawHub package declares OpenClaw native runtime extensions; Relay Teams only loads mapped plugin components.': 'settings.plugins.warning_clawhub_runtime_extensions',
+        'ClawHub package declares OpenClaw compatibility metadata; Relay Teams does not execute OpenClaw native plugin APIs.': 'settings.plugins.warning_clawhub_compatibility_metadata',
+        'ClawHub package artifact has no digest metadata.': 'settings.plugins.warning_clawhub_missing_digest',
+    };
+    const key = warningKeys[warning];
+    return key ? t(key) : warning;
 }
 
 function semanticLatestMarketplaceVersion(versions) {

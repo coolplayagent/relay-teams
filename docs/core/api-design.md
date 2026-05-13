@@ -478,7 +478,8 @@ settings schema, and JSON-compatible plugin component configs.
 
 Loads a marketplace index so clients can browse available plugins and versions
 before installing. `marketplace_provider` defaults to `local_json`; `claude`
-loads a Claude official marketplace repository or local checkout.
+loads a Claude official marketplace repository or local checkout, and `clawhub`
+loads ClawHub `code-plugin` and `bundle-plugin` packages.
 
 Request:
 
@@ -488,15 +489,87 @@ Request:
   "marketplace_provider": "local_json",
   "marketplace_source": "",
   "marketplace_ref": "",
-  "refresh": false
+  "refresh": false,
+  "limit": 100,
+  "cursor": "",
+  "include_details": false,
+  "fetch_all": true,
+  "allow_community_plugins": false,
+  "allow_executes_code": false,
+  "allow_missing_digest": false,
+  "allow_unclean_scan": false
 }
 ```
 
 The response is a marketplace index with plugin names, descriptions, latest
-versions, and version entries. Version entries may include `warnings` and
-`unsupported_reason`; unsupported versions remain visible for browsing but cannot
-be installed. The frontend uses this endpoint instead of reading marketplace
-files directly.
+versions, version entries, optional `provider_family`, optional `compatibility`,
+optional `compatibility_reason`, and `next_cursor` when the provider has another
+page. Version entries may include `warnings` and `unsupported_reason`;
+unsupported versions remain visible for browsing but cannot be installed. The
+frontend uses this endpoint instead of reading marketplace files directly.
+
+For ClawHub, `limit` is capped at `100`, `cursor` requests the next package page,
+`fetch_all` defaults to `true` for the previous all-page lightweight index
+behavior, and `fetch_all: false` returns a single page even when `limit` is
+`100`. `include_details: true` hydrates each returned package with release
+metadata needed for installability checks; pair it with `fetch_all: true` when a
+caller needs complete detail-aware lookup across all pages. Lightweight ClawHub browse requests
+do not apply install policy blocking because digest and scan metadata may
+require package detail inspection; detail-aware browse, search, inspect,
+install, and update requests enforce policy. Existing callers that omit those
+fields keep the previous all-page lightweight index behavior.
+
+### `POST /system/configs/plugins/marketplace:search`
+
+Searches a marketplace and returns the same marketplace index shape as
+`/system/configs/plugins/marketplace`. For ClawHub, the backend uses the
+provider search API; for local JSON and Claude marketplaces it filters the
+loaded index by plugin name and description.
+
+Request:
+
+```json
+{
+  "marketplace": "clawhub",
+  "marketplace_provider": "clawhub",
+  "marketplace_source": "https://clawhub.ai",
+  "marketplace_ref": "",
+  "refresh": false,
+  "query": "quality",
+  "include_details": false,
+  "fetch_all": true,
+  "allow_community_plugins": false,
+  "allow_executes_code": false,
+  "allow_missing_digest": false,
+  "allow_unclean_scan": false
+}
+```
+
+### `POST /system/configs/plugins/marketplace:inspect`
+
+Downloads one marketplace plugin version into the validation cache, adapts any
+supported plugin layout, and returns the same public plugin registry shape as
+`/system/configs/plugins:validate` without installing or enabling the plugin.
+Use this endpoint before installing ClawHub packages when the lightweight
+marketplace listing only provides inferred compatibility.
+
+Request:
+
+```json
+{
+  "marketplace": "clawhub",
+  "marketplace_provider": "clawhub",
+  "marketplace_source": "https://clawhub.ai",
+  "marketplace_ref": "",
+  "name": "frontend-craft",
+  "scope": "user",
+  "version": null,
+  "allow_community_plugins": false,
+  "allow_executes_code": false,
+  "allow_missing_digest": false,
+  "allow_unclean_scan": false
+}
+```
 
 ### `POST /system/configs/plugins:install`
 
@@ -515,7 +588,11 @@ Request:
   "marketplace_provider": "local_json",
   "marketplace_source": "",
   "marketplace_ref": "",
-  "version": null
+  "version": null,
+  "allow_community_plugins": false,
+  "allow_executes_code": false,
+  "allow_missing_digest": false,
+  "allow_unclean_scan": false
 }
 ```
 
@@ -543,6 +620,17 @@ cached checkout and fetch the marketplace again. The manual verification script
 `scripts/verify_claude_marketplace_plugins.py` can parse the official Claude
 marketplace and optionally install every listed plugin into a temporary config
 directory.
+
+ClawHub marketplace installs are checked against
+`<app-config>/plugins/marketplace-policy.json`. The default policy blocks
+community/non-official channels, packages that declare code execution, packages
+without a clean scan, and packages without artifact digest metadata. The
+`allow_*` request fields are one-shot overrides for the current browse, search,
+inspect, or install request; they do not persist policy changes. The web UI
+currently sends `allow_missing_digest: true` for ClawHub marketplace installs so
+directly mappable ClawHub packages without digest metadata can be installed for
+compatibility validation; direct API and CLI callers keep the strict default
+unless they pass the same override explicitly.
 
 ### `POST /system/configs/plugins/{name}:configure`
 
@@ -606,9 +694,16 @@ Request:
 ```json
 {
   "scope": "user",
-  "version": null
+  "version": null,
+  "allow_community_plugins": false,
+  "allow_executes_code": false,
+  "allow_missing_digest": false,
+  "allow_unclean_scan": false
 }
 ```
+
+For ClawHub marketplace updates, the `allow_*` fields apply as one-shot policy
+overrides for that update request.
 
 ### `DELETE /system/configs/plugins/{name}`
 

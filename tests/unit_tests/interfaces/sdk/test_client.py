@@ -7,9 +7,20 @@ from types import TracebackType
 import httpx
 import pytest
 
+from relay_teams.interfaces.sdk import client as sdk_client_module
 from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_content_parts_from_text_payload_normalizes_text() -> None:
+    assert sdk_client_module._content_parts_from_text_payload("  hello  ") == [
+        {"kind": "text", "text": "hello"}
+    ]
+
+
+async def test_content_parts_from_text_payload_omits_blank_text() -> None:
+    assert sdk_client_module._content_parts_from_text_payload("  ") == []
 
 
 class _FakeSdkStreamResponse:
@@ -221,6 +232,10 @@ async def test_plugin_config_methods_call_expected_endpoints(monkeypatch) -> Non
         marketplace_ref="main",
         version="1.0.0",
         enabled=False,
+        allow_community_plugins=True,
+        allow_executes_code=True,
+        allow_missing_digest=True,
+        allow_unclean_scan=True,
     )
     await client.configure_plugin(
         "quality",
@@ -228,7 +243,14 @@ async def test_plugin_config_methods_call_expected_endpoints(monkeypatch) -> Non
     )
     await client.enable_plugin("quality")
     await client.disable_plugin("quality")
-    await client.update_plugin("quality", version="2.0.0")
+    await client.update_plugin(
+        "quality",
+        version="2.0.0",
+        allow_community_plugins=True,
+        allow_executes_code=True,
+        allow_missing_digest=True,
+        allow_unclean_scan=True,
+    )
     await client.delete_plugin("quality", scope="project", prune=True)
 
     assert calls == [
@@ -264,6 +286,10 @@ async def test_plugin_config_methods_call_expected_endpoints(monkeypatch) -> Non
                 "marketplace_source": "anthropics/claude-plugins-official",
                 "marketplace_ref": "main",
                 "version": "1.0.0",
+                "allow_community_plugins": True,
+                "allow_executes_code": True,
+                "allow_missing_digest": True,
+                "allow_unclean_scan": True,
             },
         ),
         (
@@ -284,7 +310,14 @@ async def test_plugin_config_methods_call_expected_endpoints(monkeypatch) -> Non
         (
             "POST",
             "/api/system/configs/plugins/quality:update",
-            {"scope": "user", "version": "2.0.0"},
+            {
+                "scope": "user",
+                "version": "2.0.0",
+                "allow_community_plugins": True,
+                "allow_executes_code": True,
+                "allow_missing_digest": True,
+                "allow_unclean_scan": True,
+            },
         ),
         (
             "DELETE",

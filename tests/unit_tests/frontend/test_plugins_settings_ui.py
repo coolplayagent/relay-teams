@@ -26,9 +26,49 @@ def test_plugins_settings_marketplace_update_uses_version_select() -> None:
     assert "type: 'select'" in source
     assert "settings.plugins.version_latest" in source
     assert "await updatePlugin(plugin.name, {" in source
+    assert "allow_missing_digest: true" in source
     assert "function renderMarketplaceVersionDetails(version)" in source
     assert "settings.plugins.marketplace_version_details" in source
     assert "source.ref" in source
+
+
+def test_plugins_settings_clawhub_marketplace_loads_full_safe_browsing() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "pluginsSettings.js"
+    ).read_text(encoding="utf-8")
+    i18n_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const CLAWHUB_MARKETPLACE_PAGE_SIZE = 100;" in source
+    assert "function visibleMarketplacePlugins()" in source
+    assert "function isLowRiskClawHubMarketplacePlugin(plugin)" in source
+    assert "function isLowRiskClawHubVersion(version)" not in source
+    assert "function marketplaceCompatibilityLabel(plugin)" not in source
+    assert "function marketplaceCompatibilityDetail(plugin)" not in source
+    assert "inspectPluginMarketplace(" not in source
+    assert 'data-plugin-action="inspect-marketplace-plugin"' not in source
+    assert 'data-plugin-action="load-more-marketplace"' in source
+    assert "include_details: false" in source
+    assert "fetch_all: false" in source
+    assert "return compatibility === 'direct';" in source
+    assert (
+        "return versions.filter(version => !versionUnsupportedReason(version));"
+        in source
+    )
+    assert "settings.plugins.compatibility_direct" in i18n_source
+    assert "settings.plugins.warning_clawhub_executes_code" in source
+    assert "settings.plugins.warning_clawhub_executes_code" in i18n_source
+    assert "marketplace_loaded_hidden_risky" not in source
+    assert "show_unavailable_marketplace" not in source
+    assert "payload.allow_missing_digest = true;" in source
 
 
 def test_plugins_settings_marketplace_update_excludes_unsupported_versions(
@@ -116,6 +156,92 @@ console.log(JSON.stringify({
     assert payload["updatePayload"] == {
         "name": "quality",
         "payload": {"scope": "user", "version": "1.0.0"},
+    }
+
+
+def test_plugins_settings_clawhub_update_fetches_all_detailed_entries(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={
+            "plugins": [
+                {
+                    "name": "market-plugin",
+                    "version": "1.0.0",
+                    "scope": "user",
+                    "enabled": True,
+                    "source": {
+                        "kind": "marketplace",
+                        "value": "market-plugin",
+                        "marketplace": "clawhub",
+                        "marketplace_provider": "clawhub",
+                        "marketplace_source": "https://clawhub.ai",
+                    },
+                    "manifest": {},
+                    "user_config": {},
+                    "component_counts": {},
+                }
+            ],
+            "diagnostics": [],
+        },
+        marketplace={
+            "plugins": [
+                {
+                    "name": "market-plugin",
+                    "latest": "1.1.0",
+                    "compatibility": "direct",
+                    "versions": [
+                        {
+                            "version": "1.1.0",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/archive.zip",
+                                "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+globalThis.__dialogResult = { version: "1.1.0" };
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+await root.dispatch("click", root.findButton("update", "user:market-plugin"));
+await flush();
+
+console.log(JSON.stringify({
+    marketplaceRequest: globalThis.__marketplaceRequests[0],
+    updatePayload: globalThis.__updatePayloads[0],
+}));
+""".strip(),
+    )
+
+    assert payload["marketplaceRequest"] == {
+        "marketplacePath": "clawhub",
+        "options": {
+            "marketplace_provider": "clawhub",
+            "marketplace_source": "https://clawhub.ai",
+            "marketplace_ref": "",
+            "limit": 100,
+            "include_details": True,
+            "fetch_all": True,
+            "allow_missing_digest": True,
+            "refresh": True,
+        },
+    }
+    assert payload["updatePayload"] == {
+        "name": "market-plugin",
+        "payload": {
+            "scope": "user",
+            "version": "1.1.0",
+            "allow_missing_digest": True,
+        },
     }
 
 
@@ -498,6 +624,224 @@ console.log(JSON.stringify({
     )
     assert "settings.plugins.marketplace_provider" in str(payload["htmlBeforeSubmit"])
     assert "settings.plugins.marketplace_source" in str(payload["htmlBeforeSubmit"])
+
+
+def test_plugins_settings_clawhub_load_and_install_payload(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={
+            "plugins": [
+                {
+                    "name": "market-plugin",
+                    "description": "Market data",
+                    "latest": "1.0.1",
+                    "compatibility": "direct",
+                    "versions": [
+                        {
+                            "version": "1.0.1",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/archive.zip",
+                                "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            },
+                            "warnings": ["ClawHub package executes code."],
+                        }
+                    ],
+                },
+                {
+                    "name": "partial-plugin",
+                    "description": "Native-assisted package",
+                    "latest": "1.0.0",
+                    "compatibility": "partial",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/partial.zip",
+                                "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                            },
+                            "warnings": [],
+                        }
+                    ],
+                },
+                {
+                    "name": "unknown-plugin",
+                    "description": "Needs inspection",
+                    "latest": "1.0.0",
+                    "compatibility": "unknown",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/unknown.zip",
+                                "sha": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                            },
+                            "warnings": [],
+                        }
+                    ],
+                },
+                {
+                    "name": "warning-plugin",
+                    "description": "Warned package",
+                    "latest": "1.0.0",
+                    "compatibility": "direct",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/warning.zip",
+                                "sha": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                            },
+                            "warnings": ["ClawHub package executes code."],
+                        }
+                    ],
+                },
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source_kind.value = "marketplace";
+await root.dispatch("change", form.elements.source_kind);
+form = document.getElementById("plugin-install-form");
+form.elements.marketplace_provider.value = "clawhub";
+await root.dispatch("change", form.elements.marketplace_provider);
+form = document.getElementById("plugin-install-form");
+await root.dispatch("click", root.findButton("load-marketplace"));
+await flush();
+
+const htmlBeforeSubmit = root.innerHTML;
+form = document.getElementById("plugin-install-form");
+await root.dispatch("submit", form);
+await flush();
+
+console.log(JSON.stringify({
+    htmlBeforeSubmit,
+    marketplaceRequest: globalThis.__marketplaceRequests[0],
+    inspectRequestCount: globalThis.__marketplaceInspectRequests.length,
+    searchRequestCount: globalThis.__marketplaceSearchRequests.length,
+    installPayload: globalThis.__installPayloads[0],
+}));
+""".strip(),
+    )
+
+    assert payload["marketplaceRequest"] == {
+        "marketplacePath": "clawhub",
+        "options": {
+            "marketplace_provider": "clawhub",
+            "marketplace_source": "https://clawhub.ai",
+            "marketplace_ref": "",
+            "limit": 100,
+            "cursor": "",
+            "include_details": False,
+            "fetch_all": False,
+            "refresh": True,
+        },
+    }
+    assert payload["searchRequestCount"] == 0
+    assert payload["inspectRequestCount"] == 0
+    assert payload["installPayload"] == {
+        "source": "market-plugin",
+        "scope": "user",
+        "enabled": True,
+        "marketplace": "clawhub",
+        "version": None,
+        "marketplace_provider": "clawhub",
+        "marketplace_source": "https://clawhub.ai",
+        "marketplace_ref": "",
+        "allow_missing_digest": True,
+    }
+    assert "settings.plugins.marketplace_provider_clawhub" in str(
+        payload["htmlBeforeSubmit"]
+    )
+    assert "inspect-marketplace-plugin" not in str(payload["htmlBeforeSubmit"])
+    assert "marketplace_loaded_hidden_risky" not in str(payload["htmlBeforeSubmit"])
+    assert "market-plugin" in str(payload["htmlBeforeSubmit"])
+    assert "settings.plugins.warning_clawhub_executes_code" in str(
+        payload["htmlBeforeSubmit"]
+    )
+    assert "ClawHub package executes code." not in str(payload["htmlBeforeSubmit"])
+    assert "Direct" not in str(payload["htmlBeforeSubmit"])
+    assert "ClawHub bundle-plugin" not in str(payload["htmlBeforeSubmit"])
+    assert "Bundle plugin with static components" not in str(
+        payload["htmlBeforeSubmit"]
+    )
+    assert "partial-plugin" not in str(payload["htmlBeforeSubmit"])
+    assert "unknown-plugin" not in str(payload["htmlBeforeSubmit"])
+    assert "warning-plugin" in str(payload["htmlBeforeSubmit"])
+
+
+def test_plugins_settings_marketplace_provider_switch_replaces_defaults(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={"plugins": []},
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source_kind.value = "marketplace";
+await root.dispatch("change", form.elements.source_kind);
+
+form = document.getElementById("plugin-install-form");
+form.elements.marketplace_provider.value = "clawhub";
+await root.dispatch("change", form.elements.marketplace_provider);
+form = document.getElementById("plugin-install-form");
+const clawhub = {
+    marketplace: form.elements.marketplace.value,
+    marketplaceSource: form.elements.marketplace_source?.value || "",
+};
+
+form.elements.marketplace_provider.value = "claude";
+await root.dispatch("change", form.elements.marketplace_provider);
+form = document.getElementById("plugin-install-form");
+const claude = {
+    marketplace: form.elements.marketplace.value,
+    marketplaceSource: form.elements.marketplace_source?.value || "",
+};
+
+form.elements.marketplace_provider.value = "relay";
+await root.dispatch("change", form.elements.marketplace_provider);
+form = document.getElementById("plugin-install-form");
+const relay = {
+    marketplace: form.elements.marketplace.value,
+    marketplaceSource: form.elements.marketplace_source?.value || "",
+};
+
+console.log(JSON.stringify({ clawhub, claude, relay }));
+""".strip(),
+    )
+
+    assert payload == {
+        "clawhub": {
+            "marketplace": "clawhub",
+            "marketplaceSource": "https://clawhub.ai",
+        },
+        "claude": {
+            "marketplace": "claude-plugins-official",
+            "marketplaceSource": "anthropics/claude-plugins-official",
+        },
+        "relay": {"marketplace": "", "marketplaceSource": ""},
+    }
 
 
 def test_plugins_settings_blocks_unsupported_marketplace_source(
@@ -1292,6 +1636,16 @@ export async function fetchPluginMarketplace(marketplacePath, options = {}) {
     return marketplace;
 }
 
+export async function searchPluginMarketplace(marketplacePath, query, options = {}) {
+    globalThis.__marketplaceSearchRequests.push({ marketplacePath, query, options });
+    return marketplace;
+}
+
+export async function inspectPluginMarketplace(marketplacePath, options = {}) {
+    globalThis.__marketplaceInspectRequests.push({ marketplacePath, options });
+    return globalThis.__marketplaceInspectRegistry;
+}
+
 export async function installPlugin(payload) {
     globalThis.__installPayloads.push(payload);
     return { status: "ok" };
@@ -1530,6 +1884,9 @@ function installGlobals() {{
     globalThis.__notifications = [];
     globalThis.__installPayloads = [];
     globalThis.__marketplaceRequests = [];
+    globalThis.__marketplaceSearchRequests = [];
+    globalThis.__marketplaceInspectRequests = [];
+    globalThis.__marketplaceInspectRegistry = {{ plugins: [], diagnostics: [] }};
     globalThis.__configurePayloads = [];
     globalThis.__updatePayloads = [];
     globalThis.__dialogPayloads = [];

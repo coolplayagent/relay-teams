@@ -417,3 +417,20 @@ def test_resolve_start_dir_uses_parent_for_file_path(tmp_path: Path) -> None:
     resolved = root_paths._resolve_start_dir(start_dir=file_path)
 
     assert resolved == nested_dir.resolve()
+
+
+def test_find_git_marker_root_uses_parent_for_file_path(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    (repo_dir / ".git").mkdir()
+    file_path = repo_dir / "source.py"
+    file_path.write_text("", encoding="utf-8")
+
+    assert root_paths._find_git_marker_root(file_path) == repo_dir.resolve()
+
+
+def test_find_git_marker_root_returns_none_without_marker(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert root_paths._find_git_marker_root(workspace) is None

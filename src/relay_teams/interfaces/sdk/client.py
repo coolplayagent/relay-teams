@@ -8,9 +8,8 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-from relay_teams.media import content_parts_from_text
-from relay_teams.env import load_proxy_env_config
-from relay_teams.net import create_async_http_client
+from relay_teams.env.proxy_env import load_proxy_env_config
+from relay_teams.net.clients import create_async_http_client
 
 _STREAM_TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
 
@@ -128,6 +127,10 @@ class AsyncAgentTeamsClient:
         marketplace_source: str | None = None,
         marketplace_ref: str | None = None,
         version: str | None = None,
+        allow_community_plugins: bool = False,
+        allow_executes_code: bool = False,
+        allow_missing_digest: bool = False,
+        allow_unclean_scan: bool = False,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "source": source,
@@ -146,6 +149,14 @@ class AsyncAgentTeamsClient:
             payload["marketplace_source"] = marketplace_source
         if marketplace_ref is not None:
             payload["marketplace_ref"] = marketplace_ref
+        if allow_community_plugins:
+            payload["allow_community_plugins"] = allow_community_plugins
+        if allow_executes_code:
+            payload["allow_executes_code"] = allow_executes_code
+        if allow_missing_digest:
+            payload["allow_missing_digest"] = allow_missing_digest
+        if allow_unclean_scan:
+            payload["allow_unclean_scan"] = allow_unclean_scan
         return await self._request_json(
             "POST",
             "/api/system/configs/plugins:install",
@@ -195,11 +206,24 @@ class AsyncAgentTeamsClient:
         *,
         scope: str = "user",
         version: str | None = None,
+        allow_community_plugins: bool = False,
+        allow_executes_code: bool = False,
+        allow_missing_digest: bool = False,
+        allow_unclean_scan: bool = False,
     ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"scope": scope, "version": version}
+        if allow_community_plugins:
+            payload["allow_community_plugins"] = allow_community_plugins
+        if allow_executes_code:
+            payload["allow_executes_code"] = allow_executes_code
+        if allow_missing_digest:
+            payload["allow_missing_digest"] = allow_missing_digest
+        if allow_unclean_scan:
+            payload["allow_unclean_scan"] = allow_unclean_scan
         return await self._request_json(
             "POST",
             f"/api/system/configs/plugins/{quote(name, safe='')}:update",
-            {"scope": scope, "version": version},
+            payload,
         )
 
     async def delete_plugin(
@@ -410,9 +434,7 @@ class AsyncAgentTeamsClient:
         orchestration_policy: dict[str, JsonValue] | None = None,
     ) -> RunHandle:
         normalized_input: JsonValue = (
-            [part.model_dump(mode="json") for part in content_parts_from_text(input)]
-            if isinstance(input, str)
-            else input
+            _content_parts_from_text_payload(input) if isinstance(input, str) else input
         )
         payload: dict[str, JsonValue] = {
             "session_id": session_id,
@@ -1086,3 +1108,10 @@ def _expect_str(value: JsonValue | None, field_name: str) -> str:
     if isinstance(value, str):
         return value
     raise RuntimeError(f"Expected string field '{field_name}' in server response")
+
+
+def _content_parts_from_text_payload(text: str) -> list[JsonValue]:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+    return [{"kind": "text", "text": normalized}]

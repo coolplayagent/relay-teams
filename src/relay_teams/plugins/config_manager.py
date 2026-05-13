@@ -16,7 +16,9 @@ from relay_teams.plugins.integrity import (
     compute_plugin_tree_sha256,
     verify_plugin_tree_sha256,
 )
-from relay_teams.plugins.installers import install_plugin_source
+from relay_teams.plugins.installers import (
+    install_plugin_source,
+)
 from relay_teams.plugins.manifest_loader import (
     load_plugin_monitor_definitions,
     load_plugin_record,
@@ -26,6 +28,10 @@ from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceProviderKind,
     PluginMarketplaceSource,
+)
+from relay_teams.plugins.marketplace_policy import (
+    PluginMarketplaceInstallPolicy,
+    load_plugin_marketplace_install_policy,
 )
 from relay_teams.plugins.plugin_models import (
     PluginComponentCounts,
@@ -256,6 +262,7 @@ class PluginConfigManager:
         ),
         marketplace_source: str = "",
         marketplace_ref: str = "",
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
     ) -> PluginStateRecord:
         marketplace_reference = (
             str(marketplace.expanduser().resolve())
@@ -272,12 +279,26 @@ class PluginConfigManager:
             marketplace_source=marketplace_source_reference,
             marketplace_ref=marketplace_ref,
         )
-        index = PluginMarketplaceService().load_provider_index(
+        resolved_install_policy = install_policy
+        if source.provider == PluginMarketplaceProviderKind.CLAWHUB:
+            resolved_install_policy = (
+                install_policy
+                or load_plugin_marketplace_install_policy(self._app_config_dir)
+            )
+        entry = PluginMarketplaceService().load_provider_entry(
             source=source,
+            name=name,
             app_config_dir=self._app_config_dir,
+            install_policy=resolved_install_policy,
         )
-        entry = index.get_plugin(name)
         selected = entry.selected_version(version)
+        if selected.unsupported_reason:
+            raise ValueError(selected.unsupported_reason)
+        if resolved_install_policy is not None:
+            resolved_install_policy.require_allowed(
+                provider=source.provider,
+                version=selected,
+            )
         persisted_source = PluginInstallSource(
             kind=PluginInstallSourceKind.MARKETPLACE,
             value=entry.name,
@@ -295,6 +316,69 @@ class PluginConfigManager:
             expected_sha256=selected.sha256,
             extra_dependencies=selected.dependencies,
         )
+
+    def inspect_marketplace_plugin(
+        self,
+        *,
+        name: str,
+        marketplace: Path,
+        scope: PluginScope,
+        version: str | None = None,
+        marketplace_provider: PluginMarketplaceProviderKind = (
+            PluginMarketplaceProviderKind.LOCAL_JSON
+        ),
+        marketplace_source: str = "",
+        marketplace_ref: str = "",
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> PluginRegistry:
+        marketplace_reference = (
+            str(marketplace.expanduser().resolve())
+            if marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON
+            else str(marketplace)
+        )
+        marketplace_source_reference = self._marketplace_source_reference(
+            provider=marketplace_provider,
+            marketplace_source=marketplace_source,
+        )
+        source = self._marketplace_source(
+            provider=marketplace_provider,
+            marketplace=marketplace_reference,
+            marketplace_source=marketplace_source_reference,
+            marketplace_ref=marketplace_ref,
+        )
+        resolved_install_policy = install_policy
+        if source.provider == PluginMarketplaceProviderKind.CLAWHUB:
+            resolved_install_policy = (
+                install_policy
+                or load_plugin_marketplace_install_policy(self._app_config_dir)
+            )
+        entry = PluginMarketplaceService().load_provider_entry(
+            source=source,
+            name=name,
+            app_config_dir=self._app_config_dir,
+            install_policy=resolved_install_policy,
+        )
+        selected = entry.selected_version(version)
+        if selected.unsupported_reason:
+            raise ValueError(selected.unsupported_reason)
+        if resolved_install_policy is not None:
+            resolved_install_policy.require_allowed(
+                provider=source.provider,
+                version=selected,
+            )
+        source_root = self._materialize_validation_source(selected.source)
+        self._verify_expected_checksum(
+            plugin_root=source_root,
+            expected_sha256=selected.sha256,
+        )
+        record, diagnostics = self.validate_plugin(
+            plugin_root=source_root,
+            scope=scope,
+            require_manifest=True,
+            strict_explicit_paths=True,
+        )
+        records = () if record is None else (record,)
+        return PluginRegistry(plugins=records, diagnostics=diagnostics)
 
     def install_from_source(
         self,
@@ -342,7 +426,10 @@ class PluginConfigManager:
         copied_target = False
         if not target_dir.exists():
             install_plugin_source(
-                source=install_source,
+                source=PluginInstallSource(
+                    kind=PluginInstallSourceKind.LOCAL,
+                    value=str(source_root),
+                ),
                 app_config_dir=self._app_config_dir,
                 target_dir=target_dir,
             )
@@ -423,6 +510,7 @@ class PluginConfigManager:
         name: str,
         scope: PluginScope,
         version: str | None = None,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
     ) -> PluginStateRecord:
         self._require_mutable_scope(scope)
         state_file = self._require_state_file(scope)
@@ -432,6 +520,7 @@ class PluginConfigManager:
             self._resolve_update_install_source(
                 source=current.source,
                 version=version,
+                install_policy=install_policy,
             )
         )
         source_root = self._materialize_validation_source(install_source)
@@ -1431,6 +1520,7 @@ class PluginConfigManager:
         *,
         source: PluginInstallSource,
         version: str | None,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
     ) -> tuple[PluginInstallSource, str, tuple[PluginDependency, ...]]:
         if source.kind == PluginInstallSourceKind.MARKETPLACE:
             if not source.marketplace:
@@ -1438,7 +1528,13 @@ class PluginConfigManager:
                     "Marketplace plugin source is missing marketplace path"
                 )
             provider = _marketplace_provider_from_string(source.marketplace_provider)
-            index = PluginMarketplaceService().load_provider_index(
+            resolved_install_policy = (
+                install_policy
+                or load_plugin_marketplace_install_policy(self._app_config_dir)
+                if provider == PluginMarketplaceProviderKind.CLAWHUB
+                else None
+            )
+            entry = PluginMarketplaceService().load_provider_entry(
                 source=self._marketplace_source(
                     provider=provider,
                     marketplace=source.marketplace,
@@ -1446,9 +1542,13 @@ class PluginConfigManager:
                     marketplace_ref=source.marketplace_ref,
                     refresh=provider == PluginMarketplaceProviderKind.CLAUDE,
                 ),
+                name=source.value,
                 app_config_dir=self._app_config_dir,
+                install_policy=resolved_install_policy,
             )
-            selected = index.get_plugin(source.value).selected_version(version)
+            selected = entry.selected_version(version)
+            if selected.unsupported_reason:
+                raise ValueError(selected.unsupported_reason)
             return selected.source, selected.sha256, selected.dependencies
         if version is not None:
             raise ValueError(
@@ -1538,6 +1638,18 @@ class PluginConfigManager:
             target_dir = cache_root / self._cache_dir_name(
                 f"{source.value}:{source.subdir}"
             )
+            if target_dir.exists():
+                self._remove_directory_under(parent=cache_root, target=target_dir)
+            install_plugin_source(
+                source=source,
+                app_config_dir=self._app_config_dir,
+                target_dir=target_dir,
+            )
+            return target_dir
+        if source.kind == PluginInstallSourceKind.HTTP_ARCHIVE:
+            cache_root = self._app_config_dir / "plugins" / "cache" / "validation"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            target_dir = cache_root / self._cache_dir_name(source.value)
             if target_dir.exists():
                 self._remove_directory_under(parent=cache_root, target=target_dir)
             install_plugin_source(

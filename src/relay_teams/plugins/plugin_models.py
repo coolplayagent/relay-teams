@@ -31,6 +31,7 @@ class PluginInstallSourceKind(str, Enum):
     LOCAL = "local"
     GIT = "git"
     GIT_SUBDIR = "git_subdir"
+    HTTP_ARCHIVE = "http_archive"
     MARKETPLACE = "marketplace"
     UNSUPPORTED = "unsupported"
 

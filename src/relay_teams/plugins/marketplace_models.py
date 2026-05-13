@@ -17,6 +17,7 @@ from relay_teams.validation import RequiredIdentifierStr
 class PluginMarketplaceProviderKind(str, Enum):
     LOCAL_JSON = "local_json"
     CLAUDE = "claude"
+    CLAWHUB = "clawhub"
 
 
 class PluginMarketplaceSource(BaseModel):
@@ -40,6 +41,13 @@ class PluginMarketplaceVersion(BaseModel):
     unsupported_reason: str = ""
 
 
+class PluginMarketplaceCompatibility(str, Enum):
+    DIRECT = "direct"
+    PARTIAL = "partial"
+    NATIVE_ONLY = "native_only"
+    UNKNOWN = "unknown"
+
+
 class PluginMarketplaceEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -47,6 +55,11 @@ class PluginMarketplaceEntry(BaseModel):
     description: str = ""
     latest: str = ""
     versions: tuple[PluginMarketplaceVersion, ...] = ()
+    provider_family: str = ""
+    compatibility: PluginMarketplaceCompatibility = (
+        PluginMarketplaceCompatibility.UNKNOWN
+    )
+    compatibility_reason: str = ""
 
     def selected_version(
         self,
@@ -102,6 +115,7 @@ class PluginMarketplaceIndex(BaseModel):
 
     version: str = "1"
     plugins: tuple[PluginMarketplaceEntry, ...] = Field(default_factory=tuple)
+    next_cursor: str = ""
 
     def get_plugin(self, name: str) -> PluginMarketplaceEntry:
         for plugin in self.plugins:
