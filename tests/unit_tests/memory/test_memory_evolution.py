@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,10 @@ from relay_teams.memory.models import (
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.sqlite_repository import async_fetchone
+from relay_teams.skills.clawhub_models import (
+    ClawHubSkillDetail,
+    ClawHubSkillWriteRequest,
+)
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 
 pytestmark = pytest.mark.asyncio
@@ -110,6 +115,42 @@ class TestMemoryEvolutionRepository:
         draft = await repository.get_evolution_draft_async("mem-evo-missing")
 
         assert draft is None
+
+    async def test_patch_entry_metadata_preserves_other_fields(
+        self, tmp_path: Path
+    ) -> None:
+        repository = MemoryBankRepository(tmp_path / "metadata_patch.db")
+        service = MemoryBankService(repository=repository)
+        memory_id = await _create_memory(
+            service,
+            title="Original title",
+            body="Original body",
+            metadata={f"key-{index:02d}": str(index) for index in range(20)},
+        )
+        before = await service.get_entry_async(memory_id)
+        assert before is not None
+
+        patched = await repository.patch_entry_metadata_async(
+            memory_id=memory_id,
+            workspace_id="ws-evo",
+            metadata_patch={
+                "evolution_draft_id": "mem-evo-patched",
+                "evolution_skill_ref": "patched-skill",
+            },
+            metadata_limit=20,
+            updated_at=datetime.now(tz=timezone.utc),
+        )
+
+        after = await service.get_entry_async(memory_id)
+        assert patched is True
+        assert after is not None
+        assert after.content == before.content
+        assert after.tags == before.tags
+        assert after.status == before.status
+        assert after.version == before.version + 1
+        assert len(after.metadata) == 20
+        assert after.metadata["evolution_draft_id"] == "mem-evo-patched"
+        assert after.metadata["evolution_skill_ref"] == "patched-skill"
 
 
 class TestMemoryEvolutionModels:
@@ -537,6 +578,185 @@ class TestMemoryEvolutionService:
             assert reload_recorder.count == 0
         else:
             assert reload_recorder.count == 1
+
+    async def test_apply_draft_releases_claim_when_save_is_cancelled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="cancelled-apply",
+                runtime_name="cancelled-apply",
+            )
+        )
+
+        def cancel_save(
+            skill_id: str, request: ClawHubSkillWriteRequest
+        ) -> ClawHubSkillDetail:
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(
+            evolution_service._skill_service,
+            "save_skill",
+            cancel_save,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(),
+            )
+
+        reloaded = await evolution_service.get_draft_async("ws-evo", draft.draft_id)
+        assert reloaded is not None
+        assert reloaded.status == MemoryEvolutionStatus.DRAFT
+
+    async def test_apply_draft_retries_release_when_save_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="failing-apply",
+                runtime_name="failing-apply",
+            )
+        )
+        repository = evolution_service._repo
+        original_release = repository.release_evolution_draft_apply_claim_async
+        release_attempts = 0
+
+        def fail_save(
+            skill_id: str, request: ClawHubSkillWriteRequest
+        ) -> ClawHubSkillDetail:
+            raise RuntimeError("skill write failed")
+
+        async def flaky_release(*, draft_id: str, updated_at: datetime) -> bool:
+            nonlocal release_attempts
+            release_attempts += 1
+            if release_attempts == 1:
+                raise RuntimeError("database locked")
+            return await original_release(draft_id=draft_id, updated_at=updated_at)
+
+        monkeypatch.setattr(
+            evolution_service._skill_service,
+            "save_skill",
+            fail_save,
+        )
+        monkeypatch.setattr(
+            repository,
+            "release_evolution_draft_apply_claim_async",
+            flaky_release,
+        )
+
+        with pytest.raises(RuntimeError, match="skill write failed"):
+            await evolution_service.apply_draft_async(
+                "ws-evo",
+                draft.draft_id,
+                ApplyMemoryEvolutionDraftRequest(),
+            )
+
+        reloaded = await evolution_service.get_draft_async("ws-evo", draft.draft_id)
+        assert release_attempts == 2
+        assert reloaded is not None
+        assert reloaded.status == MemoryEvolutionStatus.DRAFT
+
+    async def test_apply_draft_retries_applied_state_persistence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="retry-apply-complete",
+                runtime_name="retry-apply-complete",
+            )
+        )
+        repository = evolution_service._repo
+        original_complete = repository.complete_evolution_draft_apply_async
+        complete_attempts = 0
+
+        async def flaky_complete(
+            *, draft: MemoryEvolutionDraft
+        ) -> MemoryEvolutionDraft | None:
+            nonlocal complete_attempts
+            complete_attempts += 1
+            if complete_attempts == 1:
+                raise RuntimeError("database locked")
+            return await original_complete(draft=draft)
+
+        monkeypatch.setattr(
+            repository,
+            "complete_evolution_draft_apply_async",
+            flaky_complete,
+        )
+
+        applied = await evolution_service.apply_draft_async(
+            "ws-evo",
+            draft.draft_id,
+            ApplyMemoryEvolutionDraftRequest(),
+        )
+
+        assert complete_attempts == 2
+        assert applied is not None
+        assert applied.status == MemoryEvolutionStatus.APPLIED
+
+    async def test_apply_draft_returns_applied_when_source_tagging_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        memory_service, evolution_service, _ = _build_services(tmp_path)
+        memory_id = await _create_memory(memory_service)
+        draft = await evolution_service.create_draft_async(
+            CreateMemoryEvolutionDraftRequest(
+                workspace_id="ws-evo",
+                source_memory_ids=(memory_id,),
+                target=MemoryEvolutionTarget.SKILL,
+                skill_id="tagging-failure",
+                runtime_name="tagging-failure",
+            )
+        )
+
+        async def fail_patch_metadata(
+            *,
+            memory_id: str,
+            workspace_id: str,
+            metadata_patch: dict[str, str],
+            metadata_limit: int,
+            updated_at: datetime,
+        ) -> bool:
+            raise RuntimeError("metadata write failed")
+
+        monkeypatch.setattr(
+            evolution_service._repo,
+            "patch_entry_metadata_async",
+            fail_patch_metadata,
+        )
+
+        applied = await evolution_service.apply_draft_async(
+            "ws-evo",
+            draft.draft_id,
+            ApplyMemoryEvolutionDraftRequest(),
+        )
+
+        reloaded = await evolution_service.get_draft_async("ws-evo", draft.draft_id)
+        source = await memory_service.get_entry_async(memory_id)
+        assert applied is not None
+        assert applied.status == MemoryEvolutionStatus.APPLIED
+        assert reloaded is not None
+        assert reloaded.status == MemoryEvolutionStatus.APPLIED
+        assert source is not None
+        assert "evolution_draft_id" not in source.metadata
 
     async def test_apply_draft_rejects_blank_instructions(self, tmp_path: Path) -> None:
         memory_service, evolution_service, _ = _build_services(tmp_path)

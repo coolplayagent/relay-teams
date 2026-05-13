@@ -141,7 +141,11 @@ skill identifiers before persisting the draft, so invalid drafts do not fail
 later during skill application. Draft apply and reject mutations atomically
 claim a draft before persisting the transition or writing the skill, preventing
 concurrent requests from creating multiple skill outputs or reporting
-conflicting final states for one draft.
+conflicting final states for one draft. Apply releases the claim on skill-write
+failure or cancellation, retries final applied-state persistence, and treats
+source-memory metadata tagging as a best-effort follow-up. Tagging patches only
+metadata keys, so concurrent content, tag, status, and scoring edits are not
+overwritten by draft application.
 
 ## API Surface
 

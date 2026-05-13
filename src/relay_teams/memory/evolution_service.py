@@ -26,6 +26,7 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 
 LOGGER = get_logger(__name__)
 _MAX_MEMORY_METADATA_KEYS = 20
+_RECOVERY_ATTEMPTS = 3
 
 
 class MemoryEvolutionConflictError(ValueError):
@@ -146,14 +147,11 @@ class MemoryEvolutionService:
                     files=(),
                 ),
             )
+        except asyncio.CancelledError:
+            await self._release_apply_claim_async(draft, reason="cancelled")
+            raise
         except Exception:
-            reverted = draft.model_copy(
-                update={
-                    "status": MemoryEvolutionStatus.DRAFT,
-                    "updated_at": datetime.now(tz=timezone.utc),
-                }
-            )
-            await self._repo.update_evolution_draft_async(draft=reverted)
+            await self._release_apply_claim_async(draft, reason="save failed")
             raise
         applied_ref = saved.ref or runtime_name
         applied = draft.model_copy(
@@ -168,8 +166,14 @@ class MemoryEvolutionService:
                 "applied_at": now,
             }
         )
-        updated = await self._repo.update_evolution_draft_async(draft=applied)
-        await self._mark_source_memories_applied_async(updated)
+        updated = await self._complete_apply_claim_async(applied)
+        try:
+            await self._mark_source_memories_applied_async(updated)
+        except Exception:
+            LOGGER.exception(
+                "Failed to tag source memories for Memory Bank evolution draft %s",
+                updated.draft_id,
+            )
         LOGGER.info(
             "Applied Memory Bank evolution draft %s as skill %s",
             updated.draft_id,
@@ -234,16 +238,98 @@ class MemoryEvolutionService:
     async def _mark_source_memories_applied_async(
         self, draft: MemoryEvolutionDraft
     ) -> None:
-        for entry in await self._load_source_entries_by_id_async(draft):
-            metadata = _with_evolution_metadata(entry.metadata, draft)
-            updated_entry = entry.model_copy(
-                update={
-                    "metadata": metadata,
-                    "version": entry.version + 1,
-                    "updated_at": draft.updated_at,
-                }
+        metadata_patch = {
+            "evolution_draft_id": draft.draft_id,
+            "evolution_skill_ref": draft.applied_skill_ref or draft.runtime_name,
+        }
+        for memory_id in draft.source_memory_ids:
+            patched = await self._repo.patch_entry_metadata_async(
+                memory_id=memory_id,
+                workspace_id=draft.workspace_id,
+                metadata_patch=metadata_patch,
+                metadata_limit=_MAX_MEMORY_METADATA_KEYS,
+                updated_at=draft.updated_at,
             )
-            await self._repo.update_entry_async(entry.id, entry=updated_entry)
+            if not patched:
+                LOGGER.warning(
+                    "Skipped missing source memory %s while tagging "
+                    "Memory Bank evolution draft %s",
+                    memory_id,
+                    draft.draft_id,
+                )
+
+    async def _release_apply_claim_async(
+        self, draft: MemoryEvolutionDraft, *, reason: str
+    ) -> None:
+        for attempt in range(1, _RECOVERY_ATTEMPTS + 1):
+            try:
+                released = await asyncio.shield(
+                    self._repo.release_evolution_draft_apply_claim_async(
+                        draft_id=draft.draft_id,
+                        updated_at=datetime.now(tz=timezone.utc),
+                    )
+                )
+            except Exception as exc:
+                if attempt == _RECOVERY_ATTEMPTS:
+                    LOGGER.exception(
+                        "Failed to release Memory Bank evolution draft %s "
+                        "after %s attempts during %s",
+                        draft.draft_id,
+                        attempt,
+                        reason,
+                    )
+                    return
+                LOGGER.warning(
+                    "Retrying Memory Bank evolution draft %s claim release "
+                    "after %s failure: %s",
+                    draft.draft_id,
+                    reason,
+                    exc,
+                )
+                await asyncio.sleep(0)
+                continue
+            if not released:
+                LOGGER.warning(
+                    "Memory Bank evolution draft %s apply claim was already "
+                    "moved while handling %s",
+                    draft.draft_id,
+                    reason,
+                )
+            return
+
+    async def _complete_apply_claim_async(
+        self, draft: MemoryEvolutionDraft
+    ) -> MemoryEvolutionDraft:
+        for attempt in range(1, _RECOVERY_ATTEMPTS + 1):
+            try:
+                updated = await self._repo.complete_evolution_draft_apply_async(
+                    draft=draft
+                )
+            except Exception as exc:
+                if attempt == _RECOVERY_ATTEMPTS:
+                    LOGGER.exception(
+                        "Failed to persist applied Memory Bank evolution draft %s "
+                        "after %s attempts",
+                        draft.draft_id,
+                        attempt,
+                    )
+                    raise
+                LOGGER.warning(
+                    "Retrying applied Memory Bank evolution draft %s persistence "
+                    "after failure: %s",
+                    draft.draft_id,
+                    exc,
+                )
+                await asyncio.sleep(0)
+                continue
+            if updated is None:
+                message = (
+                    "Memory evolution draft is not applicable: apply claim was lost"
+                )
+                raise MemoryEvolutionConflictError(message)
+            return updated
+        message = "Memory evolution draft apply persistence did not complete"
+        raise RuntimeError(message)
 
 
 def _default_description(
@@ -391,22 +477,3 @@ def _target_label(target: MemoryEvolutionTarget) -> str:
     if target == MemoryEvolutionTarget.SOP_SKILL:
         return "SOP skill"
     return "Skill"
-
-
-def _with_evolution_metadata(
-    metadata: dict[str, str],
-    draft: MemoryEvolutionDraft,
-) -> dict[str, str]:
-    updated = dict(metadata)
-    updated["evolution_draft_id"] = draft.draft_id
-    updated["evolution_skill_ref"] = draft.applied_skill_ref or draft.runtime_name
-    while len(updated) > _MAX_MEMORY_METADATA_KEYS:
-        removable = sorted(
-            key
-            for key in updated
-            if key not in {"evolution_draft_id", "evolution_skill_ref"}
-        )
-        if not removable:
-            break
-        del updated[removable[0]]
-    return updated

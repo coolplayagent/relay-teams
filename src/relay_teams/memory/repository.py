@@ -581,6 +581,75 @@ class MemoryBankRepository(SharedSqliteRepository):
             operation=op,
         )
 
+    async def release_evolution_draft_apply_claim_async(
+        self,
+        *,
+        draft_id: str,
+        updated_at: datetime,
+    ) -> bool:
+        async def op(conn: aiosqlite.Connection) -> bool:
+            cursor = await conn.execute(
+                """UPDATE memory_evolution_drafts
+                SET status=?, updated_at=?
+                WHERE draft_id=? AND status=?""",
+                (
+                    MemoryEvolutionStatus.DRAFT.value,
+                    updated_at.isoformat(),
+                    draft_id,
+                    MemoryEvolutionStatus.APPLYING.value,
+                ),
+            )
+            affected = cursor.rowcount
+            await cursor.close()
+            return affected > 0
+
+        return await self._run_async_write(
+            operation_name="release_memory_evolution_draft_apply_claim_async",
+            operation=op,
+        )
+
+    async def complete_evolution_draft_apply_async(
+        self,
+        *,
+        draft: MemoryEvolutionDraft,
+    ) -> MemoryEvolutionDraft | None:
+        async def op(conn: aiosqlite.Connection) -> MemoryEvolutionDraft | None:
+            cursor = await conn.execute(
+                """UPDATE memory_evolution_drafts SET
+                    status=?, skill_id=?, runtime_name=?, description=?,
+                    instructions=?, applied_skill_ref=?, updated_at=?, applied_at=?
+                WHERE draft_id=? AND status=?""",
+                (
+                    MemoryEvolutionStatus.APPLIED.value,
+                    draft.skill_id,
+                    draft.runtime_name,
+                    draft.description,
+                    draft.instructions,
+                    draft.applied_skill_ref,
+                    draft.updated_at.isoformat(),
+                    draft.applied_at.isoformat() if draft.applied_at else None,
+                    draft.draft_id,
+                    MemoryEvolutionStatus.APPLYING.value,
+                ),
+            )
+            affected = cursor.rowcount
+            await cursor.close()
+            if affected == 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM memory_evolution_drafts WHERE draft_id=?",
+                (draft.draft_id,),
+            )
+            if row is None:
+                return None
+            return _row_to_evolution_draft(row)
+
+        return await self._run_async_write(
+            operation_name="complete_memory_evolution_draft_apply_async",
+            operation=op,
+        )
+
     async def claim_evolution_draft_reject_async(
         self,
         *,
@@ -618,6 +687,54 @@ class MemoryBankRepository(SharedSqliteRepository):
 
         return await self._run_async_write(
             operation_name="claim_memory_evolution_draft_reject_async",
+            operation=op,
+        )
+
+    async def patch_entry_metadata_async(
+        self,
+        *,
+        memory_id: str,
+        workspace_id: str,
+        metadata_patch: dict[str, str],
+        metadata_limit: int,
+        updated_at: datetime,
+    ) -> bool:
+        async def op(conn: aiosqlite.Connection) -> bool:
+            row = await async_fetchone(
+                conn,
+                """SELECT metadata_json, version
+                FROM memory_entries
+                WHERE memory_id=? AND workspace_id=?""",
+                (memory_id, workspace_id),
+            )
+            if row is None:
+                return False
+            meta_raw = str(row["metadata_json"])
+            metadata: dict[str, str] = json.loads(meta_raw) if meta_raw else {}
+            metadata.update(metadata_patch)
+            while len(metadata) > metadata_limit:
+                removable = sorted(key for key in metadata if key not in metadata_patch)
+                if not removable:
+                    break
+                del metadata[removable[0]]
+            cursor = await conn.execute(
+                """UPDATE memory_entries
+                SET metadata_json=?, version=?, updated_at=?
+                WHERE memory_id=? AND workspace_id=?""",
+                (
+                    json.dumps(metadata, separators=(",", ":")),
+                    int(row["version"]) + 1,
+                    updated_at.isoformat(),
+                    memory_id,
+                    workspace_id,
+                ),
+            )
+            affected = cursor.rowcount
+            await cursor.close()
+            return affected > 0
+
+        return await self._run_async_write(
+            operation_name="patch_memory_entry_metadata_async",
             operation=op,
         )
 
