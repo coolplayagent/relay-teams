@@ -81,6 +81,8 @@ export {
     fetchHookRuntimeView,
     fetchPluginsConfig,
     fetchPluginMarketplace,
+    inspectPluginMarketplace,
+    searchPluginMarketplace,
     fetchPluginsRuntime,
     fetchMcpServers,
     fetchMcpServer,

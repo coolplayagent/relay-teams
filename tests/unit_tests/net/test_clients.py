@@ -16,6 +16,26 @@ _SSL_VERIFY_DISABLED = 0
 _SSL_VERIFY_REQUIRED = 2
 
 
+def test_get_user_agent_uses_installed_package_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(clients_module.metadata, "version", lambda name: "1.2.3")
+
+    assert clients_module.get_user_agent() == "pydantic-ai/1.2.3"
+
+
+def test_get_user_agent_falls_back_when_package_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_version(name: str) -> str:
+        _ = name
+        raise clients_module.metadata.PackageNotFoundError
+
+    monkeypatch.setattr(clients_module.metadata, "version", missing_version)
+
+    assert clients_module.get_user_agent() == "pydantic-ai/unknown"
+
+
 def _transport_verify_mode(transport: object) -> int:
     pool = getattr(transport, "_pool")
     ssl_context = getattr(pool, "_ssl_context")

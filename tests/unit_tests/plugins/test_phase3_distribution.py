@@ -1,20 +1,29 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
+import stat
 import subprocess
+import sys
+import tarfile
+import zipfile
 
 import pytest
 
 from relay_teams.plugins import config_manager as plugin_config_manager
+from relay_teams.plugins import clawhub_marketplace_provider
 from relay_teams.plugins import installers as plugin_installers
 from relay_teams.plugins import claude_marketplace_provider
 from relay_teams.env import ProxyEnvConfig
 from relay_teams.plugins.claude_plugin_adapter import adapt_plugin_tree
 from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.plugins.integrity import compute_plugin_tree_sha256
+from relay_teams.plugins.openclaw_plugin_adapter import adapt_openclaw_plugin_tree
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceEntry,
@@ -22,6 +31,13 @@ from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceProviderKind,
     PluginMarketplaceSource,
     PluginMarketplaceVersion,
+)
+from relay_teams.plugins.marketplace_policy import (
+    PluginMarketplaceInstallPolicy,
+    _apply_install_policy_to_version,
+    apply_install_policy_to_entry,
+    load_plugin_marketplace_install_policy,
+    save_plugin_marketplace_install_policy,
 )
 from relay_teams.plugins.plugin_models import (
     PluginInstallSource,
@@ -572,6 +588,58 @@ def test_plugin_git_subprocess_env_includes_saved_proxy(
     assert env["https_proxy"] == "http://proxy.example:8080"
 
 
+def test_plugin_git_subprocess_captures_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        stdout: int,
+        stderr: int,
+        env: dict[str, str],
+        text: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        captured.update(
+            {
+                "args": args,
+                "check": check,
+                "stdout": stdout,
+                "stderr": stderr,
+                "env": env,
+                "text": text,
+                "timeout": timeout,
+            }
+        )
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr(plugin_installers.subprocess, "run", fake_run)
+
+    plugin_installers._run_git(["git", "status"])
+
+    assert captured["stderr"] == subprocess.PIPE
+    assert captured["text"] is True
+
+
+def test_plugin_archive_proxy_map_uses_all_proxy_for_http_schemes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        plugin_installers,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(all_proxy="http://proxy.example:8080"),
+    )
+
+    proxies = plugin_installers._urllib_proxy_map()
+
+    assert proxies["http"] == "http://proxy.example:8080"
+    assert proxies["https"] == "http://proxy.example:8080"
+    assert proxies["all"] == "http://proxy.example:8080"
+
+
 def test_claude_marketplace_git_subprocess_env_includes_saved_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -587,6 +655,22 @@ def test_claude_marketplace_git_subprocess_env_includes_saved_proxy(
     assert env["EXISTING_ENV"] == "1"
     assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
     assert env["https_proxy"] == "http://proxy.example:8080"
+
+
+def test_clawhub_url_proxy_map_uses_all_proxy_for_http_schemes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        clawhub_marketplace_provider,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(all_proxy="http://proxy.example:8080"),
+    )
+
+    proxies = clawhub_marketplace_provider._urllib_proxy_map()
+
+    assert proxies["http"] == "http://proxy.example:8080"
+    assert proxies["https"] == "http://proxy.example:8080"
+    assert proxies["all"] == "http://proxy.example:8080"
 
 
 def test_claude_marketplace_refresh_reclones_cached_checkout(
@@ -1172,6 +1256,67 @@ def test_marketplace_install_resolves_local_source(tmp_path: Path) -> None:
     assert installed.root_dir.exists()
 
 
+def test_marketplace_inspect_resolves_archive_without_installing(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    source_root = tmp_path / "archive-root" / "quality"
+    source_root.mkdir(parents=True)
+    (source_root / "openclaw.plugin.json").write_text(
+        json.dumps({"id": "quality", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    skills_dir = source_root / "skills" / "quality"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# Quality\n\nUse this skill for quality checks.\n",
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "quality.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(
+            source_root / "openclaw.plugin.json",
+            "quality/openclaw.plugin.json",
+        )
+        archive.write(skills_dir / "SKILL.md", "quality/skills/quality/SKILL.md")
+    marketplace_path = tmp_path / "marketplace.json"
+    marketplace_path.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "quality",
+                        "latest": "1.0.0",
+                        "versions": [
+                            {
+                                "version": "1.0.0",
+                                "source": {
+                                    "kind": "http_archive",
+                                    "value": archive_path.resolve().as_uri(),
+                                    "adapter": "openclaw",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    registry = PluginConfigManager(
+        app_config_dir=app_config_dir
+    ).inspect_marketplace_plugin(
+        name="quality",
+        marketplace=marketplace_path,
+        scope=PluginScope.USER,
+    )
+
+    assert registry.plugins[0].name == "quality"
+    assert registry.plugins[0].component_counts.skills == 1
+    assert not get_plugin_user_state_file(app_config_dir=app_config_dir).exists()
+
+
 def test_marketplace_install_persists_resolved_relative_marketplace_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1451,8 +1596,1593 @@ def test_marketplace_provider_from_string_defaults_and_rejects_unknown() -> None
         plugin_config_manager._marketplace_provider_from_string("claude")
         == PluginMarketplaceProviderKind.CLAUDE
     )
+    assert (
+        plugin_config_manager._marketplace_provider_from_string("clawhub")
+        == PluginMarketplaceProviderKind.CLAWHUB
+    )
     with pytest.raises(ValueError, match="Unsupported plugin marketplace provider"):
         plugin_config_manager._marketplace_provider_from_string("unknown")
+
+
+def test_clawhub_marketplace_provider_loads_entry_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/market-plugin":
+            return {
+                "name": "market-plugin",
+                "displayName": "Market",
+                "summary": "Market data",
+                "family": "code-plugin",
+                "channel": "community",
+                "latestVersion": "1.0.1",
+            }
+        if url == "https://clawhub.test/api/v1/packages/market-plugin/versions":
+            return {"items": [{"version": "1.0.1"}, {"version": "1.0.0"}]}
+        if url.endswith("/versions/1.0.1"):
+            return {
+                "version": "1.0.1",
+                "family": "code-plugin",
+                "artifact": {"sha256": "a" * 64},
+                "runtimeExtensions": ["./dist/index.js"],
+            }
+        if url.endswith("/versions/1.0.0"):
+            return {
+                "version": "1.0.0",
+                "family": "code-plugin",
+                "artifact": {"npmIntegrity": "sha512-" + "b" * 88},
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            name="clawhub",
+            value="https://clawhub.test",
+        ),
+        name="market-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.latest == "1.0.1"
+    assert entry.description == "Market data"
+    assert [version.version for version in entry.versions] == ["1.0.1", "1.0.0"]
+    assert entry.versions[0].source.kind == PluginInstallSourceKind.HTTP_ARCHIVE
+    assert entry.versions[0].source.adapter == "openclaw"
+    assert entry.versions[0].source.sha == "a" * 64
+    assert (
+        "ClawHub package declares OpenClaw native runtime extensions; "
+        "Relay Teams only loads mapped plugin components."
+    ) in entry.versions[0].warnings
+
+
+def test_clawhub_marketplace_provider_loads_lightweight_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        assert url.startswith("https://clawhub.test/api/v1/packages?")
+        return {
+            "items": [
+                {
+                    "name": "@owner/market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                    "sha256": "a" * 64,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+    )
+
+    entry = index.get_plugin("@owner/market-plugin")
+    assert entry.name == "@owner/market-plugin"
+    assert entry.latest == "1.0.1"
+    assert entry.versions[0].source.value == (
+        "https://clawhub.test/api/v1/packages/%40owner%2Fmarket-plugin/"
+        "versions/1.0.1/artifact/download"
+    )
+
+
+def test_clawhub_marketplace_provider_skips_missing_version_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": []}
+        assert (
+            url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100"
+        )
+        return {
+            "items": [
+                {
+                    "name": "draft-plugin",
+                    "summary": "Draft package",
+                    "family": "code-plugin",
+                    "latestVersion": None,
+                },
+                {
+                    "name": "market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["market-plugin"]
+
+
+def test_clawhub_marketplace_provider_searches_packages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        assert url == "https://clawhub.test/api/v1/packages/search?q=market"
+        return {
+            "items": [
+                {
+                    "name": "market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().search_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        query="market",
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["market-plugin"]
+    assert index.plugins[0].latest == "1.0.1"
+    assert not index.plugins[0].versions[0].unsupported_reason
+
+
+def test_clawhub_marketplace_provider_search_skips_missing_version_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        assert url == "https://clawhub.test/api/v1/packages/search?q=market"
+        return {
+            "items": [
+                {
+                    "name": "draft-plugin",
+                    "summary": "Draft package",
+                    "family": "code-plugin",
+                    "latestVersion": None,
+                },
+                {
+                    "name": "market-plugin",
+                    "summary": "Market data",
+                    "family": "code-plugin",
+                    "latestVersion": "1.0.1",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().search_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        query="market",
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["market-plugin"]
+
+
+def test_clawhub_marketplace_provider_blank_search_loads_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {"items": [{"name": "code", "version": "1.0.0"}]}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": [{"name": "bundle", "version": "1.0.0"}]}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().search_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        query="   ",
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["code", "bundle"]
+    assert all("/search" not in url for url in requested_urls)
+
+
+def test_marketplace_service_search_filters_local_json(tmp_path: Path) -> None:
+    marketplace_path = tmp_path / "marketplace.json"
+    marketplace_path.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "quality",
+                        "description": "Quality tools",
+                        "latest": "1.0.0",
+                    },
+                    {
+                        "name": "market",
+                        "description": "Market data",
+                        "latest": "1.0.0",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    index = PluginMarketplaceService().search_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.LOCAL_JSON,
+            value=str(marketplace_path),
+        ),
+        query="quality",
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["quality"]
+
+
+def test_clawhub_marketplace_provider_uses_requested_name_for_nameless_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin":
+            return {
+                "summary": "Detail package",
+                "latestVersion": "1.0.0",
+                "family": "bundle-plugin",
+                "sha256": "a" * 64,
+            }
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions":
+            return {"items": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="detail-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.name == "detail-plugin"
+    assert entry.latest == "1.0.0"
+    assert entry.versions[0].source.value == (
+        "https://clawhub.test/api/v1/packages/detail-plugin/"
+        "versions/1.0.0/artifact/download"
+    )
+    assert entry.versions[0].source.sha == "a" * 64
+
+
+def test_clawhub_marketplace_provider_merges_listing_metadata_for_sparse_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin":
+            return {
+                "summary": "Detail package",
+                "family": "bundle-plugin",
+                "sha256": "a" * 64,
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {"items": []}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {
+                "items": [
+                    {
+                        "name": "detail-plugin",
+                        "latestVersion": "1.0.0",
+                        "summary": "Listed package",
+                        "family": "bundle-plugin",
+                    }
+                ]
+            }
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions":
+            return {"items": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="detail-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.name == "detail-plugin"
+    assert entry.latest == "1.0.0"
+    assert entry.description == "Detail package"
+    assert entry.versions[0].source.sha == "a" * 64
+
+
+def test_clawhub_marketplace_provider_falls_back_to_listing_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url.startswith("https://clawhub.test/api/v1/packages?"):
+            return {
+                "items": [
+                    {
+                        "name": "market-plugin",
+                        "summary": "Market data",
+                        "family": "code-plugin",
+                        "version": "1.0.1",
+                        "channel": "community",
+                        "artifactKind": "legacy-zip",
+                        "executesCode": True,
+                        "scanStatus": "clean",
+                        "sha256": "a" * 64,
+                    }
+                ]
+            }
+        raise ValueError("versions unavailable")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="market-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.latest == "1.0.1"
+    assert entry.description == "Market data"
+    assert entry.versions[0].source.kind == PluginInstallSourceKind.HTTP_ARCHIVE
+    assert entry.versions[0].source.adapter == "openclaw"
+    assert entry.versions[0].source.sha == "a" * 64
+    assert "ClawHub package executes code." in entry.versions[0].warnings
+
+
+def test_clawhub_marketplace_provider_paginates_package_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {
+                "items": [{"name": "first", "version": "1.0.0"}],
+                "nextCursor": "next",
+            }
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100&cursor=next"
+        ):
+            return {"items": [{"name": "second", "version": "1.0.0"}]}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {
+                "items": [
+                    {"name": "bundle", "version": "2.0.0", "family": "bundle-plugin"}
+                ]
+            }
+        if (
+            url.endswith("/versions")
+            or url.startswith("https://clawhub.test/api/v1/packages/first")
+            or url.startswith("https://clawhub.test/api/v1/packages/second")
+        ):
+            return {"items": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+    )
+
+    assert [entry.name for entry in index.plugins] == ["first", "second", "bundle"]
+    assert index.plugins[2].provider_family == "bundle-plugin"
+    assert index.plugins[2].compatibility == "direct"
+
+
+def test_clawhub_marketplace_provider_decodes_family_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=4&cursor=code-next"
+        ):
+            return {"items": [{"name": "code", "version": "1.0.0"}]}
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=3&cursor=bundle-next"
+        ):
+            return {"items": [{"name": "bundle", "version": "1.0.0"}]}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=4,
+        cursor='{"code-plugin":"code-next","bundle-plugin":"bundle-next"}',
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["code", "bundle"]
+    assert len(requested_urls) == 2
+
+
+def test_clawhub_marketplace_provider_skips_uncursored_families_on_followup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=4&cursor=code-next"
+        ):
+            return {"items": [{"name": "code", "version": "1.0.0"}]}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=4,
+        cursor='{"code-plugin":"code-next"}',
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["code"]
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=4&cursor=code-next"
+    ]
+
+
+def test_clawhub_marketplace_provider_limits_single_page_globally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1":
+            return {
+                "items": [{"name": "code", "version": "1.0.0"}],
+                "nextCursor": "code-next",
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=1,
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["code"]
+    assert index.next_cursor == '{"code-plugin":"code-next","bundle-plugin":""}'
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1"
+    ]
+
+
+def test_clawhub_marketplace_provider_allows_max_size_single_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {"items": [], "nextCursor": "code-next"}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": []}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=100,
+        fetch_all=False,
+    )
+
+    assert index.plugins == ()
+    assert index.next_cursor == '{"code-plugin":"code-next"}'
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100",
+        "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100",
+    ]
+
+
+def test_clawhub_marketplace_provider_loads_one_detailed_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1":
+            return {
+                "items": [{"name": "first", "latestVersion": "1.0.0"}],
+                "nextCursor": "next",
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1":
+            return {"items": []}
+        if url == "https://clawhub.test/api/v1/packages/first/versions/1.0.0":
+            return {
+                "version": "1.0.0",
+                "family": "code-plugin",
+                "scanStatus": "clean",
+                "artifact": {"sha256": "a" * 64},
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=1,
+        include_versions=True,
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["first"]
+    assert index.next_cursor == '{"code-plugin":"next","bundle-plugin":""}'
+    assert index.plugins[0].versions[0].source.sha == "a" * 64
+    assert not index.plugins[0].versions[0].unsupported_reason
+    assert "https://clawhub.test/api/v1/packages/first/versions" not in requested_urls
+
+
+def test_clawhub_marketplace_provider_visits_pending_family_before_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1":
+            return {"items": [{"name": "bundle", "version": "1.0.0"}]}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = clawhub_marketplace_provider.ClawHubMarketplaceProvider().load_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        limit=1,
+        cursor='{"code-plugin":"code-next","bundle-plugin":""}',
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["bundle"]
+    assert index.next_cursor == '{"code-plugin":"code-next"}'
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1"
+    ]
+
+
+def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1":
+            return {
+                "items": [{"name": "first", "latestVersion": "1.0.0"}],
+                "nextCursor": "next",
+            }
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=next"
+        ):
+            return {"items": [{"name": "second", "latestVersion": "1.1.0"}]}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1":
+            return {"items": []}
+        if url == "https://clawhub.test/api/v1/packages/first/versions/1.0.0":
+            return {
+                "version": "1.0.0",
+                "family": "code-plugin",
+                "scanStatus": "clean",
+                "artifact": {"sha256": "a" * 64},
+            }
+        if url == "https://clawhub.test/api/v1/packages/second/versions/1.1.0":
+            return {
+                "version": "1.1.0",
+                "family": "code-plugin",
+                "scanStatus": "clean",
+                "artifact": {"sha256": "b" * 64},
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+        limit=1,
+        include_details=True,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["first", "second"]
+    assert index.next_cursor == ""
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1",
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=next",
+        "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1",
+        "https://clawhub.test/api/v1/packages/first/versions/1.0.0",
+        "https://clawhub.test/api/v1/packages/second/versions/1.1.0",
+    ]
+
+
+def test_clawhub_marketplace_service_preserves_pagination_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_get_json(url: str) -> dict[str, object]:
+        requested_urls.append(url)
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=stale"
+        ):
+            return {"items": [{"name": "second", "version": "1.1.0"}]}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+        limit=1,
+        cursor='{"code-plugin":"stale"}',
+        fetch_all=False,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["second"]
+    assert index.next_cursor == ""
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=stale",
+    ]
+
+
+def test_clawhub_marketplace_lightweight_index_skips_install_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=50":
+            return {
+                "items": [
+                    {
+                        "name": "needs-details",
+                        "latestVersion": "1.0.0",
+                        "family": "code-plugin",
+                    }
+                ]
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=50":
+            return {
+                "items": [
+                    {
+                        "name": "bundle",
+                        "latestVersion": "1.0.0",
+                        "family": "bundle-plugin",
+                    }
+                ]
+            }
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=Path("unused"),
+        limit=50,
+    )
+
+    assert [entry.name for entry in index.plugins] == ["needs-details", "bundle"]
+    assert all(entry.supported_versions() for entry in index.plugins)
+    assert index.plugins[0].compatibility == "unknown"
+    assert index.plugins[1].compatibility == "direct"
+
+
+def test_clawhub_marketplace_provider_marks_blocked_releases_unsupported() -> None:
+    provider = clawhub_marketplace_provider.ClawHubMarketplaceProvider()
+
+    entry = provider._entry_from_raw_package(
+        raw_package={
+            "name": "blocked-plugin",
+            "family": "code-plugin",
+            "version": "1.0.0",
+            "moderationState": "quarantined",
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert entry.supported_versions() == ()
+    assert entry.versions[0].unsupported_reason == (
+        "ClawHub package release is quarantined"
+    )
+
+
+def test_clawhub_marketplace_provider_helper_edge_cases() -> None:
+    latest_from_mapping = clawhub_marketplace_provider._package_version_or_empty(
+        {"latestVersion": {"version": "2.0.0"}}
+    )
+    latest_from_tag = clawhub_marketplace_provider._package_version_or_empty(
+        {"tags": {"latest": "3.0.0"}}
+    )
+    compatibility = clawhub_marketplace_provider._compatibility_for_package(
+        {"skills": ["quality"], "runtimeExtensions": ["./dist/index.js"]}
+    )
+    native_only = clawhub_marketplace_provider._compatibility_for_package(
+        {"runtimeExtensions": ["./dist/index.js"]}
+    )
+    digest = clawhub_marketplace_provider._artifact_digest(
+        {"artifact": {"sha256": "a" * 64}}
+    )
+    cursors = clawhub_marketplace_provider._decode_family_cursors("legacy")
+    encoded = clawhub_marketplace_provider._encode_family_cursors(
+        {"code-plugin": "next", "other": "ignored"}
+    )
+    parsed_sri = clawhub_marketplace_provider.parse_sri_digest(
+        "sha256-" + base64.b64encode(b"abc").decode("ascii")
+    )
+    json_value = clawhub_marketplace_provider._json_value(
+        {"items": [object()], "enabled": True}
+    )
+    description = clawhub_marketplace_provider._package_description(
+        {"description": "Longer description"}
+    )
+    family = clawhub_marketplace_provider._package_family({"type": "bundle-plugin"})
+    bundled = clawhub_marketplace_provider._compatibility_for_package(
+        {"type": "bundle-plugin"}
+    )
+    manifest_capability = clawhub_marketplace_provider._compatibility_for_package(
+        {"manifest": {"capabilities": {"commands": ["check"]}}}
+    )
+    warnings = clawhub_marketplace_provider._warnings_for_package(
+        {
+            "scanStatus": "pending",
+            "artifactKind": "legacy-zip",
+            "manifest": {"compatibility": {"openclaw": "1"}},
+        },
+        digest="abc",
+    )
+    blocked_reason = clawhub_marketplace_provider._unsupported_reason(
+        {"blockedFromDownload": True}
+    )
+    unknown_family_reason = clawhub_marketplace_provider._unsupported_reason(
+        {"family": "native-extension"}
+    )
+    empty_decoded = clawhub_marketplace_provider._decode_family_cursors("[]")
+
+    assert latest_from_mapping == "2.0.0"
+    assert latest_from_tag == "3.0.0"
+    assert compatibility[0] == "partial"
+    assert native_only[0] == "native_only"
+    assert digest == "a" * 64
+    assert cursors == {"code-plugin": "legacy"}
+    assert encoded == '{"code-plugin":"next"}'
+    assert parsed_sri == ("sha256", b"abc".hex())
+    assert isinstance(json_value, dict)
+    assert json_value["enabled"] is True
+    assert isinstance(json_value["items"], list)
+    assert description == "Longer description"
+    assert family == "bundle-plugin"
+    assert bundled[0] == "direct"
+    assert manifest_capability[0] == "direct"
+    assert warnings == (
+        "ClawHub scan status is pending.",
+        "ClawHub package uses a legacy ZIP artifact.",
+        "ClawHub package declares OpenClaw compatibility metadata; "
+        "Relay Teams does not execute OpenClaw native plugin APIs.",
+    )
+    assert blocked_reason == "ClawHub package release is blocked from download"
+    assert unknown_family_reason == (
+        "Unsupported ClawHub package family: native-extension"
+    )
+    assert empty_decoded == {"code-plugin": "[]"}
+    assert clawhub_marketplace_provider._warnings_for_package({}, digest="abc") == (
+        "ClawHub scan status is missing.",
+    )
+
+
+def test_clawhub_marketplace_provider_validates_bad_payloads() -> None:
+    with pytest.raises(ValueError, match="field must be a list"):
+        clawhub_marketplace_provider._object_list_field({"items": "bad"}, "items")
+    with pytest.raises(ValueError, match="package entries must be objects"):
+        clawhub_marketplace_provider._object_list_field({"items": ["bad"]}, "items")
+    with pytest.raises(ValueError, match="field is required: name"):
+        clawhub_marketplace_provider._required_string({"name": ""}, "name")
+    with pytest.raises(ValueError, match="field is required: name"):
+        clawhub_marketplace_provider._package_name_or_fallback({})
+    with pytest.raises(ValueError, match="version is required"):
+        clawhub_marketplace_provider._package_version({})
+    assert clawhub_marketplace_provider.parse_sri_digest("not-sri") is None
+
+
+def test_marketplace_install_rejects_unsupported_provider_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_load_provider_entry(
+        self: PluginMarketplaceService,
+        *,
+        source: PluginMarketplaceSource,
+        name: str,
+        app_config_dir: Path,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> PluginMarketplaceEntry:
+        _ = self
+        _ = source
+        _ = name
+        _ = app_config_dir
+        _ = install_policy
+        return PluginMarketplaceEntry(
+            name="blocked-plugin",
+            latest="1.0.0",
+            versions=(
+                PluginMarketplaceVersion(
+                    version="1.0.0",
+                    source=PluginInstallSource(
+                        kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                        value="https://clawhub.test/archive.zip",
+                    ),
+                    unsupported_reason="ClawHub package release is quarantined",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        PluginMarketplaceService,
+        "load_provider_entry",
+        fake_load_provider_entry,
+    )
+
+    with pytest.raises(ValueError, match="release is quarantined"):
+        PluginConfigManager(app_config_dir=tmp_path / "app").install_marketplace_plugin(
+            name="blocked-plugin",
+            marketplace=Path("clawhub"),
+            marketplace_provider=PluginMarketplaceProviderKind.CLAWHUB,
+            scope=PluginScope.USER,
+        )
+
+
+def test_clawhub_install_policy_blocks_high_risk_versions() -> None:
+    entry = PluginMarketplaceEntry(
+        name="risky-plugin",
+        latest="1.0.0",
+        versions=(
+            PluginMarketplaceVersion(
+                version="1.0.0",
+                source=PluginInstallSource(
+                    kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                    value="https://clawhub.test/archive.zip",
+                    sha="",
+                ),
+                warnings=(
+                    "ClawHub package channel is community; review before install.",
+                    "ClawHub package executes code.",
+                    "ClawHub scan status is pending.",
+                    "ClawHub package artifact has no digest metadata.",
+                ),
+            ),
+        ),
+    )
+
+    policy_entry = apply_install_policy_to_entry(
+        entry=entry,
+        provider=PluginMarketplaceProviderKind.CLAWHUB,
+        policy=PluginMarketplaceInstallPolicy(),
+    )
+
+    assert policy_entry.supported_versions() == ()
+    assert policy_entry.versions[0].unsupported_reason == (
+        "ClawHub policy blocks community or non-official plugin channels; "
+        "ClawHub policy blocks packages that execute code; "
+        "ClawHub policy blocks packages without a clean scan; "
+        "ClawHub policy requires artifact digest metadata"
+    )
+
+    relaxed = PluginMarketplaceInstallPolicy().with_overrides(
+        allow_community_plugins=True,
+        allow_executes_code=True,
+        allow_missing_digest=True,
+        allow_unclean_scan=True,
+    )
+    relaxed.require_allowed(
+        provider=PluginMarketplaceProviderKind.CLAWHUB,
+        version=entry.versions[0],
+    )
+
+
+def test_clawhub_install_policy_config_loads_from_plugin_config(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    policy = PluginMarketplaceInstallPolicy(
+        allow_community_plugins=True,
+        allow_executes_code=True,
+        require_digest=False,
+        allow_unclean_scan=True,
+    )
+
+    save_plugin_marketplace_install_policy(
+        app_config_dir=app_config_dir,
+        policy=policy,
+    )
+
+    assert load_plugin_marketplace_install_policy(app_config_dir) == policy
+
+
+def test_clawhub_install_policy_config_uses_default_when_missing(
+    tmp_path: Path,
+) -> None:
+    assert load_plugin_marketplace_install_policy(tmp_path / "app") == (
+        PluginMarketplaceInstallPolicy()
+    )
+
+
+def test_clawhub_install_policy_config_rejects_invalid_payloads(
+    tmp_path: Path,
+) -> None:
+    policy_file = tmp_path / "app" / "plugins" / "marketplace-policy.json"
+    policy_file.parent.mkdir(parents=True)
+
+    policy_file.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid plugin marketplace policy JSON"):
+        load_plugin_marketplace_install_policy(tmp_path / "app")
+
+    policy_file.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="marketplace policy JSON must be an object"):
+        load_plugin_marketplace_install_policy(tmp_path / "app")
+
+    policy_file.write_text(
+        json.dumps({"allow_community_plugins": []}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Invalid plugin marketplace policy"):
+        load_plugin_marketplace_install_policy(tmp_path / "app")
+
+
+def test_clawhub_install_policy_leaves_unrelated_versions_unchanged() -> None:
+    version = PluginMarketplaceVersion(
+        version="1.0.0",
+        source=PluginInstallSource(kind=PluginInstallSourceKind.GIT, value="repo"),
+    )
+
+    assert (
+        _apply_install_policy_to_version(
+            version=version,
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            policy=PluginMarketplaceInstallPolicy(),
+        )
+        is version
+    )
+
+
+def test_clawhub_marketplace_service_preserves_paged_request_options(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_index(
+        self: clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        *,
+        source: PluginMarketplaceSource,
+        limit: int = 100,
+        cursor: str = "",
+        fetch_all: bool = True,
+        include_versions: bool = False,
+    ) -> PluginMarketplaceIndex:
+        _ = (self, source, limit, include_versions)
+        captured["cursor"] = cursor
+        captured["fetch_all"] = fetch_all
+        return PluginMarketplaceIndex(plugins=())
+
+    monkeypatch.setattr(
+        clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        "load_index",
+        fake_load_index,
+    )
+
+    PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=tmp_path / "app",
+        cursor='{"code-plugin":"next"}',
+    )
+
+    assert captured == {
+        "cursor": '{"code-plugin":"next"}',
+        "fetch_all": False,
+    }
+
+
+def test_clawhub_marketplace_service_preserves_partial_page_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_index(
+        self: clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        *,
+        source: PluginMarketplaceSource,
+        limit: int = 100,
+        cursor: str = "",
+        fetch_all: bool = True,
+        include_versions: bool = False,
+    ) -> PluginMarketplaceIndex:
+        _ = (self, source, limit, include_versions)
+        captured["cursor"] = cursor
+        captured["fetch_all"] = fetch_all
+        return PluginMarketplaceIndex(plugins=())
+
+    monkeypatch.setattr(
+        clawhub_marketplace_provider.ClawHubMarketplaceProvider,
+        "load_index",
+        fake_load_index,
+    )
+
+    PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        app_config_dir=tmp_path / "app",
+        fetch_all=False,
+    )
+
+    assert captured == {"cursor": "", "fetch_all": False}
+
+
+def test_marketplace_install_rejects_clawhub_policy_block(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_load_provider_entry(
+        self: PluginMarketplaceService,
+        *,
+        source: PluginMarketplaceSource,
+        name: str,
+        app_config_dir: Path,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> PluginMarketplaceEntry:
+        _ = self
+        _ = source
+        _ = name
+        _ = app_config_dir
+        policy = install_policy or PluginMarketplaceInstallPolicy()
+        return apply_install_policy_to_entry(
+            entry=PluginMarketplaceEntry(
+                name="risky-plugin",
+                latest="1.0.0",
+                versions=(
+                    PluginMarketplaceVersion(
+                        version="1.0.0",
+                        source=PluginInstallSource(
+                            kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                            value="https://clawhub.test/archive.zip",
+                            sha="abc",
+                        ),
+                        warnings=("ClawHub package executes code.",),
+                    ),
+                ),
+            ),
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            policy=policy,
+        )
+
+    monkeypatch.setattr(
+        PluginMarketplaceService,
+        "load_provider_entry",
+        fake_load_provider_entry,
+    )
+
+    with pytest.raises(ValueError, match="blocks packages that execute code"):
+        PluginConfigManager(app_config_dir=tmp_path / "app").install_marketplace_plugin(
+            name="risky-plugin",
+            marketplace=Path("clawhub"),
+            marketplace_provider=PluginMarketplaceProviderKind.CLAWHUB,
+            scope=PluginScope.USER,
+        )
+
+
+def test_http_archive_install_adapts_openclaw_manifest(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / "app"
+    source_root = tmp_path / "archive-root" / "quality"
+    source_root.mkdir(parents=True)
+    (source_root / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "id": "quality",
+                "version": "1.0.0",
+                "description": "Quality tools",
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "quality.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(
+            source_root / "openclaw.plugin.json",
+            "quality/openclaw.plugin.json",
+        )
+
+    manager = PluginConfigManager(app_config_dir=app_config_dir)
+    installed = manager.install_from_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+            value=archive_path.resolve().as_uri(),
+            adapter="openclaw",
+        ),
+        scope=PluginScope.USER,
+    )
+
+    assert installed.name == "quality"
+    assert installed.version == "1.0.0"
+    assert (installed.root_dir / "app" / "plugin.json").exists()
+
+
+def test_openclaw_adapter_creates_manifest_for_static_bundle(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "bundle"
+    skills_dir = plugin_root / "skills" / "quality"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text(
+        "# Quality\n\nUse this skill for quality checks.\n",
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="1.2.3",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["name"] == "bundle"
+    assert manifest["version"] == "1.2.3"
+    assert manifest["skills"] == "./skills"
+
+
+def test_archive_plugin_root_ignores_macos_metadata(tmp_path: Path) -> None:
+    extract_dir = tmp_path / "extract"
+    plugin_root = extract_dir / "quality"
+    plugin_root.mkdir(parents=True)
+    (extract_dir / "__MACOSX").mkdir()
+    (extract_dir / ".DS_Store").write_text("", encoding="utf-8")
+
+    assert plugin_installers._archive_plugin_root(extract_dir) == plugin_root
+
+
+def test_openclaw_adapter_maps_config_and_static_roots(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "mapped"
+    (plugin_root / "agents").mkdir(parents=True)
+    (plugin_root / "commands").mkdir()
+    (plugin_root / "hooks").mkdir()
+    (plugin_root / "hooks" / "hooks.json").write_text("{}", encoding="utf-8")
+    (plugin_root / "mcp.json").write_text("{}", encoding="utf-8")
+    (plugin_root / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "runtimeId": "mapped/runtime",
+                "version": "2.0.0",
+                "displayName": "Mapped runtime",
+                "runtimeExtensions": ["./dist/index.js"],
+                "configSchema": {
+                    "required": ["token"],
+                    "properties": {
+                        "token": {
+                            "type": "string",
+                            "title": "Token",
+                            "description": "API token",
+                            "default": "secret",
+                            "sensitive": True,
+                        },
+                        "": {"type": "string"},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["name"] == "mapped-runtime"
+    assert manifest["version"] == "2.0.0"
+    assert manifest["roles"] == "./agents"
+    assert manifest["commands"] == "./commands"
+    assert manifest["hooks"] == "./hooks/hooks.json"
+    assert manifest["mcp_servers"] == "./mcp.json"
+    assert manifest["user_config"]["token"]["required"] is True
+    assert manifest["user_config"]["token"]["sensitive"] is True
+
+
+def test_openclaw_adapter_uses_source_version_when_manifest_omits_version(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "mapped"
+    (plugin_root / "skills").mkdir(parents=True)
+    (plugin_root / "openclaw.plugin.json").write_text(
+        json.dumps({"id": "mapped/runtime"}),
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="3.4.5",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["version"] == "3.4.5"
+
+
+def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
+    tmp_path: Path,
+) -> None:
+    no_adapter_root = tmp_path / "no-adapter"
+    no_adapter_root.mkdir()
+    adapt_openclaw_plugin_tree(
+        plugin_root=no_adapter_root,
+        adapter="other",
+        manifest_config_dir_name="app",
+    )
+    assert not (no_adapter_root / "app" / "plugin.json").exists()
+
+    existing_root = tmp_path / "existing"
+    (existing_root / "app").mkdir(parents=True)
+    (existing_root / "app" / "plugin.json").write_text("{}", encoding="utf-8")
+    adapt_openclaw_plugin_tree(
+        plugin_root=existing_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+    assert json.loads((existing_root / "app" / "plugin.json").read_text("utf-8")) == {}
+
+    unmappable_root = tmp_path / "unmappable"
+    unmappable_root.mkdir()
+    adapt_openclaw_plugin_tree(
+        plugin_root=unmappable_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+    assert not (unmappable_root / "app" / "plugin.json").exists()
+
+
+def test_http_archive_install_accepts_sri_digest(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / "app"
+    source_root = tmp_path / "archive-root" / "quality"
+    source_root.mkdir(parents=True)
+    (source_root / "openclaw.plugin.json").write_text(
+        json.dumps({"id": "quality", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "quality.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(
+            source_root / "openclaw.plugin.json",
+            "quality/openclaw.plugin.json",
+        )
+    digest = hashlib.sha512(archive_path.read_bytes()).digest()
+    integrity = f"sha512-{base64.b64encode(digest).decode('ascii')}"
+
+    installed = PluginConfigManager(app_config_dir=app_config_dir).install_from_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+            value=archive_path.resolve().as_uri(),
+            adapter="openclaw",
+            sha=integrity,
+        ),
+        scope=PluginScope.USER,
+    )
+
+    assert installed.name == "quality"
+
+
+def test_http_archive_install_rejects_unsafe_tar_path(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.tar"
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps({"id": "quality", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    with tarfile.open(archive_path, "w") as archive:
+        archive.add(payload_path, arcname="../openclaw.plugin.json")
+
+    with pytest.raises(ValueError, match="archive path is unsafe"):
+        PluginConfigManager(app_config_dir=tmp_path / "app").install_from_source(
+            source=PluginInstallSource(
+                kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                value=archive_path.resolve().as_uri(),
+                adapter="openclaw",
+            ),
+            scope=PluginScope.USER,
+        )
+
+
+def test_http_archive_install_rejects_unsupported_tar_entry(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.tar"
+    unsupported = tarfile.TarInfo("quality/fifo")
+    unsupported.type = tarfile.FIFOTYPE
+
+    with tarfile.open(archive_path, "w") as archive:
+        archive.addfile(unsupported)
+
+    with pytest.raises(ValueError, match="unsupported entry"):
+        plugin_installers._extract_archive(
+            archive_path=archive_path,
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_http_archive_install_rejects_tar_symlink(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.tar"
+    link = tarfile.TarInfo("quality/link")
+    link.type = tarfile.SYMTYPE
+    link.linkname = "../outside"
+
+    with tarfile.open(archive_path, "w") as archive:
+        archive.addfile(link)
+
+    with pytest.raises(ValueError, match="unsupported symlink"):
+        plugin_installers._extract_archive(
+            archive_path=archive_path,
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_http_archive_install_extracts_safe_tar(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / "app"
+    source_root = tmp_path / "archive-root" / "quality"
+    source_root.mkdir(parents=True)
+    manifest_path = source_root / "openclaw.plugin.json"
+    manifest_path.write_text(
+        json.dumps({"id": "quality", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "quality.tar"
+    with tarfile.open(archive_path, "w") as archive:
+        archive.add(manifest_path, arcname="quality/openclaw.plugin.json")
+
+    installed = PluginConfigManager(app_config_dir=app_config_dir).install_from_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+            value=archive_path.resolve().as_uri(),
+            adapter="openclaw",
+            sha=hashlib.sha1(
+                archive_path.read_bytes(),
+                usedforsecurity=False,
+            ).hexdigest(),
+        ),
+        scope=PluginScope.USER,
+    )
+
+    assert installed.name == "quality"
+    assert (installed.root_dir / "app" / "plugin.json").exists()
+
+
+def test_extract_zip_archive_preserves_executable_mode(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows chmod does not preserve POSIX executable bits")
+    archive_path = tmp_path / "quality.zip"
+    script = zipfile.ZipInfo("quality/bin/run.sh")
+    script.external_attr = 0o755 << 16
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(script, "#!/bin/sh\n")
+
+    plugin_installers._extract_archive(
+        archive_path=archive_path,
+        target_dir=tmp_path / "target",
+    )
+
+    extracted = tmp_path / "target" / "quality" / "bin" / "run.sh"
+    assert stat.S_IMODE(extracted.stat().st_mode) == 0o755
+
+
+def test_extract_tar_archive_preserves_executable_mode(tmp_path: Path) -> None:
+    if sys.platform == "win32":
+        pytest.skip("Windows chmod does not preserve POSIX executable bits")
+    archive_path = tmp_path / "quality.tar"
+    payload = b"#!/bin/sh\n"
+    script = tarfile.TarInfo("quality/bin/run.sh")
+    script.mode = 0o755
+    script.size = len(payload)
+    with tarfile.open(archive_path, "w") as archive:
+        archive.addfile(script, io.BytesIO(payload))
+
+    plugin_installers._extract_archive(
+        archive_path=archive_path,
+        target_dir=tmp_path / "target",
+    )
+
+    extracted = tmp_path / "target" / "quality" / "bin" / "run.sh"
+    assert stat.S_IMODE(extracted.stat().st_mode) == 0o755
+
+
+def test_archive_digest_helpers_handle_supported_and_invalid_values(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "plugin.zip"
+    archive_path.write_bytes(b"archive")
+
+    assert plugin_installers._expected_archive_digest("a" * 128) == (
+        "sha512",
+        "a" * 128,
+    )
+    assert plugin_installers._expected_archive_digest("b" * 96) == (
+        "sha384",
+        "b" * 96,
+    )
+    assert plugin_installers._expected_archive_digest("c" * 64) == (
+        "sha256",
+        "c" * 64,
+    )
+    assert plugin_installers._expected_archive_digest("d" * 40) == (
+        "sha1",
+        "d" * 40,
+    )
+    assert plugin_installers._expected_archive_digest("short") is None
+    assert (
+        plugin_installers._archive_digest(
+            archive_path=archive_path,
+            algorithm="unknown",
+        )
+        == ""
+    )
+    assert plugin_installers._sri_digest("sha256-not-base64!") is None
+    with pytest.raises(ValueError, match="digest format is unsupported"):
+        plugin_installers._verify_archive_digest(
+            archive_path=archive_path,
+            expected_digest="not-a-digest",
+        )
+
+
+def test_extract_archive_rejects_unsupported_file(tmp_path: Path) -> None:
+    archive_path = tmp_path / "plugin.bin"
+    archive_path.write_text("not an archive", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not a supported zip or tar file"):
+        plugin_installers._extract_archive(
+            archive_path=archive_path,
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_extract_archive_rejects_unsafe_zip_path(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unsafe.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../plugin.json", "{}")
+
+    with pytest.raises(ValueError, match="archive path is unsafe"):
+        plugin_installers._extract_archive(
+            archive_path=archive_path,
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_http_archive_install_rejects_native_only_openclaw_plugin(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "archive-root" / "native-only"
+    source_root.mkdir(parents=True)
+    (source_root / "openclaw.plugin.json").write_text(
+        json.dumps(
+            {
+                "id": "native-only",
+                "version": "1.0.0",
+                "runtimeExtensions": ["./dist/index.js"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    archive_path = tmp_path / "native-only.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(
+            source_root / "openclaw.plugin.json",
+            "native-only/openclaw.plugin.json",
+        )
+
+    with pytest.raises(ValueError, match="native runtime extension plugins"):
+        PluginConfigManager(app_config_dir=tmp_path / "app").install_from_source(
+            source=PluginInstallSource(
+                kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                value=archive_path.resolve().as_uri(),
+                adapter="openclaw",
+            ),
+            scope=PluginScope.USER,
+        )
 
 
 def test_claude_marketplace_update_refreshes_provider_index(
@@ -1504,6 +3234,60 @@ def test_claude_marketplace_update_refreshes_provider_index(
     )
 
     assert captured_sources[0].refresh is True
+
+
+def test_marketplace_update_passes_clawhub_policy_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_policies: list[PluginMarketplaceInstallPolicy | None] = []
+
+    def fake_load_provider_entry(
+        self: PluginMarketplaceService,
+        *,
+        source: PluginMarketplaceSource,
+        name: str,
+        app_config_dir: Path,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
+    ) -> PluginMarketplaceEntry:
+        _ = (self, source, name, app_config_dir)
+        captured_policies.append(install_policy)
+        return PluginMarketplaceEntry(
+            name="quality",
+            latest="1.0.0",
+            versions=(
+                PluginMarketplaceVersion(
+                    version="1.0.0",
+                    source=PluginInstallSource(
+                        kind=PluginInstallSourceKind.LOCAL,
+                        value=str(tmp_path / "quality"),
+                    ),
+                    warnings=("ClawHub package artifact has no digest metadata.",),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        PluginMarketplaceService,
+        "load_provider_entry",
+        fake_load_provider_entry,
+    )
+    policy = PluginMarketplaceInstallPolicy().with_overrides(allow_missing_digest=True)
+    manager = PluginConfigManager(app_config_dir=tmp_path / "app")
+
+    manager._resolve_update_install_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.MARKETPLACE,
+            value="quality",
+            marketplace="clawhub",
+            marketplace_provider="clawhub",
+            marketplace_source="https://clawhub.test",
+        ),
+        version=None,
+        install_policy=policy,
+    )
+
+    assert captured_policies == [policy]
 
 
 def test_claude_marketplace_provider_rejects_invalid_payloads(tmp_path: Path) -> None:

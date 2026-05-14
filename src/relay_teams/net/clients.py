@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib import metadata
 
 import httpx
-from pydantic_ai.models import DEFAULT_HTTP_TIMEOUT, get_user_agent
 
 from relay_teams.env.proxy_env import (
     ProxyEnvConfig,
@@ -19,6 +19,17 @@ from relay_teams.net.proxy_transports import (
     AsyncRequestLimiter,
     AsyncProxyRoutingTransport,
 )
+
+DEFAULT_HTTP_TIMEOUT = 600
+_PYDANTIC_AI_PACKAGE_NAME = "pydantic-ai"
+
+
+def get_user_agent() -> str:
+    try:
+        version = metadata.version(_PYDANTIC_AI_PACKAGE_NAME)
+    except metadata.PackageNotFoundError:
+        version = "unknown"
+    return f"pydantic-ai/{version}"
 
 
 def create_async_http_client(

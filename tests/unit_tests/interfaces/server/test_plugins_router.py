@@ -24,6 +24,10 @@ from relay_teams.plugins.plugin_models import (
     PluginInstallSourceKind,
 )
 from relay_teams.plugins.marketplace_models import PluginMarketplaceProviderKind
+from relay_teams.plugins.marketplace_policy import PluginMarketplaceInstallPolicy
+from relay_teams.plugins.marketplace_policy import (
+    save_plugin_marketplace_install_policy,
+)
 
 
 class _FakePluginConfigManager:
@@ -41,12 +45,14 @@ class _FakePluginConfigManager:
                 PluginMarketplaceProviderKind | str,
                 str,
                 str,
+                PluginMarketplaceInstallPolicy | None,
             ]
             | None
         ) = None
         self.uninstalled: tuple[str, PluginScope, bool] | None = None
         self.enabled: tuple[str, PluginScope, bool] | None = None
         self.updated: tuple[str, PluginScope, str | None] | None = None
+        self.update_policy: PluginMarketplaceInstallPolicy | None = None
         self.configured: tuple[str, PluginScope, dict[str, JsonValue]] | None = None
         self.marketplace_error: OSError | None = None
 
@@ -85,6 +91,7 @@ class _FakePluginConfigManager:
         marketplace_provider: PluginMarketplaceProviderKind | str = "local_json",
         marketplace_source: str = "",
         marketplace_ref: str = "",
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
     ) -> PluginStateRecord:
         if self.marketplace_error is not None:
             raise self.marketplace_error
@@ -97,6 +104,7 @@ class _FakePluginConfigManager:
             marketplace_provider,
             marketplace_source,
             marketplace_ref,
+            install_policy,
         )
         return _plugin_state_record(self.root_dir, scope=scope, enabled=enabled)
 
@@ -147,7 +155,9 @@ class _FakePluginConfigManager:
         name: str,
         scope: PluginScope,
         version: str | None = None,
+        install_policy: PluginMarketplaceInstallPolicy | None = None,
     ) -> PluginStateRecord:
+        self.update_policy = install_policy
         self.updated = (name, scope, version)
         return _plugin_state_record(self.root_dir, scope=scope, enabled=True)
 
@@ -237,8 +247,73 @@ def test_plugin_install_api_supports_git_and_marketplace_sources(
         PluginMarketplaceProviderKind.LOCAL_JSON,
         "",
         "",
+        None,
     )
     assert container.reload_count == 2
+
+
+def test_plugin_install_api_supports_clawhub_marketplace_provider(
+    tmp_path: Path,
+) -> None:
+    container = _FakeContainer(tmp_path / "quality")
+    client = _create_client(container)
+
+    response = client.post(
+        "/api/system/configs/plugins:install",
+        json={
+            "source": "market-plugin",
+            "marketplace": "clawhub",
+            "marketplace_provider": "clawhub",
+            "marketplace_source": "https://clawhub.test",
+            "scope": "user",
+        },
+    )
+
+    assert response.status_code == 200
+    assert container.plugin_config_manager.marketplace_installed == (
+        "market-plugin",
+        "clawhub",
+        PluginScope.USER,
+        None,
+        True,
+        PluginMarketplaceProviderKind.CLAWHUB,
+        "https://clawhub.test",
+        "",
+        PluginMarketplaceInstallPolicy(),
+    )
+
+
+def test_plugin_install_api_accepts_clawhub_policy_overrides(
+    tmp_path: Path,
+) -> None:
+    container = _FakeContainer(tmp_path / "quality")
+    client = _create_client(container)
+
+    response = client.post(
+        "/api/system/configs/plugins:install",
+        json={
+            "source": "market-plugin",
+            "marketplace": "clawhub",
+            "marketplace_provider": "clawhub",
+            "marketplace_source": "https://clawhub.test",
+            "scope": "user",
+            "allow_community_plugins": True,
+            "allow_executes_code": True,
+            "allow_missing_digest": True,
+            "allow_unclean_scan": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert container.plugin_config_manager.marketplace_installed is not None
+    assert container.plugin_config_manager.marketplace_installed[8] == (
+        PluginMarketplaceInstallPolicy(
+            allow_community_plugins=True,
+            allow_executes_code=True,
+            require_digest=False,
+            allow_unclean_scan=True,
+        )
+    )
 
 
 def test_plugin_install_api_rejects_marketplace_kind_without_marketplace(
@@ -385,6 +460,34 @@ def test_plugin_enable_disable_update_api_reload_runtime(tmp_path: Path) -> None
         "2.0.0",
     )
     assert container.reload_count == 3
+
+
+def test_plugin_update_api_merges_clawhub_policy_overrides(
+    tmp_path: Path,
+) -> None:
+    container = _FakeContainer(tmp_path / "quality")
+    save_plugin_marketplace_install_policy(
+        app_config_dir=container.config_dir,
+        policy=PluginMarketplaceInstallPolicy(allow_community_plugins=True),
+    )
+    client = _create_client(container)
+
+    response = client.post(
+        "/api/system/configs/plugins/quality:update",
+        json={
+            "scope": "user",
+            "allow_missing_digest": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        container.plugin_config_manager.update_policy
+        == PluginMarketplaceInstallPolicy(
+            allow_community_plugins=True,
+            require_digest=False,
+        )
+    )
 
 
 def test_infer_plugin_install_source_kind() -> None:

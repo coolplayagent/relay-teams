@@ -59,6 +59,9 @@ def format_app_config_file_reference(
 
 def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
     command_cwd = _resolve_start_dir(start_dir)
+    marker_root = _find_git_marker_root(command_cwd)
+    if marker_root is not None:
+        return marker_root
     try:
         completed = subprocess.run(
             list(_GIT_TOPLEVEL_CMD),
@@ -80,6 +83,41 @@ def get_project_root_or_none(start_dir: Path | None = None) -> Path | None:
     if not raw_stdout:
         return None
     return Path(raw_stdout).expanduser().resolve()
+
+
+def _find_git_marker_root(start_dir: Path) -> Path | None:
+    current = start_dir.expanduser()
+    if current.exists() and current.is_file():
+        current = current.parent
+    candidates = (current, *current.parents)
+    for candidate in candidates:
+        if candidate.name == ".pytest-tmp":
+            return None
+        if (candidate / ".git").exists() and _is_valid_git_worktree_root(candidate):
+            return candidate.resolve()
+    return None
+
+
+def _is_valid_git_worktree_root(candidate: Path) -> bool:
+    try:
+        completed = subprocess.run(
+            list(_GIT_TOPLEVEL_CMD),
+            cwd=str(candidate.resolve()),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT_SECONDS,
+        )
+    except OSError:
+        return False
+    except subprocess.TimeoutExpired:
+        return False
+    if completed.returncode != 0:
+        return False
+    raw_stdout = completed.stdout.strip()
+    if not raw_stdout:
+        return False
+    return Path(raw_stdout).expanduser().resolve() == candidate.resolve()
 
 
 def get_project_config_dir(project_root: Path | None = None) -> Path:

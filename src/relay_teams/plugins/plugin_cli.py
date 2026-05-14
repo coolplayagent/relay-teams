@@ -12,6 +12,13 @@ import typer
 from relay_teams.paths import get_app_config_dir, get_project_root_or_none
 from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.plugins.marketplace_models import PluginMarketplaceEntry
+from relay_teams.plugins.marketplace_models import (
+    PluginMarketplaceProviderKind,
+    PluginMarketplaceSource,
+)
+from relay_teams.plugins.marketplace_policy import (
+    load_plugin_marketplace_install_policy,
+)
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.plugin_models import (
     PluginDiagnostic,
@@ -91,6 +98,22 @@ def plugin_install(
         "--marketplace",
         help="Marketplace JSON file used when source is a marketplace plugin name.",
     ),
+    marketplace_provider: PluginMarketplaceProviderKind = typer.Option(
+        PluginMarketplaceProviderKind.LOCAL_JSON,
+        "--marketplace-provider",
+        help="Marketplace provider used with --marketplace.",
+        case_sensitive=False,
+    ),
+    marketplace_source: str = typer.Option(
+        "",
+        "--marketplace-source",
+        help="Provider source, such as a ClawHub base URL.",
+    ),
+    marketplace_ref: str = typer.Option(
+        "",
+        "--marketplace-ref",
+        help="Provider ref when supported.",
+    ),
     source_kind: PluginCliSourceKind | None = typer.Option(
         None,
         "--source-kind",
@@ -107,33 +130,76 @@ def plugin_install(
         "--version",
         help="Version to install from a marketplace.",
     ),
+    allow_community_plugins: bool = typer.Option(
+        False,
+        "--allow-community-plugins",
+        help="Allow ClawHub community or non-official plugin channels for this install.",
+    ),
+    allow_executes_code: bool = typer.Option(
+        False,
+        "--allow-executes-code",
+        help="Allow ClawHub packages that declare code execution for this install.",
+    ),
+    allow_missing_digest: bool = typer.Option(
+        False,
+        "--allow-missing-digest",
+        help="Allow ClawHub packages without artifact digest metadata for this install.",
+    ),
+    allow_unclean_scan: bool = typer.Option(
+        False,
+        "--allow-unclean-scan",
+        help="Allow ClawHub packages without a clean scan for this install.",
+    ),
 ) -> None:
     manager = _build_manager()
     try:
-        if marketplace is None:
+        install_source = source
+        install_marketplace = marketplace
+        install_marketplace_provider = marketplace_provider
+        if source.startswith("clawhub:"):
+            install_source = source.removeprefix("clawhub:").strip()
+            if marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON:
+                install_marketplace_provider = PluginMarketplaceProviderKind.CLAWHUB
+            if marketplace is None:
+                install_marketplace = Path("clawhub")
+        if install_marketplace is None:
             resolved_source_kind = _to_install_source_kind(
                 source_kind
-            ) or _infer_plugin_install_source_kind(source)
+            ) or _infer_plugin_install_source_kind(install_source)
             if resolved_source_kind == PluginInstallSourceKind.GIT:
                 record = manager.install_git_plugin(
-                    source=source,
+                    source=install_source,
                     scope=_to_model_scope(scope),
                     ref=ref,
                     enabled=not disabled,
                 )
             else:
                 record = manager.install_plugin(
-                    source=Path(source),
+                    source=Path(install_source),
                     scope=_to_model_scope(scope),
                     enabled=not disabled,
                 )
         else:
+            install_policy = None
+            if install_marketplace_provider == PluginMarketplaceProviderKind.CLAWHUB:
+                install_policy = load_plugin_marketplace_install_policy(
+                    get_app_config_dir()
+                ).with_overrides(
+                    allow_community_plugins=allow_community_plugins,
+                    allow_executes_code=allow_executes_code,
+                    allow_missing_digest=allow_missing_digest,
+                    allow_unclean_scan=allow_unclean_scan,
+                )
             record = manager.install_marketplace_plugin(
-                name=source,
-                marketplace=marketplace,
+                name=install_source,
+                marketplace=install_marketplace,
                 scope=_to_model_scope(scope),
                 version=version,
                 enabled=not disabled,
+                marketplace_provider=install_marketplace_provider,
+                marketplace_source=marketplace_source,
+                marketplace_ref=marketplace_ref,
+                install_policy=install_policy,
             )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -213,12 +279,48 @@ def plugin_update(
         "--version",
         help="Version to install when updating marketplace plugins.",
     ),
+    allow_community_plugins: bool = typer.Option(
+        False,
+        "--allow-community-plugins",
+        help="Allow ClawHub community or non-official plugin channels for this update.",
+    ),
+    allow_executes_code: bool = typer.Option(
+        False,
+        "--allow-executes-code",
+        help="Allow ClawHub packages that declare code execution for this update.",
+    ),
+    allow_missing_digest: bool = typer.Option(
+        False,
+        "--allow-missing-digest",
+        help="Allow ClawHub packages without artifact digest metadata for this update.",
+    ),
+    allow_unclean_scan: bool = typer.Option(
+        False,
+        "--allow-unclean-scan",
+        help="Allow ClawHub packages without a clean scan for this update.",
+    ),
 ) -> None:
     try:
+        install_policy = None
+        if (
+            allow_community_plugins
+            or allow_executes_code
+            or allow_missing_digest
+            or allow_unclean_scan
+        ):
+            install_policy = load_plugin_marketplace_install_policy(
+                get_app_config_dir()
+            ).with_overrides(
+                allow_community_plugins=allow_community_plugins,
+                allow_executes_code=allow_executes_code,
+                allow_missing_digest=allow_missing_digest,
+                allow_unclean_scan=allow_unclean_scan,
+            )
         record = _build_manager().update_plugin(
             name=name,
             scope=_to_model_scope(scope),
             version=version,
+            install_policy=install_policy,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -291,11 +393,39 @@ def plugin_list(
         "--marketplace",
         help="Marketplace JSON file to list.",
     ),
+    marketplace_provider: PluginMarketplaceProviderKind = typer.Option(
+        PluginMarketplaceProviderKind.LOCAL_JSON,
+        "--marketplace-provider",
+        help="Marketplace provider used with --marketplace.",
+        case_sensitive=False,
+    ),
+    marketplace_source: str = typer.Option(
+        "",
+        "--marketplace-source",
+        help="Provider source, such as a ClawHub base URL.",
+    ),
+    marketplace_ref: str = typer.Option(
+        "",
+        "--marketplace-ref",
+        help="Provider ref when supported.",
+    ),
 ) -> None:
     if available:
         if marketplace is None:
             raise typer.BadParameter("--available requires --marketplace")
-        entries = PluginMarketplaceService().load_index(marketplace).plugins
+        entries = (
+            PluginMarketplaceService()
+            .load_provider_index(
+                source=_marketplace_source(
+                    marketplace=marketplace,
+                    marketplace_provider=marketplace_provider,
+                    marketplace_source=marketplace_source,
+                    marketplace_ref=marketplace_ref,
+                ),
+                app_config_dir=get_app_config_dir(),
+            )
+            .plugins
+        )
         rows = [_to_available_entry(entry) for entry in entries]
         if output_format == PluginOutputFormat.JSON:
             typer.echo(json.dumps(rows, ensure_ascii=False))
@@ -320,6 +450,61 @@ def plugin_list(
         return
     _render_plugin_table(rows)
     _render_diagnostics(registry.diagnostics)
+
+
+@plugin_app.command("search")
+def plugin_search(
+    query: str = typer.Argument(..., help="Marketplace search query."),
+    output_format: PluginOutputFormat = typer.Option(
+        PluginOutputFormat.TABLE,
+        "--format",
+        help="Render as an ASCII table or JSON.",
+        case_sensitive=False,
+    ),
+    marketplace: Path = typer.Option(
+        Path("clawhub"),
+        "--marketplace",
+        help="Marketplace name or JSON file to search.",
+    ),
+    marketplace_provider: PluginMarketplaceProviderKind = typer.Option(
+        PluginMarketplaceProviderKind.CLAWHUB,
+        "--marketplace-provider",
+        help="Marketplace provider used with --marketplace.",
+        case_sensitive=False,
+    ),
+    marketplace_source: str = typer.Option(
+        "",
+        "--marketplace-source",
+        help="Provider source, such as a ClawHub base URL.",
+    ),
+    marketplace_ref: str = typer.Option(
+        "",
+        "--marketplace-ref",
+        help="Provider ref when supported.",
+    ),
+) -> None:
+    try:
+        entries = (
+            PluginMarketplaceService()
+            .search_provider_index(
+                source=_marketplace_source(
+                    marketplace=marketplace,
+                    marketplace_provider=marketplace_provider,
+                    marketplace_source=marketplace_source,
+                    marketplace_ref=marketplace_ref,
+                ),
+                query=query,
+                app_config_dir=get_app_config_dir(),
+            )
+            .plugins
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    rows = [_to_available_entry(entry) for entry in entries]
+    if output_format == PluginOutputFormat.JSON:
+        typer.echo(json.dumps(rows, ensure_ascii=False))
+        return
+    _render_available_table(rows)
 
 
 @plugin_app.command("validate")
@@ -421,6 +606,27 @@ def _infer_plugin_install_source_kind(source: str) -> PluginInstallSourceKind:
     if normalized.endswith(".git"):
         return PluginInstallSourceKind.GIT
     return PluginInstallSourceKind.LOCAL
+
+
+def _marketplace_source(
+    *,
+    marketplace: Path,
+    marketplace_provider: PluginMarketplaceProviderKind,
+    marketplace_source: str,
+    marketplace_ref: str,
+) -> PluginMarketplaceSource:
+    if marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON:
+        return PluginMarketplaceSource(
+            provider=marketplace_provider,
+            name=marketplace.stem,
+            value=str(marketplace),
+        )
+    return PluginMarketplaceSource(
+        provider=marketplace_provider,
+        name=str(marketplace),
+        value=marketplace_source,
+        ref=marketplace_ref,
+    )
 
 
 def _to_list_entry(plugin: PluginRecord) -> PluginListEntry:

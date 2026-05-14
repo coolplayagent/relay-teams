@@ -162,6 +162,10 @@ from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceProviderKind,
     PluginMarketplaceSource,
 )
+from relay_teams.plugins.marketplace_policy import (
+    PluginMarketplaceInstallPolicy,
+    load_plugin_marketplace_install_policy,
+)
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.views import build_public_plugin_registry
 from relay_teams.validation import RequiredIdentifierStr
@@ -196,6 +200,10 @@ class PluginInstallRequest(BaseModel):
     marketplace_source: str = ""
     marketplace_ref: str = ""
     version: str | None = None
+    allow_community_plugins: bool = False
+    allow_executes_code: bool = False
+    allow_missing_digest: bool = False
+    allow_unclean_scan: bool = False
 
 
 class PluginValidateRequest(BaseModel):
@@ -214,6 +222,24 @@ class PluginMarketplaceRequest(BaseModel):
     marketplace_source: str = ""
     marketplace_ref: str = ""
     refresh: bool = False
+    limit: int = 100
+    cursor: str = ""
+    include_details: bool = False
+    fetch_all: bool = True
+    allow_community_plugins: bool = False
+    allow_executes_code: bool = False
+    allow_missing_digest: bool = False
+    allow_unclean_scan: bool = False
+
+
+class PluginMarketplaceSearchRequest(PluginMarketplaceRequest):
+    query: str = ""
+
+
+class PluginMarketplaceInspectRequest(PluginMarketplaceRequest):
+    name: str
+    scope: PluginScope = PluginScope.USER
+    version: str | None = None
 
 
 class PluginScopeRequest(BaseModel):
@@ -227,6 +253,10 @@ class PluginUpdateRequest(BaseModel):
 
     scope: PluginScope = PluginScope.USER
     version: str | None = None
+    allow_community_plugins: bool = False
+    allow_executes_code: bool = False
+    allow_missing_digest: bool = False
+    allow_unclean_scan: bool = False
 
 
 class PluginConfigureRequest(BaseModel):
@@ -371,9 +401,68 @@ async def load_plugin_marketplace(
             PluginMarketplaceService().load_provider_index,
             source=_plugin_marketplace_source(req),
             app_config_dir=container.config_dir,
+            limit=req.limit,
+            cursor=req.cursor,
+            include_details=req.include_details,
+            fetch_all=req.fetch_all,
+            install_policy=_plugin_marketplace_install_policy(
+                req,
+                app_config_dir=container.config_dir,
+            ),
         )
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400, os_error_status=400)
+
+
+@router.post("/configs/plugins/marketplace:search")
+async def search_plugin_marketplace(
+    req: PluginMarketplaceSearchRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginMarketplaceIndex:
+    try:
+        return await asyncio.to_thread(
+            PluginMarketplaceService().search_provider_index,
+            source=_plugin_marketplace_source(req),
+            query=req.query,
+            app_config_dir=container.config_dir,
+            include_details=req.include_details,
+            install_policy=_plugin_marketplace_install_policy(
+                req,
+                app_config_dir=container.config_dir,
+            ),
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, value_error_status=400, os_error_status=400)
+
+
+@router.post("/configs/plugins/marketplace:inspect")
+async def inspect_plugin_marketplace(
+    req: PluginMarketplaceInspectRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        registry = await asyncio.to_thread(
+            container.plugin_config_manager.inspect_marketplace_plugin,
+            name=req.name,
+            marketplace=Path(req.marketplace),
+            scope=req.scope,
+            version=req.version,
+            marketplace_provider=req.marketplace_provider,
+            marketplace_source=req.marketplace_source,
+            marketplace_ref=req.marketplace_ref,
+            install_policy=_plugin_marketplace_install_policy(
+                req,
+                app_config_dir=container.config_dir,
+            ),
+        )
+        return build_public_plugin_registry(registry)
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            value_error_status=400,
+            os_error_status=400,
+        )
 
 
 @router.post("/configs/plugins:install")
@@ -414,6 +503,10 @@ async def install_plugin_config(
                 marketplace_provider=req.marketplace_provider,
                 marketplace_source=req.marketplace_source,
                 marketplace_ref=req.marketplace_ref,
+                install_policy=_plugin_marketplace_install_policy(
+                    req,
+                    app_config_dir=container.config_dir,
+                ),
             )
     except Exception as exc:
         _raise_system_http_error(
@@ -463,6 +556,41 @@ def _plugin_marketplace_source_value(req: PluginMarketplaceRequest) -> str:
     if local_path.exists():
         return str(local_path.resolve())
     return normalized
+
+
+def _plugin_marketplace_install_policy(
+    req: PluginMarketplaceRequest | PluginInstallRequest,
+    *,
+    app_config_dir: Path,
+) -> PluginMarketplaceInstallPolicy | None:
+    if req.marketplace_provider != PluginMarketplaceProviderKind.CLAWHUB:
+        return None
+    return load_plugin_marketplace_install_policy(app_config_dir).with_overrides(
+        allow_community_plugins=req.allow_community_plugins,
+        allow_executes_code=req.allow_executes_code,
+        allow_missing_digest=req.allow_missing_digest,
+        allow_unclean_scan=req.allow_unclean_scan,
+    )
+
+
+def _plugin_update_install_policy(
+    req: PluginUpdateRequest,
+    *,
+    app_config_dir: Path,
+) -> PluginMarketplaceInstallPolicy | None:
+    if not (
+        req.allow_community_plugins
+        or req.allow_executes_code
+        or req.allow_missing_digest
+        or req.allow_unclean_scan
+    ):
+        return None
+    return load_plugin_marketplace_install_policy(app_config_dir).with_overrides(
+        allow_community_plugins=req.allow_community_plugins,
+        allow_executes_code=req.allow_executes_code,
+        allow_missing_digest=req.allow_missing_digest,
+        allow_unclean_scan=req.allow_unclean_scan,
+    )
 
 
 @router.post("/configs/plugins/{name}:enable")
@@ -515,6 +643,10 @@ async def update_plugin_config(
             name=name,
             scope=req.scope,
             version=req.version,
+            install_policy=_plugin_update_install_policy(
+                req,
+                app_config_dir=container.config_dir,
+            ),
         )
     except Exception as exc:
         _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
