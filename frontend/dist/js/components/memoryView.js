@@ -62,7 +62,11 @@ function createInitialMemoryState() {
         selectedDraft: null,
         selectedDraftLoadingId: '',
         generatingDrafts: false,
+        validatingDraft: false,
+        applyingDraft: false,
+        rejectingDraft: false,
         savingDraft: false,
+        draftOperation: null,
         loading: false,
         errorMessage: '',
     };
@@ -623,15 +627,33 @@ async function handleGenerateSkillDrafts() {
     memoryState = {
         ...memoryState,
         generatingDrafts: true,
+        draftOperation: {
+            kind: 'generate',
+            status: 'running',
+            message: t('feature.memory.drafts.generate_running'),
+        },
     };
     renderMemoryToolbar();
+    renderMemoryContent();
     try {
         const result = await generateMemorySkillDrafts(payload);
         const rows = normalizeSkillDraftRows(result);
+        const generatedCount = rows.length;
+        const sourceCount = Number(result?.source_memory_count || 0);
         memoryState = {
             ...memoryState,
             generatingDrafts: false,
             selectedDraftId: String(rows[0]?.id || memoryState.selectedDraftId || '').trim(),
+            draftOperation: {
+                kind: 'generate',
+                status: result?.error_message ? 'warning' : 'success',
+                message: formatMessage('feature.memory.drafts.generate_result', {
+                    count: String(generatedCount),
+                    sources: String(sourceCount),
+                }),
+                detail: String(result?.error_message || ''),
+                at: new Date().toISOString(),
+            },
         };
         if (result?.error_message) {
             showToast({
@@ -645,8 +667,16 @@ async function handleGenerateSkillDrafts() {
         memoryState = {
             ...memoryState,
             generatingDrafts: false,
+            draftOperation: {
+                kind: 'generate',
+                status: 'error',
+                message: t('feature.memory.drafts.generate_failed'),
+                detail: String(error?.message || error || ''),
+                at: new Date().toISOString(),
+            },
         };
         renderMemoryToolbar();
+        renderMemoryContent();
         showToast({
             title: t('feature.memory.drafts.generate_failed'),
             message: String(error?.message || error || ''),
@@ -713,6 +743,7 @@ function renderMemoryContent() {
 function renderSkillDraftContent() {
     if (memoryState.loading && memoryState.draftRows.length === 0) {
         els.projectViewContent.innerHTML = `
+            ${renderSkillDraftStatusPanel()}
             <div class="workspace-view-empty-state is-feature-loading-state">
                 <p>${escapeHtml(t('feature.memory.drafts.loading'))}</p>
             </div>
@@ -721,6 +752,7 @@ function renderSkillDraftContent() {
     }
     if (memoryState.draftRows.length === 0) {
         els.projectViewContent.innerHTML = `
+            ${renderSkillDraftStatusPanel()}
             <section class="memory-draft-empty">
                 <p>${escapeHtml(t('feature.memory.drafts.empty'))}</p>
             </section>
@@ -728,6 +760,7 @@ function renderSkillDraftContent() {
         return;
     }
     els.projectViewContent.innerHTML = `
+        ${renderSkillDraftStatusPanel()}
         <section class="memory-draft-shell" aria-label="${escapeAttribute(t('feature.memory.skill_drafts_tab'))}">
             <div class="memory-draft-list" role="listbox" aria-label="${escapeAttribute(t('feature.memory.skill_drafts_tab'))}">
                 ${memoryState.draftRows.map(renderSkillDraftRow).join('')}
@@ -739,6 +772,104 @@ function renderSkillDraftContent() {
     `;
     bindSkillDraftRows();
     bindSkillDraftDetail();
+}
+
+function renderSkillDraftStatusPanel() {
+    const statusCounts = countDraftStatuses(memoryState.draftRows);
+    const selected = memoryState.selectedDraft
+        || memoryState.draftRows.find(row => row.id === memoryState.selectedDraftId)
+        || null;
+    const operation = memoryState.draftOperation;
+    return `
+        <section class="memory-draft-status-panel" aria-live="polite">
+            <div class="memory-draft-status-row">
+                <div class="memory-draft-status-item">
+                    <span>${escapeHtml(t('feature.memory.drafts.status_total'))}</span>
+                    <strong>${escapeHtml(String(memoryState.draftTotalCount || memoryState.draftRows.length || 0))}</strong>
+                </div>
+                ${renderDraftStatusCount('draft', statusCounts)}
+                ${renderDraftStatusCount('validated', statusCounts)}
+                ${renderDraftStatusCount('applying', statusCounts)}
+                ${renderDraftStatusCount('applied', statusCounts)}
+                ${renderDraftStatusCount('rejected', statusCounts)}
+            </div>
+            <div class="memory-draft-result-row">
+                <div class="memory-draft-result-main">
+                    <strong>${escapeHtml(renderDraftOperationTitle(operation))}</strong>
+                    <span>${escapeHtml(renderDraftOperationMessage(operation, selected))}</span>
+                </div>
+                ${renderDraftOperationMeta(operation, selected)}
+            </div>
+        </section>
+    `;
+}
+
+function renderDraftStatusCount(status, counts) {
+    const count = counts.get(status) || 0;
+    return `
+        <div class="memory-draft-status-item is-${escapeAttribute(status)}">
+            <span>${escapeHtml(formatEnumLabel(status))}</span>
+            <strong>${escapeHtml(String(count))}</strong>
+        </div>
+    `;
+}
+
+function countDraftStatuses(rows) {
+    const counts = new Map();
+    for (const row of rows) {
+        const status = String(row?.status || '').trim();
+        if (status) {
+            counts.set(status, (counts.get(status) || 0) + 1);
+        }
+    }
+    return counts;
+}
+
+function renderDraftOperationTitle(operation) {
+    if (!operation) {
+        return t('feature.memory.drafts.status_idle');
+    }
+    return t(`feature.memory.drafts.operation_${operation.kind}_${operation.status}`);
+}
+
+function renderDraftOperationMessage(operation, selected) {
+    if (operation?.message) {
+        return operation.message;
+    }
+    if (selected?.status === 'applied' && selected?.applied_ref) {
+        return formatMessage('feature.memory.drafts.applied_ref', {
+            ref: String(selected.applied_ref),
+        });
+    }
+    if (selected?.status === 'applying') {
+        return t('feature.memory.drafts.apply_in_progress');
+    }
+    if (selected) {
+        return formatMessage('feature.memory.drafts.selected_status', {
+            name: String(selected.runtime_name || selected.id || ''),
+            status: formatEnumLabel(selected.status),
+        });
+    }
+    return t('feature.memory.drafts.status_idle_detail');
+}
+
+function renderDraftOperationMeta(operation, selected) {
+    const parts = [];
+    if (operation?.detail) {
+        parts.push(operation.detail);
+    }
+    if (operation?.at) {
+        parts.push(formatTimestamp(operation.at));
+    }
+    if (selected?.applied_ref) {
+        parts.push(formatMessage('feature.memory.drafts.applied_ref', {
+            ref: String(selected.applied_ref),
+        }));
+    }
+    if (parts.length === 0) {
+        return '';
+    }
+    return `<div class="memory-draft-result-meta">${parts.map(part => `<span>${escapeHtml(part)}</span>`).join('')}</div>`;
 }
 
 function renderMemoryArchitectureMap() {
@@ -850,6 +981,7 @@ function bindMemoryRows() {
 
 function renderSkillDraftRow(row) {
     const selected = row.id === memoryState.selectedDraftId;
+    const statusMeta = renderSkillDraftRowStatusMeta(row);
     return `
         <button
             class="memory-draft-row${selected ? ' is-selected' : ''}"
@@ -869,9 +1001,27 @@ function renderSkillDraftRow(row) {
                 <span>${escapeHtml(formatMessage('feature.memory.drafts.sources', {
                     count: String(row.source_memory_count || 0),
                 }))}</span>
+                ${statusMeta}
             </span>
         </button>
     `;
+}
+
+function renderSkillDraftRowStatusMeta(row) {
+    const errorCount = Number(row.validation_error_count || 0);
+    const warningCount = Number(row.validation_warning_count || 0);
+    if (row.status === 'applied' && row.applied_ref) {
+        return `<span>${escapeHtml(formatMessage('feature.memory.drafts.applied_ref', {
+            ref: String(row.applied_ref),
+        }))}</span>`;
+    }
+    if (errorCount > 0 || warningCount > 0) {
+        return `<span>${escapeHtml(formatMessage('feature.memory.drafts.validation_counts', {
+            errors: String(errorCount),
+            warnings: String(warningCount),
+        }))}</span>`;
+    }
+    return '';
 }
 
 function bindSkillDraftRows() {
@@ -952,6 +1102,11 @@ function renderSkillDraftDetail() {
     }
     const canApply = draft.status === 'validated';
     const canEdit = draft.status !== 'applied' && draft.status !== 'applying';
+    const actionBusy = memoryState.savingDraft
+        || memoryState.validatingDraft
+        || memoryState.applyingDraft
+        || memoryState.rejectingDraft
+        || memoryState.generatingDrafts;
     return `
         <form class="memory-draft-editor" data-draft-editor>
             <div class="memory-draft-editor-head">
@@ -961,6 +1116,7 @@ function renderSkillDraftDetail() {
                 </div>
                 <span>${escapeHtml(formatEnumLabel(draft.status))}</span>
             </div>
+            ${renderSkillDraftLifecycle(draft)}
             <div class="memory-draft-form-grid">
                 <label>
                     <span>${escapeHtml(t('feature.memory.drafts.runtime_name'))}</span>
@@ -981,12 +1137,37 @@ function renderSkillDraftDetail() {
             </label>
             ${renderSkillDraftValidationMessages(draft)}
             <div class="memory-draft-actions">
-                <button class="secondary-btn" type="submit" ${canEdit && !memoryState.savingDraft ? '' : 'disabled'}>${escapeHtml(t('settings.action.save'))}</button>
-                <button class="secondary-btn" type="button" data-draft-validate ${canEdit ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.validate'))}</button>
-                <button class="primary-btn" type="button" data-draft-apply ${canApply ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.apply'))}</button>
-                <button class="secondary-btn" type="button" data-draft-reject ${canEdit ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.reject'))}</button>
+                <button class="secondary-btn" type="submit" ${canEdit && !actionBusy ? '' : 'disabled'}>${escapeHtml(t('settings.action.save'))}</button>
+                <button class="secondary-btn" type="button" data-draft-validate ${canEdit && !actionBusy ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.validate'))}</button>
+                <button class="primary-btn" type="button" data-draft-apply ${canApply && !actionBusy ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.apply'))}</button>
+                <button class="secondary-btn" type="button" data-draft-reject ${canEdit && !actionBusy ? '' : 'disabled'}>${escapeHtml(t('feature.memory.drafts.reject'))}</button>
             </div>
         </form>
+    `;
+}
+
+function renderSkillDraftLifecycle(draft) {
+    const items = [
+        renderSkillDraftLifecycleItem('created', draft.created_at),
+        renderSkillDraftLifecycleItem('validated', draft.validated_at),
+        renderSkillDraftLifecycleItem('applied', draft.applied_at || draft.applied_ref),
+    ].filter(Boolean);
+    return `<div class="memory-draft-lifecycle">${items.join('')}</div>`;
+}
+
+function renderSkillDraftLifecycleItem(key, value) {
+    if (!value) {
+        return '';
+    }
+    const label = t(`feature.memory.drafts.lifecycle_${key}`);
+    const display = key === 'applied' && typeof value === 'string' && !value.includes('T')
+        ? value
+        : formatTimestamp(value);
+    return `
+        <div>
+            <span>${escapeHtml(label)}</span>
+            <strong>${escapeHtml(display)}</strong>
+        </div>
     `;
 }
 
@@ -1043,6 +1224,11 @@ async function handleSaveSkillDraft() {
     memoryState = {
         ...memoryState,
         savingDraft: true,
+        draftOperation: {
+            kind: 'save',
+            status: 'running',
+            message: t('feature.memory.drafts.save_running'),
+        },
     };
     renderMemoryContent();
     try {
@@ -1051,12 +1237,25 @@ async function handleSaveSkillDraft() {
             ...memoryState,
             selectedDraft: updated,
             savingDraft: false,
+            draftOperation: {
+                kind: 'save',
+                status: 'success',
+                message: t('feature.memory.drafts.save_done'),
+                at: new Date().toISOString(),
+            },
         };
         await reloadSkillDraftRowsIfActive();
     } catch (error) {
         memoryState = {
             ...memoryState,
             savingDraft: false,
+            draftOperation: {
+                kind: 'save',
+                status: 'error',
+                message: t('feature.memory.drafts.save_failed'),
+                detail: String(error?.message || error || ''),
+                at: new Date().toISOString(),
+            },
         };
         renderMemoryContent();
         showToast({
@@ -1072,14 +1271,43 @@ async function handleValidateSkillDraft() {
     if (!draftId) {
         return;
     }
+    memoryState = {
+        ...memoryState,
+        validatingDraft: true,
+        draftOperation: {
+            kind: 'validate',
+            status: 'running',
+            message: t('feature.memory.drafts.validate_running'),
+        },
+    };
+    renderMemoryContent();
     try {
         const updated = await validateMemorySkillDraft(draftId);
         memoryState = {
             ...memoryState,
             selectedDraft: updated,
+            validatingDraft: false,
+            draftOperation: {
+                kind: 'validate',
+                status: updated.status === 'validated' ? 'success' : 'warning',
+                message: renderValidationResultMessage(updated),
+                at: new Date().toISOString(),
+            },
         };
         await reloadSkillDraftRowsIfActive();
     } catch (error) {
+        memoryState = {
+            ...memoryState,
+            validatingDraft: false,
+            draftOperation: {
+                kind: 'validate',
+                status: 'error',
+                message: t('feature.memory.drafts.validate_failed'),
+                detail: String(error?.message || error || ''),
+                at: new Date().toISOString(),
+            },
+        };
+        renderMemoryContent();
         showToast({
             title: t('feature.memory.drafts.validate_failed'),
             message: String(error?.message || error || ''),
@@ -1093,15 +1321,51 @@ async function handleApplySkillDraft() {
     if (!draftId) {
         return;
     }
+    memoryState = {
+        ...memoryState,
+        applyingDraft: true,
+        draftOperation: {
+            kind: 'apply',
+            status: 'running',
+            message: t('feature.memory.drafts.apply_running'),
+        },
+    };
+    renderMemoryContent();
     try {
         const result = await applyMemorySkillDraft(draftId);
+        const appliedDraft = result?.draft || memoryState.selectedDraft;
         showToast({
             title: t('feature.memory.drafts.applied'),
             message: String(result?.ref || result?.skill_id || ''),
             tone: 'success',
         });
+        memoryState = {
+            ...memoryState,
+            selectedDraft: appliedDraft,
+            applyingDraft: false,
+            draftOperation: {
+                kind: 'apply',
+                status: 'success',
+                message: formatMessage('feature.memory.drafts.apply_result', {
+                    ref: String(result?.ref || result?.skill_id || ''),
+                }),
+                at: new Date().toISOString(),
+            },
+        };
         await reloadSkillDraftRowsIfActive();
     } catch (error) {
+        memoryState = {
+            ...memoryState,
+            applyingDraft: false,
+            draftOperation: {
+                kind: 'apply',
+                status: 'error',
+                message: t('feature.memory.drafts.apply_failed'),
+                detail: String(error?.message || error || ''),
+                at: new Date().toISOString(),
+            },
+        };
+        renderMemoryContent();
         showToast({
             title: t('feature.memory.drafts.apply_failed'),
             message: String(error?.message || error || ''),
@@ -1115,20 +1379,61 @@ async function handleRejectSkillDraft() {
     if (!draftId) {
         return;
     }
+    memoryState = {
+        ...memoryState,
+        rejectingDraft: true,
+        draftOperation: {
+            kind: 'reject',
+            status: 'running',
+            message: t('feature.memory.drafts.reject_running'),
+        },
+    };
+    renderMemoryContent();
     try {
         const updated = await updateMemorySkillDraft(draftId, { status: 'rejected' });
         memoryState = {
             ...memoryState,
             selectedDraft: updated,
+            rejectingDraft: false,
+            draftOperation: {
+                kind: 'reject',
+                status: 'success',
+                message: t('feature.memory.drafts.reject_done'),
+                at: new Date().toISOString(),
+            },
         };
         await reloadSkillDraftRowsIfActive();
     } catch (error) {
+        memoryState = {
+            ...memoryState,
+            rejectingDraft: false,
+            draftOperation: {
+                kind: 'reject',
+                status: 'error',
+                message: t('feature.memory.drafts.reject_failed'),
+                detail: String(error?.message || error || ''),
+                at: new Date().toISOString(),
+            },
+        };
+        renderMemoryContent();
         showToast({
             title: t('feature.memory.drafts.reject_failed'),
             message: String(error?.message || error || ''),
             tone: 'error',
         });
     }
+}
+
+function renderValidationResultMessage(draft) {
+    const messages = Array.isArray(draft?.validation_messages)
+        ? draft.validation_messages
+        : [];
+    const errors = messages.filter(message => message?.severity === 'error').length;
+    const warnings = messages.filter(message => message?.severity === 'warning').length;
+    return formatMessage('feature.memory.drafts.validate_result', {
+        errors: String(errors),
+        warnings: String(warnings),
+    });
 }
 
 function renderDetailItem(label, value) {
