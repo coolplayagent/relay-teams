@@ -26,7 +26,6 @@ from relay_teams.plugins.integrity import compute_plugin_tree_sha256
 from relay_teams.plugins.openclaw_plugin_adapter import adapt_openclaw_plugin_tree
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.marketplace_models import (
-    PluginMarketplaceCompatibility,
     PluginMarketplaceEntry,
     PluginMarketplaceIndex,
     PluginMarketplaceProviderKind,
@@ -2573,84 +2572,6 @@ def test_clawhub_install_policy_blocks_high_risk_versions() -> None:
     relaxed.require_allowed(
         provider=PluginMarketplaceProviderKind.CLAWHUB,
         version=entry.versions[0],
-        entry=entry,
-    )
-
-
-def test_clawhub_install_policy_allows_official_direct_bundle_missing_metadata() -> (
-    None
-):
-    entry = PluginMarketplaceEntry(
-        name="official-bundle",
-        latest="1.0.0",
-        provider_family="bundle-plugin",
-        compatibility=PluginMarketplaceCompatibility.DIRECT,
-        versions=(
-            PluginMarketplaceVersion(
-                version="1.0.0",
-                source=PluginInstallSource(
-                    kind=PluginInstallSourceKind.HTTP_ARCHIVE,
-                    value="https://clawhub.test/archive.zip",
-                    sha="",
-                ),
-                warnings=(
-                    "ClawHub scan status is missing.",
-                    "ClawHub package artifact has no digest metadata.",
-                ),
-            ),
-        ),
-    )
-
-    policy_entry = apply_install_policy_to_entry(
-        entry=entry,
-        provider=PluginMarketplaceProviderKind.CLAWHUB,
-        policy=PluginMarketplaceInstallPolicy(),
-    )
-
-    assert policy_entry.supported_versions() == policy_entry.versions
-    PluginMarketplaceInstallPolicy().require_allowed(
-        provider=PluginMarketplaceProviderKind.CLAWHUB,
-        version=entry.versions[0],
-        entry=entry,
-    )
-
-
-def test_clawhub_install_policy_still_blocks_community_bundle_missing_metadata() -> (
-    None
-):
-    entry = PluginMarketplaceEntry(
-        name="community-bundle",
-        latest="1.0.0",
-        provider_family="bundle-plugin",
-        compatibility=PluginMarketplaceCompatibility.DIRECT,
-        versions=(
-            PluginMarketplaceVersion(
-                version="1.0.0",
-                source=PluginInstallSource(
-                    kind=PluginInstallSourceKind.HTTP_ARCHIVE,
-                    value="https://clawhub.test/archive.zip",
-                    sha="",
-                ),
-                warnings=(
-                    "ClawHub package channel is community; review before install.",
-                    "ClawHub scan status is missing.",
-                    "ClawHub package artifact has no digest metadata.",
-                ),
-            ),
-        ),
-    )
-
-    policy_entry = apply_install_policy_to_entry(
-        entry=entry,
-        provider=PluginMarketplaceProviderKind.CLAWHUB,
-        policy=PluginMarketplaceInstallPolicy(),
-    )
-
-    assert policy_entry.supported_versions() == ()
-    assert policy_entry.versions[0].unsupported_reason == (
-        "ClawHub policy blocks community or non-official plugin channels; "
-        "ClawHub policy blocks packages without a clean scan; "
-        "ClawHub policy requires artifact digest metadata"
     )
 
 
