@@ -298,6 +298,7 @@ class PluginConfigManager:
             resolved_install_policy.require_allowed(
                 provider=source.provider,
                 version=selected,
+                entry=entry,
             )
         persisted_source = PluginInstallSource(
             kind=PluginInstallSourceKind.MARKETPLACE,
@@ -365,6 +366,7 @@ class PluginConfigManager:
             resolved_install_policy.require_allowed(
                 provider=source.provider,
                 version=selected,
+                entry=entry,
             )
         source_root = self._materialize_validation_source(selected.source)
         self._verify_expected_checksum(

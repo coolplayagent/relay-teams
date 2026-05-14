@@ -55,6 +55,7 @@ class PluginMarketplaceInstallPolicy(BaseModel):
         *,
         provider: PluginMarketplaceProviderKind,
         version: PluginMarketplaceVersion,
+        entry: PluginMarketplaceEntry | None = None,
     ) -> tuple[str, ...]:
         if provider != PluginMarketplaceProviderKind.CLAWHUB:
             return ()
@@ -69,13 +70,23 @@ class PluginMarketplaceInstallPolicy(BaseModel):
             )
         if not self.allow_executes_code and _EXECUTES_CODE_WARNING in warnings:
             reasons.append("ClawHub policy blocks packages that execute code")
-        if not self.allow_unclean_scan and _has_warning_prefix(
-            warnings,
-            _SCAN_WARNING_PREFIX,
+        allow_missing_metadata = _allows_missing_clawhub_metadata(
+            entry=entry,
+            warnings=warnings,
+        )
+        if (
+            not allow_missing_metadata
+            and not self.allow_unclean_scan
+            and _has_warning_prefix(
+                warnings,
+                _SCAN_WARNING_PREFIX,
+            )
         ):
             reasons.append("ClawHub policy blocks packages without a clean scan")
-        if self.require_digest and (
-            _MISSING_DIGEST_WARNING in warnings or not version.source.sha.strip()
+        if (
+            not allow_missing_metadata
+            and self.require_digest
+            and (_MISSING_DIGEST_WARNING in warnings or not version.source.sha.strip())
         ):
             reasons.append("ClawHub policy requires artifact digest metadata")
         return tuple(reasons)
@@ -85,8 +96,13 @@ class PluginMarketplaceInstallPolicy(BaseModel):
         *,
         provider: PluginMarketplaceProviderKind,
         version: PluginMarketplaceVersion,
+        entry: PluginMarketplaceEntry | None = None,
     ) -> None:
-        reasons = self.blocked_reasons(provider=provider, version=version)
+        reasons = self.blocked_reasons(
+            provider=provider,
+            version=version,
+            entry=entry,
+        )
         if reasons:
             raise ValueError("; ".join(reasons))
 
@@ -155,6 +171,7 @@ def apply_install_policy_to_entry(
             "versions": tuple(
                 _apply_install_policy_to_version(
                     version=version,
+                    entry=entry,
                     provider=provider,
                     policy=policy,
                 )
@@ -167,12 +184,17 @@ def apply_install_policy_to_entry(
 def _apply_install_policy_to_version(
     *,
     version: PluginMarketplaceVersion,
+    entry: PluginMarketplaceEntry | None = None,
     provider: PluginMarketplaceProviderKind,
     policy: PluginMarketplaceInstallPolicy,
 ) -> PluginMarketplaceVersion:
     if version.unsupported_reason:
         return version
-    reasons = policy.blocked_reasons(provider=provider, version=version)
+    reasons = policy.blocked_reasons(
+        provider=provider,
+        version=version,
+        entry=entry,
+    )
     if not reasons:
         return version
     return version.model_copy(update={"unsupported_reason": "; ".join(reasons)})
@@ -184,3 +206,20 @@ def _policy_file_path(app_config_dir: Path) -> Path:
 
 def _has_warning_prefix(warnings: tuple[str, ...], prefix: str) -> bool:
     return any(warning.startswith(prefix) for warning in warnings)
+
+
+def _allows_missing_clawhub_metadata(
+    *,
+    entry: PluginMarketplaceEntry | None,
+    warnings: tuple[str, ...],
+) -> bool:
+    if entry is None:
+        return False
+    if (
+        entry.provider_family != "bundle-plugin"
+        or entry.compatibility.value != "direct"
+    ):
+        return False
+    if _has_warning_prefix(warnings, _COMMUNITY_WARNING_PREFIX):
+        return False
+    return _EXECUTES_CODE_WARNING not in warnings
