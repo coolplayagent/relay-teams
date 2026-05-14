@@ -15,10 +15,6 @@ from relay_teams.plugins.marketplace_models import (
 )
 
 _POLICY_FILE_NAME = "marketplace-policy.json"
-_COMMUNITY_WARNING_PREFIX = "ClawHub package channel is "
-_EXECUTES_CODE_WARNING = "ClawHub package executes code."
-_SCAN_WARNING_PREFIX = "ClawHub scan status is "
-_MISSING_DIGEST_WARNING = "ClawHub package artifact has no digest metadata."
 
 
 class PluginMarketplaceInstallPolicy(BaseModel):
@@ -50,35 +46,42 @@ class PluginMarketplaceInstallPolicy(BaseModel):
             }
         )
 
+    @staticmethod
     def blocked_reasons(
-        self,
         *,
         provider: PluginMarketplaceProviderKind,
         version: PluginMarketplaceVersion,
     ) -> tuple[str, ...]:
+        _ = (provider, version)
+        return ()
+
+    @staticmethod
+    def blocked_entry_reasons(
+        *,
+        provider: PluginMarketplaceProviderKind,
+        entry: PluginMarketplaceEntry,
+    ) -> tuple[str, ...]:
         if provider != PluginMarketplaceProviderKind.CLAWHUB:
             return ()
-        warnings = version.warnings
-        reasons: list[str] = []
-        if not self.allow_community_plugins and _has_warning_prefix(
-            warnings,
-            _COMMUNITY_WARNING_PREFIX,
-        ):
-            reasons.append(
-                "ClawHub policy blocks community or non-official plugin channels"
-            )
-        if not self.allow_executes_code and _EXECUTES_CODE_WARNING in warnings:
-            reasons.append("ClawHub policy blocks packages that execute code")
-        if not self.allow_unclean_scan and _has_warning_prefix(
-            warnings,
-            _SCAN_WARNING_PREFIX,
-        ):
-            reasons.append("ClawHub policy blocks packages without a clean scan")
-        if self.require_digest and (
-            _MISSING_DIGEST_WARNING in warnings or not version.source.sha.strip()
-        ):
-            reasons.append("ClawHub policy requires artifact digest metadata")
-        return tuple(reasons)
+        if entry.compatibility.value == "direct":
+            return ()
+        reason = (
+            "ClawHub plugin is not directly compatible with Relay Teams"
+            f" (compatibility={entry.compatibility.value})"
+        )
+        if entry.compatibility_reason:
+            reason = f"{reason}: {entry.compatibility_reason}"
+        return (reason,)
+
+    def require_entry_allowed(
+        self,
+        *,
+        provider: PluginMarketplaceProviderKind,
+        entry: PluginMarketplaceEntry,
+    ) -> None:
+        reasons = self.blocked_entry_reasons(provider=provider, entry=entry)
+        if reasons:
+            raise ValueError("; ".join(reasons))
 
     def require_allowed(
         self,
@@ -180,7 +183,3 @@ def _apply_install_policy_to_version(
 
 def _policy_file_path(app_config_dir: Path) -> Path:
     return app_config_dir.expanduser().resolve() / "plugins" / _POLICY_FILE_NAME
-
-
-def _has_warning_prefix(warnings: tuple[str, ...], prefix: str) -> bool:
-    return any(warning.startswith(prefix) for warning in warnings)

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
 import base64
+import json
 import re
+from collections.abc import Mapping
 from urllib.parse import quote, urlencode
 from urllib.request import OpenerDirector, ProxyHandler, Request, build_opener
 
@@ -106,6 +106,28 @@ class ClawHubMarketplaceProvider:
     ) -> PluginMarketplaceEntry:
         base_url = _normalized_base_url(source.value)
         raw_package = self._raw_package_for_name(base_url=base_url, name=name)
+        return self._entry_from_raw_package(
+            raw_package=raw_package,
+            base_url=base_url,
+            include_versions=True,
+            include_version_history=True,
+            fallback_name=name,
+        )
+
+    def load_entry_detail(
+        self,
+        *,
+        source: PluginMarketplaceSource,
+        name: str,
+        fallback_entry: PluginMarketplaceEntry | None = None,
+    ) -> PluginMarketplaceEntry:
+        base_url = _normalized_base_url(source.value)
+        raw_package = _get_json(f"{base_url}/api/v1/packages/{_quote_path(name)}")
+        if fallback_entry is not None:
+            raw_package = _merged_package_detail(
+                _raw_package_from_entry(fallback_entry),
+                raw_package,
+            )
         return self._entry_from_raw_package(
             raw_package=raw_package,
             base_url=base_url,
@@ -230,11 +252,13 @@ class ClawHubMarketplaceProvider:
             detail_package = _get_json(
                 f"{base_url}/api/v1/packages/{_quote_path(name)}"
             )
-            if _package_version_or_empty(detail_package):
-                return detail_package
         except ValueError:
             # ClawHub can omit direct detail records; fall back to family listings.
             pass
+        if detail_package is not None and _detail_package_has_complete_metadata(
+            detail_package
+        ):
+            return detail_package
         for family in _CLAWHUB_FAMILIES:
             cursor = ""
             while True:
@@ -244,7 +268,14 @@ class ClawHubMarketplaceProvider:
                 }
                 if cursor:
                     query["cursor"] = cursor
-                raw = _get_json(f"{base_url}/api/v1/packages?{urlencode(query)}")
+                try:
+                    raw = _get_json(f"{base_url}/api/v1/packages?{urlencode(query)}")
+                except ValueError:
+                    if detail_package is not None and _package_version_or_empty(
+                        detail_package
+                    ):
+                        return detail_package
+                    raise
                 for raw_package in _object_list_field(raw, "items"):
                     raw_name = _required_string(raw_package, "name")
                     if raw_name == name:
@@ -254,7 +285,7 @@ class ClawHubMarketplaceProvider:
                 cursor = _optional_string(raw, "nextCursor")
                 if not cursor:
                     break
-        if detail_package is not None:
+        if detail_package is not None and _package_version_or_empty(detail_package):
             return detail_package
         raise ValueError(f"ClawHub marketplace plugin not found: {name}")
 
@@ -280,20 +311,33 @@ class ClawHubMarketplaceProvider:
                     raw_version=fallback_package,
                 ),
             )
-        return tuple(
-            self._version_from_raw_package(
-                base_url=base_url,
-                name=name,
-                version=_package_version(raw_version),
-                raw_version=self._version_detail_or_fallback(
+        versions: list[PluginMarketplaceVersion] = []
+        for raw_version in raw_versions:
+            version = _package_version(raw_version)
+            try:
+                raw_detail = _get_json(
+                    f"{base_url}/api/v1/packages/{_quote_path(name)}/versions/"
+                    f"{_quote_path(version)}"
+                )
+                version_detail = _version_detail_with_fallback(
+                    fallback_package=fallback_package,
+                    raw_version=raw_version,
+                    raw_detail=raw_detail,
+                )
+            except ValueError:
+                version_detail = _version_detail_after_failed_lookup(
+                    fallback_package=fallback_package,
+                    raw_version=raw_version,
+                )
+            versions.append(
+                self._version_from_raw_package(
                     base_url=base_url,
                     name=name,
-                    version=_package_version(raw_version),
-                    fallback=raw_version,
-                ),
+                    version=version,
+                    raw_version=version_detail,
+                )
             )
-            for raw_version in raw_versions
-        )
+        return tuple(versions)
 
     @staticmethod
     def _version_detail_or_fallback(
@@ -321,6 +365,9 @@ class ClawHubMarketplaceProvider:
     ) -> PluginMarketplaceVersion:
         digest = _artifact_digest(raw_version)
         warnings = _warnings_for_package(raw_version, digest=digest)
+        unsupported_reason = _unsupported_reason(raw_version)
+        if not unsupported_reason:
+            unsupported_reason = _compatibility_unsupported_reason(raw_version)
         source = PluginInstallSource(
             kind=PluginInstallSourceKind.HTTP_ARCHIVE,
             value=_artifact_download_url(base_url=base_url, name=name, version=version),
@@ -331,7 +378,7 @@ class ClawHubMarketplaceProvider:
             version=version,
             source=source,
             warnings=warnings,
-            unsupported_reason=_unsupported_reason(raw_version),
+            unsupported_reason=unsupported_reason,
         )
 
 
@@ -374,6 +421,58 @@ def _merged_package_detail(
     merged = {str(key): value for key, value in package.items()}
     merged.update({str(key): value for key, value in detail.items()})
     return merged
+
+
+def _raw_package_from_entry(entry: PluginMarketplaceEntry) -> Mapping[str, object]:
+    raw: dict[str, object] = {
+        "name": entry.name,
+        "description": entry.description,
+        "family": entry.provider_family,
+    }
+    if entry.latest:
+        raw["version"] = entry.latest
+    return raw
+
+
+def _version_detail_with_fallback(
+    *,
+    fallback_package: Mapping[str, object],
+    raw_version: Mapping[str, object],
+    raw_detail: Mapping[str, object],
+) -> Mapping[str, object]:
+    version_detail = _merged_package_detail(raw_version, raw_detail)
+    if _has_compatibility_metadata(version_detail):
+        return version_detail
+    return _merged_package_detail(fallback_package, version_detail)
+
+
+def _version_detail_after_failed_lookup(
+    *,
+    fallback_package: Mapping[str, object],
+    raw_version: Mapping[str, object],
+) -> Mapping[str, object]:
+    if _has_compatibility_metadata(raw_version):
+        return raw_version
+    if (
+        _compatibility_for_package(fallback_package)[0]
+        == PluginMarketplaceCompatibility.DIRECT
+    ):
+        return _merged_package_detail(fallback_package, raw_version)
+    return raw_version
+
+
+def _detail_package_has_complete_metadata(raw: Mapping[str, object]) -> bool:
+    return bool(_package_version_or_empty(raw)) and _has_compatibility_metadata(raw)
+
+
+def _has_compatibility_metadata(raw: Mapping[str, object]) -> bool:
+    return (
+        _package_family(raw) == "bundle-plugin"
+        or _has_mappable_component_metadata(raw)
+        or _has_runtime_extensions(raw)
+        or _bool_field(raw, "executesCode")
+        or bool(_compatibility_value(raw))
+    )
 
 
 def _required_string(raw: Mapping[str, object], key: str) -> str:
@@ -553,6 +652,19 @@ def _unsupported_reason(raw: Mapping[str, object]) -> str:
     if family and family not in _CLAWHUB_FAMILIES:
         return f"Unsupported ClawHub package family: {family}"
     return ""
+
+
+def _compatibility_unsupported_reason(raw: Mapping[str, object]) -> str:
+    compatibility, compatibility_reason = _compatibility_for_package(raw)
+    if compatibility == PluginMarketplaceCompatibility.DIRECT:
+        return ""
+    reason = (
+        "ClawHub plugin is not directly compatible with Relay Teams"
+        f" (compatibility={compatibility.value})"
+    )
+    if compatibility_reason:
+        reason = f"{reason}: {compatibility_reason}"
+    return reason
 
 
 def _artifact_download_url(*, base_url: str, name: str, version: str) -> str:
