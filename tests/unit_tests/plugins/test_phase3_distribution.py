@@ -26,6 +26,7 @@ from relay_teams.plugins.integrity import compute_plugin_tree_sha256
 from relay_teams.plugins.openclaw_plugin_adapter import adapt_openclaw_plugin_tree
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.marketplace_models import (
+    PluginMarketplaceCompatibility,
     PluginMarketplaceEntry,
     PluginMarketplaceIndex,
     PluginMarketplaceProviderKind,
@@ -40,9 +41,11 @@ from relay_teams.plugins.marketplace_policy import (
     save_plugin_marketplace_install_policy,
 )
 from relay_teams.plugins.plugin_models import (
+    PluginDependency,
     PluginInstallSource,
     PluginInstallSourceKind,
     PluginScope,
+    PluginStateRecord,
 )
 from relay_teams.plugins.state_paths import (
     get_plugin_project_state_file,
@@ -1617,6 +1620,20 @@ def test_clawhub_marketplace_provider_loads_entry_versions(
                 "channel": "community",
                 "latestVersion": "1.0.1",
             }
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {
+                "items": [
+                    {
+                        "name": "market-plugin",
+                        "displayName": "Market",
+                        "summary": "Listed market data",
+                        "family": "code-plugin",
+                        "latestVersion": "1.0.1",
+                    }
+                ]
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": []}
         if url == "https://clawhub.test/api/v1/packages/market-plugin/versions":
             return {"items": [{"version": "1.0.1"}, {"version": "1.0.0"}]}
         if url.endswith("/versions/1.0.1"):
@@ -1631,6 +1648,7 @@ def test_clawhub_marketplace_provider_loads_entry_versions(
                 "version": "1.0.0",
                 "family": "code-plugin",
                 "artifact": {"npmIntegrity": "sha512-" + "b" * 88},
+                "skills": ["market"],
             }
         raise AssertionError(f"Unexpected URL: {url}")
 
@@ -1652,10 +1670,63 @@ def test_clawhub_marketplace_provider_loads_entry_versions(
     assert entry.versions[0].source.kind == PluginInstallSourceKind.HTTP_ARCHIVE
     assert entry.versions[0].source.adapter == "openclaw"
     assert entry.versions[0].source.sha == "a" * 64
+    assert entry.versions[0].unsupported_reason == (
+        "ClawHub plugin is not directly compatible with Relay Teams "
+        "(compatibility=native_only): OpenClaw native runtime plugin; "
+        "Relay Teams cannot execute native runtime extensions."
+    )
+    assert entry.versions[1].unsupported_reason == ""
     assert (
         "ClawHub package declares OpenClaw native runtime extensions; "
         "Relay Teams only loads mapped plugin components."
     ) in entry.versions[0].warnings
+
+
+def test_clawhub_marketplace_provider_preserves_package_metadata_for_sparse_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/fallback-plugin":
+            return {
+                "name": "fallback-plugin",
+                "summary": "Fallback package",
+                "family": "code-plugin",
+                "latestVersion": "1.0.0",
+                "skills": ["quality"],
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {
+                "items": [
+                    {
+                        "name": "fallback-plugin",
+                        "summary": "Listed fallback package",
+                        "family": "code-plugin",
+                        "latestVersion": "1.0.0",
+                        "skills": ["quality"],
+                    }
+                ]
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {"items": []}
+        if url == "https://clawhub.test/api/v1/packages/fallback-plugin/versions":
+            return {"items": [{"version": "1.0.0"}]}
+        if url.endswith("/versions/1.0.0"):
+            raise ValueError("version detail unavailable")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="fallback-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.versions[0].version == "1.0.0"
+    assert entry.versions[0].unsupported_reason == ""
 
 
 def test_clawhub_marketplace_provider_loads_lightweight_index(
@@ -1670,6 +1741,7 @@ def test_clawhub_marketplace_provider_loads_lightweight_index(
                     "summary": "Market data",
                     "family": "code-plugin",
                     "latestVersion": "1.0.1",
+                    "skills": ["market"],
                     "sha256": "a" * 64,
                 }
             ]
@@ -1716,6 +1788,7 @@ def test_clawhub_marketplace_provider_skips_missing_version_entries(
                     "summary": "Market data",
                     "family": "code-plugin",
                     "latestVersion": "1.0.1",
+                    "skills": ["market"],
                 },
             ]
         }
@@ -1745,6 +1818,7 @@ def test_clawhub_marketplace_provider_searches_packages(
                     "summary": "Market data",
                     "family": "code-plugin",
                     "latestVersion": "1.0.1",
+                    "skills": ["market"],
                 }
             ]
         }
@@ -1783,6 +1857,7 @@ def test_clawhub_marketplace_provider_search_skips_missing_version_entries(
                     "summary": "Market data",
                     "family": "code-plugin",
                     "latestVersion": "1.0.1",
+                    "skills": ["market"],
                 },
             ]
         }
@@ -1811,7 +1886,13 @@ def test_clawhub_marketplace_provider_blank_search_loads_index(
         if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
             return {"items": [{"name": "code", "version": "1.0.0"}]}
         if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
-            return {"items": [{"name": "bundle", "version": "1.0.0"}]}
+            return {
+                "items": [
+                    {"name": "bundle", "version": "1.0.0", "family": "bundle-plugin"}
+                ]
+            }
+        if url.startswith("https://clawhub.test/api/v1/packages/code"):
+            raise ValueError("detail unavailable")
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
@@ -1825,8 +1906,12 @@ def test_clawhub_marketplace_provider_blank_search_loads_index(
         app_config_dir=Path("unused"),
     )
 
-    assert [entry.name for entry in index.plugins] == ["code", "bundle"]
+    assert [entry.name for entry in index.plugins] == ["bundle"]
     assert all("/search" not in url for url in requested_urls)
+    assert requested_urls == [
+        "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100",
+        "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100",
+    ]
 
 
 def test_marketplace_service_search_filters_local_json(tmp_path: Path) -> None:
@@ -1874,6 +1959,19 @@ def test_clawhub_marketplace_provider_uses_requested_name_for_nameless_detail(
                 "family": "bundle-plugin",
                 "sha256": "a" * 64,
             }
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {"items": []}
+        if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
+            return {
+                "items": [
+                    {
+                        "name": "detail-plugin",
+                        "summary": "Listed detail package",
+                        "latestVersion": "1.0.0",
+                        "family": "bundle-plugin",
+                    }
+                ]
+            }
         if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions":
             return {"items": []}
         raise AssertionError(f"Unexpected URL: {url}")
@@ -1896,6 +1994,40 @@ def test_clawhub_marketplace_provider_uses_requested_name_for_nameless_detail(
         "versions/1.0.0/artifact/download"
     )
     assert entry.versions[0].source.sha == "a" * 64
+
+
+def test_clawhub_marketplace_provider_uses_valid_detail_when_listing_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin":
+            return {
+                "name": "detail-plugin",
+                "summary": "Detail package",
+                "latestVersion": "1.0.0",
+                "family": "bundle-plugin",
+                "sha256": "a" * 64,
+            }
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions":
+            return {"items": []}
+        if url.startswith("https://clawhub.test/api/v1/packages?family="):
+            raise ValueError("listing unavailable")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="detail-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.name == "detail-plugin"
+    assert entry.latest == "1.0.0"
+    assert entry.versions[0].unsupported_reason == ""
 
 
 def test_clawhub_marketplace_provider_merges_listing_metadata_for_sparse_detail(
@@ -1940,6 +2072,85 @@ def test_clawhub_marketplace_provider_merges_listing_metadata_for_sparse_detail(
     assert entry.latest == "1.0.0"
     assert entry.description == "Detail package"
     assert entry.versions[0].source.sha == "a" * 64
+
+
+def test_clawhub_marketplace_provider_preserves_listing_compatibility_for_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin":
+            return {
+                "name": "detail-plugin",
+                "version": "1.0.0",
+                "summary": "Detail package",
+            }
+        if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
+            return {
+                "items": [
+                    {
+                        "name": "detail-plugin",
+                        "latestVersion": "1.0.0",
+                        "summary": "Listed package",
+                        "family": "bundle-plugin",
+                    }
+                ]
+            }
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions":
+            return {"items": [{"version": "1.0.0"}]}
+        if url == "https://clawhub.test/api/v1/packages/detail-plugin/versions/1.0.0":
+            return {"sha256": "a" * 64}
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="detail-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.compatibility.value == "direct"
+    assert entry.versions[0].unsupported_reason == ""
+    assert entry.versions[0].source.sha == "a" * 64
+
+
+def test_clawhub_marketplace_provider_does_not_copy_native_metadata_on_detail_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_get_json(url: str) -> dict[str, object]:
+        if url == "https://clawhub.test/api/v1/packages/native-plugin":
+            return {
+                "name": "native-plugin",
+                "summary": "Native package",
+                "latestVersion": "2.0.0",
+                "family": "code-plugin",
+                "runtimeExtensions": ["./dist/index.js"],
+            }
+        if url == "https://clawhub.test/api/v1/packages/native-plugin/versions":
+            return {"items": [{"version": "1.0.0"}]}
+        if url == "https://clawhub.test/api/v1/packages/native-plugin/versions/1.0.0":
+            raise ValueError("version detail unavailable")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
+
+    entry = PluginMarketplaceService().load_provider_entry(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            value="https://clawhub.test",
+        ),
+        name="native-plugin",
+        app_config_dir=Path("unused"),
+    )
+
+    assert entry.versions[0].version == "1.0.0"
+    assert "native_only" not in entry.versions[0].unsupported_reason
+    assert not any(
+        "native runtime extensions" in warning for warning in entry.versions[0].warnings
+    )
 
 
 def test_clawhub_marketplace_provider_falls_back_to_listing_version(
@@ -1989,7 +2200,7 @@ def test_clawhub_marketplace_provider_paginates_package_index(
     def fake_get_json(url: str) -> dict[str, object]:
         if url == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100":
             return {
-                "items": [{"name": "first", "version": "1.0.0"}],
+                "items": [{"name": "first", "version": "1.0.0", "skills": ["first"]}],
                 "nextCursor": "next",
             }
         if (
@@ -1997,6 +2208,8 @@ def test_clawhub_marketplace_provider_paginates_package_index(
             == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=100&cursor=next"
         ):
             return {"items": [{"name": "second", "version": "1.0.0"}]}
+        if url.startswith("https://clawhub.test/api/v1/packages/second"):
+            raise ValueError("detail unavailable")
         if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=100":
             return {
                 "items": [
@@ -2021,9 +2234,9 @@ def test_clawhub_marketplace_provider_paginates_package_index(
         app_config_dir=Path("unused"),
     )
 
-    assert [entry.name for entry in index.plugins] == ["first", "second", "bundle"]
-    assert index.plugins[2].provider_family == "bundle-plugin"
-    assert index.plugins[2].compatibility == "direct"
+    assert [entry.name for entry in index.plugins] == ["first", "bundle"]
+    assert index.plugins[1].provider_family == "bundle-plugin"
+    assert index.plugins[1].compatibility == "direct"
 
 
 def test_clawhub_marketplace_provider_decodes_family_cursor(
@@ -2177,6 +2390,7 @@ def test_clawhub_marketplace_provider_loads_one_detailed_page(
                 "family": "code-plugin",
                 "scanStatus": "clean",
                 "artifact": {"sha256": "a" * 64},
+                "skills": ["first"],
             }
         raise AssertionError(f"Unexpected URL: {url}")
 
@@ -2254,6 +2468,7 @@ def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
                 "family": "code-plugin",
                 "scanStatus": "clean",
                 "artifact": {"sha256": "a" * 64},
+                "skills": ["first"],
             }
         if url == "https://clawhub.test/api/v1/packages/second/versions/1.1.0":
             return {
@@ -2262,6 +2477,8 @@ def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
                 "scanStatus": "clean",
                 "artifact": {"sha256": "b" * 64},
             }
+        if url.startswith("https://clawhub.test/api/v1/packages/second"):
+            raise ValueError("detail unavailable")
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
@@ -2276,7 +2493,7 @@ def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
         include_details=True,
     )
 
-    assert [entry.name for entry in index.plugins] == ["first", "second"]
+    assert [entry.name for entry in index.plugins] == ["first"]
     assert index.next_cursor == ""
     assert requested_urls == [
         "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1",
@@ -2284,6 +2501,7 @@ def test_clawhub_marketplace_service_fetches_all_detailed_pages_by_default(
         "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=1",
         "https://clawhub.test/api/v1/packages/first/versions/1.0.0",
         "https://clawhub.test/api/v1/packages/second/versions/1.1.0",
+        "https://clawhub.test/api/v1/packages/second",
     ]
 
 
@@ -2299,6 +2517,8 @@ def test_clawhub_marketplace_service_preserves_pagination_options(
             == "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=stale"
         ):
             return {"items": [{"name": "second", "version": "1.1.0"}]}
+        if url.startswith("https://clawhub.test/api/v1/packages/second"):
+            raise ValueError("detail unavailable")
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
@@ -2314,14 +2534,14 @@ def test_clawhub_marketplace_service_preserves_pagination_options(
         fetch_all=False,
     )
 
-    assert [entry.name for entry in index.plugins] == ["second"]
+    assert [entry.name for entry in index.plugins] == []
     assert index.next_cursor == ""
     assert requested_urls == [
         "https://clawhub.test/api/v1/packages?family=code-plugin&limit=1&cursor=stale",
     ]
 
 
-def test_clawhub_marketplace_lightweight_index_skips_install_policy(
+def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_get_json(url: str) -> dict[str, object]:
@@ -2332,7 +2552,13 @@ def test_clawhub_marketplace_lightweight_index_skips_install_policy(
                         "name": "needs-details",
                         "latestVersion": "1.0.0",
                         "family": "code-plugin",
-                    }
+                    },
+                    {
+                        "name": "native-with-old-direct",
+                        "latestVersion": "2.0.0",
+                        "family": "code-plugin",
+                        "runtimeExtensions": ["./dist/index.js"],
+                    },
                 ]
             }
         if url == "https://clawhub.test/api/v1/packages?family=bundle-plugin&limit=50":
@@ -2345,6 +2571,55 @@ def test_clawhub_marketplace_lightweight_index_skips_install_policy(
                     }
                 ]
             }
+        if url == "https://clawhub.test/api/v1/packages/bundle/versions/1.0.0":
+            return {
+                "version": "1.0.0",
+                "family": "bundle-plugin",
+            }
+        if url == "https://clawhub.test/api/v1/packages/needs-details":
+            return {
+                "name": "needs-details",
+                "family": "code-plugin",
+                "skills": ["quality"],
+            }
+        if url == "https://clawhub.test/api/v1/packages/needs-details/versions":
+            return {"items": [{"version": "1.0.0"}]}
+        if url == "https://clawhub.test/api/v1/packages/needs-details/versions/1.0.0":
+            return {
+                "version": "1.0.0",
+                "family": "code-plugin",
+                "skills": ["quality"],
+            }
+        if url == "https://clawhub.test/api/v1/packages/native-with-old-direct":
+            return {
+                "name": "native-with-old-direct",
+                "latestVersion": "2.0.0",
+                "family": "code-plugin",
+                "runtimeExtensions": ["./dist/index.js"],
+            }
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages/native-with-old-direct/versions"
+        ):
+            return {"items": [{"version": "2.0.0"}, {"version": "1.0.0"}]}
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages/native-with-old-direct/versions/2.0.0"
+        ):
+            return {
+                "version": "2.0.0",
+                "family": "code-plugin",
+                "runtimeExtensions": ["./dist/index.js"],
+            }
+        if (
+            url
+            == "https://clawhub.test/api/v1/packages/native-with-old-direct/versions/1.0.0"
+        ):
+            return {
+                "version": "1.0.0",
+                "family": "code-plugin",
+                "skills": ["quality"],
+            }
         raise AssertionError(f"Unexpected URL: {url}")
 
     monkeypatch.setattr(clawhub_marketplace_provider, "_get_json", fake_get_json)
@@ -2356,12 +2631,18 @@ def test_clawhub_marketplace_lightweight_index_skips_install_policy(
         ),
         app_config_dir=Path("unused"),
         limit=50,
+        include_details=True,
     )
 
-    assert [entry.name for entry in index.plugins] == ["needs-details", "bundle"]
+    assert [entry.name for entry in index.plugins] == [
+        "needs-details",
+        "native-with-old-direct",
+        "bundle",
+    ]
     assert all(entry.supported_versions() for entry in index.plugins)
-    assert index.plugins[0].compatibility == "unknown"
-    assert index.plugins[1].compatibility == "direct"
+    assert index.plugins[0].compatibility == "direct"
+    assert index.plugins[1].supported_versions()[0].version == "1.0.0"
+    assert index.plugins[2].compatibility == "direct"
 
 
 def test_clawhub_marketplace_provider_marks_blocked_releases_unsupported() -> None:
@@ -2527,10 +2808,11 @@ def test_marketplace_install_rejects_unsupported_provider_version(
         )
 
 
-def test_clawhub_install_policy_blocks_high_risk_versions() -> None:
+def test_clawhub_install_policy_allows_high_risk_versions_with_warnings() -> None:
     entry = PluginMarketplaceEntry(
         name="risky-plugin",
         latest="1.0.0",
+        compatibility=PluginMarketplaceCompatibility.DIRECT,
         versions=(
             PluginMarketplaceVersion(
                 version="1.0.0",
@@ -2555,12 +2837,12 @@ def test_clawhub_install_policy_blocks_high_risk_versions() -> None:
         policy=PluginMarketplaceInstallPolicy(),
     )
 
-    assert policy_entry.supported_versions() == ()
-    assert policy_entry.versions[0].unsupported_reason == (
-        "ClawHub policy blocks community or non-official plugin channels; "
-        "ClawHub policy blocks packages that execute code; "
-        "ClawHub policy blocks packages without a clean scan; "
-        "ClawHub policy requires artifact digest metadata"
+    assert policy_entry.supported_versions() == policy_entry.versions
+    assert policy_entry.versions[0].warnings == entry.versions[0].warnings
+    assert policy_entry.versions[0].unsupported_reason == ""
+    PluginMarketplaceInstallPolicy().require_allowed(
+        provider=PluginMarketplaceProviderKind.CLAWHUB,
+        version=entry.versions[0],
     )
 
     relaxed = PluginMarketplaceInstallPolicy().with_overrides(
@@ -2573,6 +2855,42 @@ def test_clawhub_install_policy_blocks_high_risk_versions() -> None:
         provider=PluginMarketplaceProviderKind.CLAWHUB,
         version=entry.versions[0],
     )
+
+
+def test_clawhub_install_policy_blocks_non_direct_plugins() -> None:
+    entry = PluginMarketplaceEntry(
+        name="native-plugin",
+        latest="1.0.0",
+        compatibility=PluginMarketplaceCompatibility.NATIVE_ONLY,
+        compatibility_reason="OpenClaw native runtime plugin",
+        versions=(
+            PluginMarketplaceVersion(
+                version="1.0.0",
+                source=PluginInstallSource(
+                    kind=PluginInstallSourceKind.HTTP_ARCHIVE,
+                    value="https://clawhub.test/archive.zip",
+                    sha="",
+                ),
+            ),
+        ),
+    )
+
+    policy_entry = apply_install_policy_to_entry(
+        entry=entry,
+        provider=PluginMarketplaceProviderKind.CLAWHUB,
+        policy=PluginMarketplaceInstallPolicy(),
+    )
+
+    assert policy_entry.supported_versions() == policy_entry.versions
+    assert policy_entry.versions[0].unsupported_reason == ""
+    with pytest.raises(
+        ValueError,
+        match="ClawHub plugin is not directly compatible with Relay Teams",
+    ):
+        PluginMarketplaceInstallPolicy().require_entry_allowed(
+            provider=PluginMarketplaceProviderKind.CLAWHUB,
+            entry=entry,
+        )
 
 
 def test_clawhub_install_policy_config_loads_from_plugin_config(
@@ -2719,10 +3037,12 @@ def test_clawhub_marketplace_service_preserves_partial_page_request(
     assert captured == {"cursor": "", "fetch_all": False}
 
 
-def test_marketplace_install_rejects_clawhub_policy_block(
+def test_marketplace_install_allows_clawhub_warnings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    captured: dict[str, PluginInstallSource] = {}
+
     def fake_load_provider_entry(
         self: PluginMarketplaceService,
         *,
@@ -2740,6 +3060,7 @@ def test_marketplace_install_rejects_clawhub_policy_block(
             entry=PluginMarketplaceEntry(
                 name="risky-plugin",
                 latest="1.0.0",
+                compatibility=PluginMarketplaceCompatibility.DIRECT,
                 versions=(
                     PluginMarketplaceVersion(
                         version="1.0.0",
@@ -2756,19 +3077,49 @@ def test_marketplace_install_rejects_clawhub_policy_block(
             policy=policy,
         )
 
+    def fake_install_from_source(
+        self: PluginConfigManager,
+        *,
+        source: PluginInstallSource,
+        scope: PluginScope,
+        enabled: bool = True,
+        resolved_install_source: PluginInstallSource | None = None,
+        expected_sha256: str = "",
+        extra_dependencies: tuple[PluginDependency, ...] = (),
+    ) -> PluginStateRecord:
+        _ = (self, enabled, resolved_install_source, expected_sha256)
+        _ = extra_dependencies
+        captured["source"] = source
+        return PluginStateRecord(
+            name="risky-plugin",
+            scope=scope,
+            root_dir=tmp_path / "app" / "plugins" / "installed" / "risky-plugin",
+            source=source,
+        )
+
     monkeypatch.setattr(
         PluginMarketplaceService,
         "load_provider_entry",
         fake_load_provider_entry,
     )
+    monkeypatch.setattr(
+        PluginConfigManager,
+        "install_from_source",
+        fake_install_from_source,
+    )
 
-    with pytest.raises(ValueError, match="blocks packages that execute code"):
-        PluginConfigManager(app_config_dir=tmp_path / "app").install_marketplace_plugin(
-            name="risky-plugin",
-            marketplace=Path("clawhub"),
-            marketplace_provider=PluginMarketplaceProviderKind.CLAWHUB,
-            scope=PluginScope.USER,
-        )
+    record = PluginConfigManager(
+        app_config_dir=tmp_path / "app"
+    ).install_marketplace_plugin(
+        name="risky-plugin",
+        marketplace=Path("clawhub"),
+        marketplace_provider=PluginMarketplaceProviderKind.CLAWHUB,
+        scope=PluginScope.USER,
+    )
+
+    assert record.name == "risky-plugin"
+    assert captured["source"].kind == PluginInstallSourceKind.MARKETPLACE
+    assert captured["source"].value == "risky-plugin"
 
 
 def test_http_archive_install_adapts_openclaw_manifest(tmp_path: Path) -> None:
@@ -2930,6 +3281,52 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
         manifest_config_dir_name="app",
     )
     assert json.loads((existing_root / "app" / "plugin.json").read_text("utf-8")) == {}
+
+    extra_manifest_root = tmp_path / "extra-manifest"
+    (extra_manifest_root / "app").mkdir(parents=True)
+    (extra_manifest_root / "app" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://relay-teams.test/plugin.schema.json",
+                "name": "extra-manifest",
+                "version": "1.0.0",
+                "description": "OpenClaw package",
+                "agents": "./agents",
+                "mcpServers": "./mcp.json",
+                "userConfig": {
+                    "token": {
+                        "type": "string",
+                        "sensitive": True,
+                    }
+                },
+                "id": "extra-manifest",
+                "commandNamespace": "extra",
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapt_openclaw_plugin_tree(
+        plugin_root=extra_manifest_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+    manifest = json.loads(
+        (extra_manifest_root / "app" / "plugin.json").read_text("utf-8")
+    )
+    assert manifest == {
+        "$schema": "https://relay-teams.test/plugin.schema.json",
+        "name": "extra-manifest",
+        "version": "1.0.0",
+        "description": "OpenClaw package",
+        "agents": "./agents",
+        "mcpServers": "./mcp.json",
+        "userConfig": {
+            "token": {
+                "type": "string",
+                "sensitive": True,
+            }
+        },
+    }
 
     unmappable_root = tmp_path / "unmappable"
     unmappable_root.mkdir()

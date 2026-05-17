@@ -70,12 +70,11 @@ class PluginMarketplaceService:
                 fetch_all=clawhub_fetch_all,
                 include_versions=include_details,
             )
-            if not include_details:
-                return index
-            return apply_install_policy_to_index(
+            return _filter_installable_clawhub_index(
                 index=index,
-                provider=source.provider,
+                source=source,
                 policy=policy,
+                include_details=include_details,
             )
         raise ValueError(f"Unsupported plugin marketplace provider: {source.provider}")
 
@@ -120,12 +119,11 @@ class PluginMarketplaceService:
                 query=normalized_query,
                 include_versions=include_details,
             )
-            if not include_details:
-                return index
-            return apply_install_policy_to_index(
+            return _filter_installable_clawhub_index(
                 index=index,
-                provider=source.provider,
+                source=source,
                 policy=policy,
+                include_details=include_details,
             )
         index = self.load_provider_index(
             source=source,
@@ -150,3 +148,65 @@ def _clawhub_full_load_options(*, cursor: str, fetch_all: bool) -> tuple[str, bo
     if normalized_cursor:
         return normalized_cursor, False
     return "", fetch_all
+
+
+def _filter_installable_clawhub_index(
+    *,
+    index: PluginMarketplaceIndex,
+    source: PluginMarketplaceSource,
+    policy: PluginMarketplaceInstallPolicy,
+    include_details: bool,
+) -> PluginMarketplaceIndex:
+    governed_index = apply_install_policy_to_index(
+        index=index,
+        provider=PluginMarketplaceProviderKind.CLAWHUB,
+        policy=policy,
+    )
+    if not include_details:
+        return PluginMarketplaceIndex(
+            version=governed_index.version,
+            plugins=tuple(
+                entry for entry in governed_index.plugins if entry.supported_versions()
+            ),
+            next_cursor=governed_index.next_cursor,
+        )
+    return PluginMarketplaceIndex(
+        version=governed_index.version,
+        plugins=tuple(
+            _installable_clawhub_entries(
+                index=governed_index,
+                source=source,
+                policy=policy,
+            )
+        ),
+        next_cursor=governed_index.next_cursor,
+    )
+
+
+def _installable_clawhub_entries(
+    *,
+    index: PluginMarketplaceIndex,
+    source: PluginMarketplaceSource,
+    policy: PluginMarketplaceInstallPolicy,
+) -> tuple[PluginMarketplaceEntry, ...]:
+    entries: list[PluginMarketplaceEntry] = []
+    provider = ClawHubMarketplaceProvider()
+    for entry in index.plugins:
+        if entry.supported_versions():
+            entries.append(entry)
+            continue
+        try:
+            detailed_entry = apply_install_policy_to_entry(
+                entry=provider.load_entry_detail(
+                    source=source,
+                    name=entry.name,
+                    fallback_entry=entry,
+                ),
+                provider=PluginMarketplaceProviderKind.CLAWHUB,
+                policy=policy,
+            )
+        except ValueError:
+            continue
+        if detailed_entry.supported_versions():
+            entries.append(detailed_entry)
+    return tuple(entries)

@@ -5,6 +5,8 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
+from relay_teams.plugins.plugin_models import PluginManifest
+
 _OPENCLAW_ADAPTER_NAME = "openclaw"
 _OPENCLAW_MANIFEST = "openclaw.plugin.json"
 
@@ -20,7 +22,10 @@ def adapt_openclaw_plugin_tree(
         return
     relay_manifest_path = plugin_root / manifest_config_dir_name / "plugin.json"
     claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
-    if relay_manifest_path.exists() or claude_manifest_path.exists():
+    if relay_manifest_path.exists():
+        _sanitize_existing_relay_manifest(relay_manifest_path)
+        return
+    if claude_manifest_path.exists():
         return
     openclaw_manifest_path = plugin_root / _OPENCLAW_MANIFEST
     if not openclaw_manifest_path.exists():
@@ -49,6 +54,26 @@ def adapt_openclaw_plugin_tree(
         )
     relay_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     relay_manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _sanitize_existing_relay_manifest(manifest_path: Path) -> None:
+    raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    raw = _string_key_mapping(raw_manifest)
+    if not raw:
+        return
+    allowed_fields = set(PluginManifest.model_fields) | {
+        "$schema",
+        "agents",
+        "mcpServers",
+        "userConfig",
+    }
+    manifest = {key: value for key, value in raw.items() if key in allowed_fields}
+    if manifest == raw:
+        return
+    manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

@@ -244,6 +244,83 @@ console.log(JSON.stringify({
     }
 
 
+def test_plugins_settings_clawhub_update_matches_marketplace_source_name(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={
+            "plugins": [
+                {
+                    "name": "feishu",
+                    "version": "2026.5.7",
+                    "scope": "user",
+                    "enabled": True,
+                    "source": {
+                        "kind": "marketplace",
+                        "value": "@openclaw/feishu",
+                        "marketplace": "clawhub",
+                        "marketplace_provider": "clawhub",
+                        "marketplace_source": "https://clawhub.ai",
+                    },
+                    "manifest": {},
+                    "user_config": {},
+                    "component_counts": {},
+                }
+            ],
+            "diagnostics": [],
+        },
+        marketplace={
+            "plugins": [
+                {
+                    "name": "@openclaw/feishu",
+                    "latest": "2026.5.8",
+                    "compatibility": "direct",
+                    "versions": [
+                        {
+                            "version": "2026.5.8",
+                            "source": {
+                                "kind": "http_archive",
+                                "value": "https://clawhub.test/feishu.zip",
+                                "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+globalThis.__dialogResult = { version: "2026.5.8" };
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+await root.dispatch("click", root.findButton("update", "user:feishu"));
+await flush();
+
+console.log(JSON.stringify({
+    dialogOptions: globalThis.__dialogPayloads[0].fields[0].options,
+    updatePayload: globalThis.__updatePayloads[0],
+}));
+""".strip(),
+    )
+
+    assert payload["dialogOptions"] == [
+        {"value": "", "label": "settings.plugins.version_latest"},
+        {"value": "2026.5.8", "label": "2026.5.8"},
+    ]
+    assert payload["updatePayload"] == {
+        "name": "feishu",
+        "payload": {
+            "scope": "user",
+            "version": "2026.5.8",
+            "allow_missing_digest": True,
+        },
+    }
+
+
 def test_plugins_settings_config_fields_preserve_declared_types() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source = (
@@ -346,12 +423,13 @@ def test_plugins_settings_empty_state_only_shows_add_plugin_action() -> None:
     )
     assert 'id="install-plugin-btn"' in shell_source
     assert ">Add Plugin</button>" in shell_source
-    assert (
-        "type=\"submit\">${escapeHtml(t('settings.action.save'))}</button>"
-        in component_source
-    )
+    assert "installSubmitting" in component_source
+    assert "settings.plugins.installing" in component_source
+    assert "function renderPluginInstallProgress()" in component_source
     assert "'settings.plugins.install': 'Add Plugin'" in i18n_source
+    assert "'settings.plugins.installing': 'Adding plugin...'" in i18n_source
     assert "'settings.plugins.install': '新增插件'" in i18n_source
+    assert "'settings.plugins.installing': '正在新增插件...'" in i18n_source
     assert "安装插件" not in i18n_source
 
 
@@ -469,6 +547,59 @@ console.log(JSON.stringify({
             "source_ref": "v1.2.0",
         },
     ]
+
+
+def test_plugins_settings_install_shows_pending_state(tmp_path: Path) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={"plugins": []},
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source.value = "C:/plugins/local-quality";
+await root.dispatch("input", form.elements.source);
+let resolveInstall;
+globalThis.__installPromise = new Promise(resolve => {
+    resolveInstall = resolve;
+});
+const pendingSubmit = root.dispatch("submit", form);
+await flush();
+const htmlDuringSubmit = root.innerHTML;
+resolveInstall({ status: "ok" });
+await pendingSubmit;
+await flush();
+
+console.log(JSON.stringify({
+    htmlDuringSubmit,
+    installPayload: globalThis.__installPayloads[0],
+    notifications: globalThis.__notifications,
+}));
+""".strip(),
+    )
+
+    assert "settings.plugins.installing" in str(payload["htmlDuringSubmit"])
+    assert 'type="submit" disabled>settings.action.save</button>' in str(
+        payload["htmlDuringSubmit"]
+    )
+    assert "<strong>settings.plugins.installing</strong>" in str(
+        payload["htmlDuringSubmit"]
+    )
+    assert payload["installPayload"] == {
+        "source": "C:/plugins/local-quality",
+        "scope": "user",
+        "enabled": True,
+        "source_kind": "local",
+    }
+    assert {"tone": "success", "message": "settings.plugins.installed"} in cast(
+        list[dict[str, JsonValue]], payload["notifications"]
+    )
 
 
 def test_plugins_settings_marketplace_install_submits_selected_version(
@@ -1645,6 +1776,9 @@ export async function inspectPluginMarketplace(marketplacePath, options = {}) {
 
 export async function installPlugin(payload) {
     globalThis.__installPayloads.push(payload);
+    if (globalThis.__installPromise) {
+        return globalThis.__installPromise;
+    }
     return { status: "ok" };
 }
 

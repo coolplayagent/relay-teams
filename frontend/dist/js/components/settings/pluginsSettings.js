@@ -39,6 +39,7 @@ let selectedPluginKey = '';
 let pluginPanelMode = 'list';
 let validationRegistry = null;
 let handlersBound = false;
+let installSubmitting = false;
 let installDraft = defaultInstallDraft();
 let marketplaceBrowser = defaultMarketplaceBrowser();
 
@@ -61,6 +62,7 @@ export function bindPluginsSettingsHandlers() {
     bindActionButton('install-plugin-btn', () => {
         pluginPanelMode = 'install';
         validationRegistry = null;
+        installSubmitting = false;
         installDraft = defaultInstallDraft();
         marketplaceBrowser = defaultMarketplaceBrowser();
         renderPluginsPanel();
@@ -297,6 +299,7 @@ function renderInstallForm() {
     const versions = marketplaceVisibleVersions(selectedMarketplacePlugin);
     const selectedVersion = selectedMarketplaceVersion();
     const selectedUnsupported = Boolean(marketplaceMode && versionUnsupportedReason(selectedVersion));
+    const saveDisabled = selectedUnsupported || installSubmitting;
     return `
         <form class="plugins-editor-panel" id="plugin-install-form">
             <div class="proxy-form-section-header"><h5>${escapeHtml(t('settings.plugins.install_title'))}</h5></div>
@@ -363,13 +366,18 @@ function renderInstallForm() {
             ${marketplaceMode ? renderSelectedMarketplacePluginDescription(selectedMarketplacePlugin) : ''}
             ${marketplaceMode ? renderMarketplaceVersionDetails(selectedVersion) : ''}
             <div class="plugins-editor-actions">
-                <button class="secondary-btn section-action-btn" type="button" data-plugin-action="cancel-editor">${escapeHtml(t('settings.action.cancel'))}</button>
-                ${marketplaceMode ? '' : `<button class="secondary-btn section-action-btn" type="button" data-plugin-action="validate-install-source">${escapeHtml(t('settings.plugins.validate_source'))}</button>`}
-                <button class="primary-btn section-action-btn" type="submit" ${selectedUnsupported ? 'disabled' : ''}>${escapeHtml(t('settings.action.save'))}</button>
+                <button class="secondary-btn section-action-btn" type="button" data-plugin-action="cancel-editor" ${installSubmitting ? 'disabled' : ''}>${escapeHtml(t('settings.action.cancel'))}</button>
+                ${marketplaceMode ? '' : `<button class="secondary-btn section-action-btn" type="button" data-plugin-action="validate-install-source" ${installSubmitting ? 'disabled' : ''}>${escapeHtml(t('settings.plugins.validate_source'))}</button>`}
+                <button class="primary-btn section-action-btn" type="submit" ${saveDisabled ? 'disabled' : ''}>${escapeHtml(t('settings.action.save'))}</button>
             </div>
+            ${installSubmitting ? renderPluginInstallProgress() : ''}
             ${validationRegistry ? renderValidationResult(validationRegistry) : ''}
         </form>
     `;
+}
+
+function renderPluginInstallProgress() {
+    return `<div class="plugin-validation-result"><strong>${escapeHtml(t('settings.plugins.installing'))}</strong></div>`;
 }
 
 function renderMarketplacePluginSelect(plugins) {
@@ -674,6 +682,9 @@ function renderValidationResult(registry) {
 }
 
 async function handlePluginAction(action, plugin, button) {
+    if (installSubmitting) {
+        return;
+    }
     if (action === 'select') {
         selectedPluginKey = button.getAttribute('data-plugin-key') || '';
         pluginPanelMode = 'list';
@@ -720,6 +731,9 @@ async function handlePluginAction(action, plugin, button) {
 }
 
 async function submitPluginInstall(form) {
+    if (installSubmitting) {
+        return;
+    }
     syncInstallDraftFromForm(form);
     const payload = {
         source: installDraft.source,
@@ -767,12 +781,19 @@ async function submitPluginInstall(form) {
         showToast({ tone: 'warning', message: unsupportedReason });
         return;
     }
+    installSubmitting = true;
+    renderPluginsPanel();
+    syncPluginsSettingsActions();
     try {
         await installPlugin(payload);
         showToast({ tone: 'success', message: t('settings.plugins.installed') });
         pluginPanelMode = 'list';
+        installSubmitting = false;
         await loadPluginsSettingsPanel({ force: true });
     } catch (error) {
+        installSubmitting = false;
+        renderPluginsPanel();
+        syncPluginsSettingsActions();
         showToast({ tone: 'error', message: String(error?.message || t('settings.plugins.install_failed')) });
     }
 }
@@ -947,8 +968,9 @@ async function promptAndUpdateMarketplacePlugin(plugin) {
             plugin.source.marketplace,
             pluginMarketplaceRequestOptions(plugin),
         );
+        const entryName = pluginMarketplaceEntryName(plugin);
         const entry = (Array.isArray(marketplace?.plugins) ? marketplace.plugins : [])
-            .find(item => item?.name === plugin.name);
+            .find(item => item?.name === entryName);
         const allVersions = Array.isArray(entry?.versions) ? entry.versions : [];
         if (!allVersions.length) {
             await updatePlugin(plugin.name, { scope: plugin.scope, version: null });
@@ -1018,6 +1040,11 @@ function pluginMarketplaceRequestOptions(plugin) {
         } : {}),
         refresh: true,
     };
+}
+
+function pluginMarketplaceEntryName(plugin) {
+    const sourceValue = String(plugin?.source?.value || '').trim();
+    return sourceValue || String(plugin?.name || '').trim();
 }
 
 async function confirmAndDeletePlugin(plugin) {
