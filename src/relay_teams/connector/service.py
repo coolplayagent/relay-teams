@@ -5,6 +5,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Protocol
 
+from relay_teams.binary_tools import (
+    BinaryToolId,
+    BinaryToolItem,
+    BinaryToolListResponse,
+    BinaryToolSourceKind,
+    BinaryToolStatus,
+)
 from relay_teams.connector.models import (
     ConnectorAuthType,
     ConnectorCategory,
@@ -124,6 +131,11 @@ class W3ConnectorServiceLike(Protocol):
         raise NotImplementedError
 
 
+class RuntimeToolServiceLike(Protocol):
+    async def list_tools(self) -> BinaryToolListResponse:
+        raise NotImplementedError
+
+
 CONNECTOR_PROVIDER_BY_ID: Mapping[str, ConnectorProvider] = {
     ConnectorProvider.GITHUB.value: ConnectorProvider.GITHUB,
     ConnectorProvider.DISCORD.value: ConnectorProvider.DISCORD,
@@ -131,6 +143,7 @@ CONNECTOR_PROVIDER_BY_ID: Mapping[str, ConnectorProvider] = {
     ConnectorProvider.WECHAT.value: ConnectorProvider.WECHAT,
     ConnectorProvider.XIAOLUBAN.value: ConnectorProvider.XIAOLUBAN,
     ConnectorProvider.W3.value: ConnectorProvider.W3,
+    ConnectorProvider.RELAY_KNOWLEDGE.value: ConnectorProvider.RELAY_KNOWLEDGE,
 }
 
 
@@ -147,6 +160,7 @@ class ConnectorService:
         xiaoluban_gateway_service: XiaolubanGatewayServiceLike,
         xiaoluban_im_listener_service: XiaolubanImListenerServiceLike,
         w3_connector_service: W3ConnectorServiceLike,
+        runtime_tool_service: RuntimeToolServiceLike,
         get_shared_github_token: Callable[[], str | None] | None = None,
     ) -> None:
         self._github_trigger_service = github_trigger_service
@@ -158,6 +172,7 @@ class ConnectorService:
         self._xiaoluban_gateway_service = xiaoluban_gateway_service
         self._xiaoluban_im_listener_service = xiaoluban_im_listener_service
         self._w3_connector_service = w3_connector_service
+        self._runtime_tool_service = runtime_tool_service
         self._get_shared_github_token = get_shared_github_token or (lambda: None)
 
     async def list_connectors(self) -> ConnectorListResponse:
@@ -166,8 +181,10 @@ class ConnectorService:
         discord_accounts = await self._discord_gateway_service.list_accounts()
         wechat_accounts = await self._wechat_gateway_service.list_accounts_async()
         xiaoluban_accounts = await self._xiaoluban_gateway_service.list_accounts_async()
+        runtime_tools = await self._runtime_tool_service.list_tools()
         items = (
             self._github_item(github_accounts),
+            self._relay_knowledge_item(runtime_tools),
             self._discord_item(discord_accounts),
             self._feishu_item(feishu_accounts),
             self._wechat_item(wechat_accounts),
@@ -192,6 +209,8 @@ class ConnectorService:
             return await self._test_xiaoluban()
         if provider == ConnectorProvider.W3:
             return await self._w3_connector_service.test_connector_result()
+        if provider == ConnectorProvider.RELAY_KNOWLEDGE:
+            return await self._test_relay_knowledge()
         raise KeyError(f"Unknown connector_id: {connector_id}")
 
     def get_w3_connector(self) -> W3ConnectorStatusResponse:
@@ -245,6 +264,34 @@ class ConnectorService:
             last_activity_at=_latest(account.updated_at for account in accounts),
             last_error=last_error,
             capabilities=("repositories", "issues", "pull_requests", "actions"),
+        )
+
+    @staticmethod
+    def _relay_knowledge_item(runtime_tools: BinaryToolListResponse) -> ConnectorItem:
+        tool = _runtime_tool(runtime_tools, BinaryToolId.RELAY_KNOWLEDGE)
+        return ConnectorItem(
+            connector_id=ConnectorProvider.RELAY_KNOWLEDGE.value,
+            provider=ConnectorProvider.RELAY_KNOWLEDGE,
+            category=ConnectorCategory.DEVELOPMENT,
+            display_name="Relay Knowledge",
+            description=(
+                "Install and update the Relay Knowledge CLI for local knowledge "
+                "service workflows."
+            ),
+            status=_runtime_tool_connector_status(tool),
+            auth_type=ConnectorAuthType.CLI,
+            account_count=1 if tool.status == BinaryToolStatus.READY else 0,
+            enabled_count=1
+            if tool.status == BinaryToolStatus.READY and not tool.update_available
+            else 0,
+            last_activity_at=None,
+            last_error=tool.error_message,
+            capabilities=(
+                "cli_download",
+                "cli_upgrade",
+                "service_status",
+                "service_doctor",
+            ),
         )
 
     @staticmethod
@@ -395,6 +442,41 @@ class ConnectorService:
             last_activity_at=_latest(account.updated_at for account in accounts),
             last_error=None,
             capabilities=("im_forwarding", "notifications"),
+        )
+
+    async def _test_relay_knowledge(self) -> ConnectorTestResult:
+        runtime_tools = await self._runtime_tool_service.list_tools()
+        tool = _runtime_tool(runtime_tools, BinaryToolId.RELAY_KNOWLEDGE)
+        item = self._relay_knowledge_item(runtime_tools)
+        cli_ready = tool.status == BinaryToolStatus.READY
+        target_version_ok = cli_ready and not tool.update_available
+        checks = (
+            ConnectorHealthCheck(
+                name="cli_available",
+                ok=cli_ready,
+                message="Relay Knowledge CLI is installed."
+                if cli_ready
+                else "Relay Knowledge CLI is not installed.",
+            ),
+            ConnectorHealthCheck(
+                name="target_version",
+                ok=target_version_ok,
+                message=_relay_knowledge_version_message(tool)
+                if cli_ready
+                else "Relay Knowledge CLI is not installed.",
+            ),
+        )
+        ok = cli_ready and target_version_ok
+        return self._test_result(
+            item=item,
+            ok=ok,
+            message="Relay Knowledge CLI is ready."
+            if ok
+            else "Relay Knowledge CLI needs download or update.",
+            last_error=item.last_error,
+            runtime_running=None,
+            login_active=None,
+            checks=checks,
         )
 
     async def _test_github(self) -> ConnectorTestResult:
@@ -740,6 +822,44 @@ def _github_status(
     if configured_count == 0 and not shared_token_configured:
         return ConnectorStatus.NEEDS_CONFIG
     return ConnectorStatus.CONNECTED
+
+
+def _runtime_tool(
+    response: BinaryToolListResponse,
+    tool_id: BinaryToolId,
+) -> BinaryToolItem:
+    for item in response.items:
+        if item.tool_id == tool_id:
+            return item
+    return BinaryToolItem(
+        tool_id=tool_id,
+        display_name="Relay Knowledge CLI",
+        target_version=None,
+        source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+        status=BinaryToolStatus.MISSING,
+        executable_name=tool_id.value,
+        error_message="Runtime tool is not registered.",
+    )
+
+
+def _runtime_tool_connector_status(tool: BinaryToolItem) -> ConnectorStatus:
+    if tool.status == BinaryToolStatus.ERROR:
+        return ConnectorStatus.ERROR
+    if tool.status == BinaryToolStatus.READY:
+        return ConnectorStatus.CONNECTED
+    return ConnectorStatus.NEEDS_CONFIG
+
+
+def _relay_knowledge_version_message(tool: BinaryToolItem) -> str:
+    target_version = str(tool.target_version or "").strip()
+    version = str(tool.version or "").strip()
+    if tool.update_available and target_version:
+        return f"Relay Knowledge CLI can be updated to {target_version}."
+    if version:
+        return f"Relay Knowledge CLI version {version} is installed."
+    if target_version:
+        return f"Relay Knowledge CLI target version is {target_version}."
+    return "Relay Knowledge CLI version could not be determined."
 
 
 def _first_error(values: Iterable[str | None]) -> str | None:

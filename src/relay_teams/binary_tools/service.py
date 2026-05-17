@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
 from datetime import datetime, timezone
+import hashlib
 import io
+import json
 import os
 from os import pathsep
 from pathlib import Path
@@ -12,12 +14,14 @@ import platform
 import subprocess
 import tarfile
 import threading
+import time
 from types import TracebackType
 from typing import Protocol, cast
 import uuid
 import zipfile
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from relay_teams.binary_tools.models import (
     BinaryToolDownloadJob,
@@ -45,6 +49,11 @@ LOGGER = get_logger(__name__)
 
 RIPGREP_VERSION = "14.1.1"
 GITHUB_CLI_VERSION = "2.88.1"
+RELAY_KNOWLEDGE_VERSION = "1.0.0"
+RELAY_KNOWLEDGE_REPOSITORY = "coolplayagent/relay-knowledge"
+RELAY_KNOWLEDGE_LATEST_RELEASE_URL = (
+    f"https://api.github.com/repos/{RELAY_KNOWLEDGE_REPOSITORY}/releases/latest"
+)
 
 RIPGREP_PLATFORM_MAP: Mapping[str, Mapping[str, str]] = {
     "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
@@ -60,6 +69,15 @@ GITHUB_CLI_PLATFORM_MAP: Mapping[str, Mapping[str, str]] = {
     "x64-darwin": {"platform": "macOS_amd64", "extension": "zip"},
     "x64-linux": {"platform": "linux_amd64", "extension": "tar.gz"},
     "x64-windows": {"platform": "windows_amd64", "extension": "zip"},
+}
+
+RELAY_KNOWLEDGE_PLATFORM_MAP: Mapping[str, Mapping[str, str]] = {
+    "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
+    "arm64-linux": {"platform": "aarch64-unknown-linux-gnu", "extension": "tar.gz"},
+    "arm64-windows": {"platform": "aarch64-pc-windows-msvc", "extension": "zip"},
+    "x64-darwin": {"platform": "x86_64-apple-darwin", "extension": "tar.gz"},
+    "x64-linux": {"platform": "x86_64-unknown-linux-gnu", "extension": "tar.gz"},
+    "x64-windows": {"platform": "x86_64-pc-windows-msvc", "extension": "zip"},
 }
 
 _ARCH_ALIASES: Mapping[str, str] = {
@@ -79,6 +97,8 @@ _SYSTEM_ALIASES: Mapping[str, str] = {
 _VERSION_TIMEOUT_SECONDS = 5.0
 _NPM_INSTALL_TIMEOUT_SECONDS = 180.0
 _MANAGED_TOOL_INSTALL_LOCK_POLL_SECONDS = 0.05
+_LATEST_RELEASE_CACHE_SECONDS = 300.0
+_LATEST_RELEASE_TIMEOUT_SECONDS = 2.0
 _MANAGED_TOOL_INSTALL_LOCKS_LOCK = threading.Lock()
 _MANAGED_TOOL_INSTALL_LOCKS: dict[tuple[BinaryToolId, str], threading.Lock] = {}
 _CLAWHUB_INSTALL_LOCK = threading.Lock()
@@ -134,6 +154,14 @@ class BinaryToolDownloadError(RuntimeError):
     pass
 
 
+class BinaryToolReleaseTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_id: BinaryToolId
+    version: str | None = None
+    tag_name: str | None = None
+
+
 _DEFAULT_HTTP_CLIENT_FACTORY = cast(
     Callable[..., BinaryToolHttpClient],
     cast(object, create_async_http_client),
@@ -153,34 +181,55 @@ class BinaryToolService:
         ] = install_clawhub_via_npm,
         config_dir: Path | None = None,
         build_clawhub_install_env: Callable[[], Mapping[str, str]] | None = None,
+        get_github_token: Callable[[], str | None] | None = None,
+        resolve_latest_releases: bool = False,
     ) -> None:
         self._bin_dir = bin_dir
         self._create_http_client = create_http_client
         self._install_clawhub = install_clawhub
         self._config_dir = None if config_dir is None else config_dir.expanduser()
         self._build_clawhub_install_env = build_clawhub_install_env
+        self._get_github_token = get_github_token or _github_token_from_env
+        self._resolve_latest_releases = resolve_latest_releases
         self._jobs: dict[str, BinaryToolDownloadJob] = {}
         self._running_job_by_tool: dict[BinaryToolId, str] = {}
         self._latest_job_by_tool: dict[BinaryToolId, str] = {}
-        self._locks = {
-            BinaryToolId.RIPGREP: asyncio.Lock(),
-            BinaryToolId.GITHUB_CLI: asyncio.Lock(),
-            BinaryToolId.CLAWHUB: asyncio.Lock(),
+        self._release_target_cache: dict[
+            BinaryToolId, tuple[float, BinaryToolReleaseTarget]
+        ] = {}
+        self._release_target_locks = {
+            tool_id: asyncio.Lock() for tool_id in BinaryToolId
         }
+        self._locks = {tool_id: asyncio.Lock() for tool_id in BinaryToolId}
 
     async def list_tools(self) -> BinaryToolListResponse:
+        targets = await asyncio.gather(
+            *(self._resolve_release_target(tool_id) for tool_id in BinaryToolId)
+        )
         items = await asyncio.gather(
-            *(asyncio.to_thread(self.inspect_tool, tool_id) for tool_id in BinaryToolId)
+            *(
+                asyncio.to_thread(self._inspect_tool_for_target, target)
+                for target in targets
+            )
         )
         return BinaryToolListResponse(items=tuple(items))
 
     def inspect_tool(self, tool_id: BinaryToolId | str) -> BinaryToolItem:
         resolved_tool_id = self._normalize_tool_id(tool_id)
+        return self._inspect_tool_for_target(
+            self._default_release_target(resolved_tool_id)
+        )
+
+    def _inspect_tool_for_target(
+        self, target: BinaryToolReleaseTarget
+    ) -> BinaryToolItem:
+        resolved_tool_id = target.tool_id
         running_job_id = self._running_job_by_tool.get(resolved_tool_id)
         if running_job_id is not None:
             return self._item(
                 resolved_tool_id,
                 status=BinaryToolStatus.DOWNLOADING,
+                target_version=target.version,
                 download_job_id=running_job_id,
             )
 
@@ -197,18 +246,149 @@ class BinaryToolService:
                 return self._item(
                     resolved_tool_id,
                     status=BinaryToolStatus.ERROR,
+                    target_version=target.version,
                     download_job_id=latest_job.job_id,
                     error_message=latest_job.error_message,
                 )
-            return self._item(resolved_tool_id, status=BinaryToolStatus.MISSING)
+            return self._item(
+                resolved_tool_id,
+                status=BinaryToolStatus.MISSING,
+                target_version=target.version,
+            )
+
+        version = self.read_tool_version(resolved_tool_id, resolved_path)
 
         return self._item(
             resolved_tool_id,
             status=BinaryToolStatus.READY,
             path=resolved_path,
             path_source=self.resolve_path_source(resolved_tool_id, resolved_path),
-            version=self.read_tool_version(resolved_tool_id, resolved_path),
+            version=version,
+            target_version=target.version,
+            update_available=self._update_available(
+                resolved_tool_id,
+                version=version,
+                target_version=target.version,
+            ),
         )
+
+    async def _resolve_release_target(
+        self, tool_id: BinaryToolId
+    ) -> BinaryToolReleaseTarget:
+        if tool_id != BinaryToolId.RELAY_KNOWLEDGE or not self._resolve_latest_releases:
+            return self._default_release_target(tool_id)
+        now = time.monotonic()
+        cached = self._release_target_cache.get(tool_id)
+        if cached is not None and now - cached[0] <= _LATEST_RELEASE_CACHE_SECONDS:
+            return cached[1]
+        async with self._release_target_locks[tool_id]:
+            now = time.monotonic()
+            cached = self._release_target_cache.get(tool_id)
+            if cached is not None and now - cached[0] <= _LATEST_RELEASE_CACHE_SECONDS:
+                return cached[1]
+            try:
+                content = await self._download_bytes(
+                    RELAY_KNOWLEDGE_LATEST_RELEASE_URL,
+                    job_id=None,
+                    timeout_seconds=_LATEST_RELEASE_TIMEOUT_SECONDS,
+                    headers=self._github_api_headers(),
+                )
+                payload = _json_object(content)
+                tag_name = _string_value(payload, "tag_name")
+                if tag_name is None:
+                    target = self._default_release_target(tool_id)
+                    self._release_target_cache[tool_id] = (time.monotonic(), target)
+                    return target
+                version = _version_from_tag(tag_name)
+                target = BinaryToolReleaseTarget(
+                    tool_id=tool_id,
+                    version=version,
+                    tag_name=tag_name,
+                )
+                self._release_target_cache[tool_id] = (time.monotonic(), target)
+                return target
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to resolve latest Relay Knowledge release: %s",
+                    exc,
+                )
+                target = self._default_release_target(tool_id)
+                self._release_target_cache[tool_id] = (time.monotonic(), target)
+                return target
+
+    def _create_download_http_client(
+        self,
+        *,
+        timeout_seconds: float | None,
+        headers: Mapping[str, str] | None,
+    ) -> BinaryToolHttpClient:
+        if timeout_seconds is None:
+            return self._create_http_client(
+                follow_redirects=True,
+                headers=headers,
+            )
+        return self._create_http_client(
+            follow_redirects=True,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=timeout_seconds,
+        )
+
+    def _github_api_headers(self) -> Mapping[str, str]:
+        headers = {"Accept": "application/vnd.github+json"}
+        token = _normalize_secret_value(self._get_github_token())
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
+    async def _release_target_for_download(
+        self,
+        tool_id: BinaryToolId,
+        *,
+        target_version: str | None,
+    ) -> BinaryToolReleaseTarget:
+        if target_version is not None:
+            return BinaryToolReleaseTarget(
+                tool_id=tool_id,
+                version=target_version,
+                tag_name=_version_tag(target_version),
+            )
+        return await self._resolve_release_target(tool_id)
+
+    @staticmethod
+    def _default_release_target(tool_id: BinaryToolId) -> BinaryToolReleaseTarget:
+        if tool_id == BinaryToolId.RIPGREP:
+            return BinaryToolReleaseTarget(
+                tool_id=tool_id,
+                version=RIPGREP_VERSION,
+                tag_name=RIPGREP_VERSION,
+            )
+        if tool_id == BinaryToolId.GITHUB_CLI:
+            return BinaryToolReleaseTarget(
+                tool_id=tool_id,
+                version=GITHUB_CLI_VERSION,
+                tag_name=_version_tag(GITHUB_CLI_VERSION),
+            )
+        if tool_id == BinaryToolId.RELAY_KNOWLEDGE:
+            return BinaryToolReleaseTarget(
+                tool_id=tool_id,
+                version=RELAY_KNOWLEDGE_VERSION,
+                tag_name=_version_tag(RELAY_KNOWLEDGE_VERSION),
+            )
+        return BinaryToolReleaseTarget(tool_id=tool_id)
+
+    @staticmethod
+    def _update_available(
+        tool_id: BinaryToolId,
+        *,
+        version: str | None,
+        target_version: str | None,
+    ) -> bool:
+        if tool_id != BinaryToolId.RELAY_KNOWLEDGE:
+            return False
+        if version is None or target_version is None:
+            return False
+        return _version_is_newer(target_version, version)
 
     async def ensure_tool_path(
         self,
@@ -259,24 +439,31 @@ class BinaryToolService:
         if running_job_id is not None:
             return self._jobs[running_job_id]
 
-        existing_item = await asyncio.to_thread(self.inspect_tool, resolved_tool_id)
-        if existing_item.status == BinaryToolStatus.READY:
+        target = await self._resolve_release_target(resolved_tool_id)
+        existing_item = await asyncio.to_thread(self._inspect_tool_for_target, target)
+        if (
+            existing_item.status == BinaryToolStatus.READY
+            and not existing_item.update_available
+        ):
             return self._create_completed_job(
                 resolved_tool_id,
                 message=f"{existing_item.display_name} is already available.",
                 path=existing_item.path,
+                target_version=target.version,
             )
 
         running_job_id = self._running_job_by_tool.get(resolved_tool_id)
         if running_job_id is not None:
             return self._jobs[running_job_id]
 
+        action = "update" if existing_item.update_available else "download"
         job = BinaryToolDownloadJob(
             job_id=f"bin_{uuid.uuid4().hex}",
             tool_id=resolved_tool_id,
+            target_version=target.version,
             status=BinaryToolDownloadStatus.QUEUED,
             progress_percent=0,
-            message=f"Queued {self.display_name(resolved_tool_id)} download.",
+            message=f"Queued {self.display_name(resolved_tool_id)} {action}.",
         )
         self._jobs[job.job_id] = job
         self._running_job_by_tool[resolved_tool_id] = job.job_id
@@ -296,6 +483,8 @@ class BinaryToolService:
         target: Path,
         *,
         job_id: str | None = None,
+        target_version: str | None = None,
+        replace_existing: bool = False,
     ) -> None:
         resolved_tool_id = self._normalize_tool_id(tool_id)
         if resolved_tool_id == BinaryToolId.CLAWHUB:
@@ -303,30 +492,55 @@ class BinaryToolService:
 
         install_lock = _managed_tool_install_lock(resolved_tool_id, target)
         await _acquire_managed_tool_install_lock(install_lock)
+        temporary_target: Path | None = None
         try:
-            if target.is_file():
+            if target.is_file() and not replace_existing:
                 return
             platform_config = self._platform_config(resolved_tool_id)
-            url = self._download_url(resolved_tool_id, platform_config)
+            release_target = await self._release_target_for_download(
+                resolved_tool_id,
+                target_version=target_version,
+            )
+            url = self._download_url(
+                resolved_tool_id,
+                platform_config,
+                release_target=release_target,
+            )
             content = await self._download_bytes(url, job_id=job_id)
+            if resolved_tool_id == BinaryToolId.RELAY_KNOWLEDGE:
+                await self._verify_github_release_checksum(
+                    resolved_tool_id,
+                    platform_config,
+                    release_target=release_target,
+                    content=content,
+                )
             extension = platform_config["extension"]
             archive_executable_name = self._archive_executable_name(
                 resolved_tool_id, platform_config
             )
+            temporary_target = target.with_name(
+                f".{target.name}.{uuid.uuid4().hex}.tmp"
+            )
             if extension == "tar.gz":
                 self._extract_tarball(
                     content,
-                    target,
+                    temporary_target,
                     executable_name=archive_executable_name,
                 )
             else:
                 self._extract_zip(
                     content,
-                    target,
+                    temporary_target,
                     executable_name=archive_executable_name,
                 )
             if os.name != "nt":
-                os.chmod(target, 0o755)  # nosec B103 - executable permission needed
+                os.chmod(temporary_target, 0o755)  # nosec B103 - executable permission needed
+            temporary_target.replace(target)
+            temporary_target.unlink(missing_ok=True)
+        except Exception:
+            if temporary_target is not None:
+                temporary_target.unlink(missing_ok=True)
+            raise
         finally:
             install_lock.release()
 
@@ -336,6 +550,10 @@ class BinaryToolService:
             return resolve_existing_clawhub_path()
 
         managed_path = self.managed_target_path(resolved_tool_id)
+        if resolved_tool_id == BinaryToolId.RELAY_KNOWLEDGE:
+            if managed_path.is_file():
+                return managed_path
+            return self.resolve_system_tool_path(resolved_tool_id)
         if resolved_tool_id == BinaryToolId.RIPGREP and managed_path.is_file():
             return managed_path
         if resolved_tool_id == BinaryToolId.RIPGREP:
@@ -466,6 +684,13 @@ class BinaryToolService:
                 "ripgrep "
             ):
                 return first_line.removeprefix("ripgrep ").split(" ", maxsplit=1)[0]
+            if (
+                resolved_tool_id == BinaryToolId.RELAY_KNOWLEDGE
+                and first_line.startswith("relay-knowledge ")
+            ):
+                return first_line.removeprefix("relay-knowledge ").split(
+                    " ", maxsplit=1
+                )[0]
             return first_line
         return None
 
@@ -488,6 +713,8 @@ class BinaryToolService:
             return "ripgrep"
         if tool_id == BinaryToolId.GITHUB_CLI:
             return "GitHub CLI"
+        if tool_id == BinaryToolId.RELAY_KNOWLEDGE:
+            return "Relay Knowledge CLI"
         return "ClawHub CLI"
 
     @staticmethod
@@ -507,6 +734,8 @@ class BinaryToolService:
         path: Path | None = None,
         path_source: BinaryToolPathSource | None = None,
         version: str | None = None,
+        target_version: str | None = None,
+        update_available: bool = False,
         download_job_id: str | None = None,
         error_message: str | None = None,
     ) -> BinaryToolItem:
@@ -514,6 +743,8 @@ class BinaryToolService:
             tool_id=tool_id,
             display_name=self.display_name(tool_id),
             version=version,
+            target_version=target_version,
+            update_available=update_available,
             source_kind=(
                 BinaryToolSourceKind.NPM_GLOBAL
                 if tool_id == BinaryToolId.CLAWHUB
@@ -592,8 +823,16 @@ class BinaryToolService:
     async def _install_tool_for_job(self, job: BinaryToolDownloadJob) -> Path:
         async with self._locks[job.tool_id]:
             existing = self.resolve_existing_tool_path(job.tool_id)
+            existing_update_available = False
             if existing is not None:
-                return existing
+                existing_version = self.read_tool_version(job.tool_id, existing)
+                existing_update_available = self._update_available(
+                    job.tool_id,
+                    version=existing_version,
+                    target_version=job.target_version,
+                )
+                if not existing_update_available:
+                    return existing
             if job.tool_id == BinaryToolId.CLAWHUB:
                 self._update_job(
                     job.job_id,
@@ -612,13 +851,29 @@ class BinaryToolService:
                 )
                 return path
             target = self.managed_target_path(job.tool_id, ensure_parent=True)
-            await self.download_tool_to_path(job.tool_id, target, job_id=job.job_id)
+            await self.download_tool_to_path(
+                job.tool_id,
+                target,
+                job_id=job.job_id,
+                target_version=job.target_version,
+                replace_existing=existing_update_available,
+            )
             return target
 
-    async def _download_bytes(self, url: str, *, job_id: str | None) -> bytes:
+    async def _download_bytes(
+        self,
+        url: str,
+        *,
+        job_id: str | None,
+        timeout_seconds: float | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> bytes:
         chunks: list[bytes] = []
         downloaded = 0
-        async with self._create_http_client(follow_redirects=True) as client:
+        async with self._create_download_http_client(
+            timeout_seconds=timeout_seconds,
+            headers=headers,
+        ) as client:
             async with client.stream("GET", url) as response:
                 if response.status_code != 200:
                     raise BinaryToolDownloadError(
@@ -651,11 +906,16 @@ class BinaryToolService:
     @staticmethod
     def _platform_config(tool_id: BinaryToolId) -> Mapping[str, str]:
         platform_key = get_platform_key()
-        mapping = (
-            RIPGREP_PLATFORM_MAP
-            if tool_id == BinaryToolId.RIPGREP
-            else GITHUB_CLI_PLATFORM_MAP
-        )
+        if tool_id == BinaryToolId.RIPGREP:
+            mapping = RIPGREP_PLATFORM_MAP
+        elif tool_id == BinaryToolId.GITHUB_CLI:
+            mapping = GITHUB_CLI_PLATFORM_MAP
+        elif tool_id == BinaryToolId.RELAY_KNOWLEDGE:
+            mapping = RELAY_KNOWLEDGE_PLATFORM_MAP
+        else:
+            raise BinaryToolDownloadError(
+                f"Unsupported platform download for {tool_id.value}"
+            )
         config = mapping.get(platform_key)
         if config is None:
             raise BinaryToolDownloadError(
@@ -664,20 +924,96 @@ class BinaryToolService:
         return config
 
     @staticmethod
-    def _download_url(tool_id: BinaryToolId, config: Mapping[str, str]) -> str:
-        platform_name = config["platform"]
-        extension = config["extension"]
+    def _download_url(
+        tool_id: BinaryToolId,
+        config: Mapping[str, str],
+        *,
+        release_target: BinaryToolReleaseTarget,
+    ) -> str:
+        filename = BinaryToolService._archive_filename(
+            tool_id,
+            config,
+            release_target=release_target,
+        )
         if tool_id == BinaryToolId.RIPGREP:
-            filename = f"ripgrep-{RIPGREP_VERSION}-{platform_name}.{extension}"
             return (
                 "https://github.com/BurntSushi/ripgrep/releases/download/"
                 f"{RIPGREP_VERSION}/{filename}"
             )
-        filename = f"gh_{GITHUB_CLI_VERSION}_{platform_name}.{extension}"
+        if tool_id == BinaryToolId.GITHUB_CLI:
+            return (
+                "https://github.com/cli/cli/releases/download/"
+                f"v{GITHUB_CLI_VERSION}/{filename}"
+            )
+        tag_name = release_target.tag_name or _version_tag(RELAY_KNOWLEDGE_VERSION)
         return (
-            "https://github.com/cli/cli/releases/download/"
-            f"v{GITHUB_CLI_VERSION}/{filename}"
+            "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+            f"{tag_name}/{filename}"
         )
+
+    @staticmethod
+    def _archive_filename(
+        tool_id: BinaryToolId,
+        config: Mapping[str, str],
+        *,
+        release_target: BinaryToolReleaseTarget,
+    ) -> str:
+        platform_name = config["platform"]
+        extension = config["extension"]
+        if tool_id == BinaryToolId.RIPGREP:
+            return f"ripgrep-{RIPGREP_VERSION}-{platform_name}.{extension}"
+        if tool_id == BinaryToolId.GITHUB_CLI:
+            return f"gh_{GITHUB_CLI_VERSION}_{platform_name}.{extension}"
+        version = release_target.version or RELAY_KNOWLEDGE_VERSION
+        return f"relay-knowledge-{_version_tag(version)}-{platform_name}.{extension}"
+
+    async def _verify_github_release_checksum(
+        self,
+        tool_id: BinaryToolId,
+        config: Mapping[str, str],
+        *,
+        release_target: BinaryToolReleaseTarget,
+        content: bytes,
+    ) -> None:
+        expected_checksum = await self._expected_release_checksum(
+            tool_id,
+            config,
+            release_target=release_target,
+        )
+        actual_checksum = hashlib.sha256(content).hexdigest()
+        if actual_checksum != expected_checksum:
+            filename = self._archive_filename(
+                tool_id,
+                config,
+                release_target=release_target,
+            )
+            raise BinaryToolDownloadError(
+                f"Checksum mismatch for {filename}: expected {expected_checksum}, "
+                f"got {actual_checksum}"
+            )
+
+    async def _expected_release_checksum(
+        self,
+        tool_id: BinaryToolId,
+        config: Mapping[str, str],
+        *,
+        release_target: BinaryToolReleaseTarget,
+    ) -> str:
+        tag_name = release_target.tag_name or _version_tag(RELAY_KNOWLEDGE_VERSION)
+        checksum_url = (
+            "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+            f"{tag_name}/checksums.txt"
+        )
+        content = await self._download_bytes(checksum_url, job_id=None)
+        filename = self._archive_filename(
+            tool_id,
+            config,
+            release_target=release_target,
+        )
+        expected_checksum = _checksum_for_filename(content, filename)
+        if expected_checksum is None:
+            raise BinaryToolDownloadError(f"Checksum not found for {filename}")
+        return expected_checksum
 
     @staticmethod
     def _archive_executable_name(
@@ -731,10 +1067,12 @@ class BinaryToolService:
         *,
         message: str,
         path: str | None,
+        target_version: str | None,
     ) -> BinaryToolDownloadJob:
         job = BinaryToolDownloadJob(
             job_id=f"bin_{uuid.uuid4().hex}",
             tool_id=tool_id,
+            target_version=target_version,
             status=BinaryToolDownloadStatus.SUCCEEDED,
             downloaded_bytes=0,
             total_bytes=None,
@@ -814,6 +1152,94 @@ def get_platform_key() -> str:
     return f"{arch}-{system}"
 
 
+def _json_object(content: bytes) -> Mapping[str, object]:
+    try:
+        payload = cast(object, json.loads(content.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BinaryToolDownloadError(
+            "GitHub release metadata is not valid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise BinaryToolDownloadError("GitHub release metadata is not an object")
+    if not all(isinstance(key, str) for key in payload):
+        raise BinaryToolDownloadError(
+            "GitHub release metadata contains non-string keys"
+        )
+    return cast(Mapping[str, object], payload)
+
+
+def _string_value(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _version_tag(version: str) -> str:
+    normalized = str(version or "").strip()
+    if normalized.startswith("v"):
+        return normalized
+    return f"v{normalized}"
+
+
+def _version_from_tag(tag_name: str) -> str:
+    normalized = str(tag_name or "").strip()
+    if normalized.startswith("v"):
+        return normalized[1:]
+    return normalized
+
+
+def _normalize_version(version: str) -> str:
+    return _version_from_tag(version).strip()
+
+
+def _version_is_newer(target_version: str, installed_version: str) -> bool:
+    target_segments = _version_segments(target_version)
+    installed_segments = _version_segments(installed_version)
+    if target_segments is None or installed_segments is None:
+        return False
+    segment_count = max(len(target_segments), len(installed_segments))
+    padded_target = target_segments + (0,) * (segment_count - len(target_segments))
+    padded_installed = installed_segments + (0,) * (
+        segment_count - len(installed_segments)
+    )
+    return padded_target > padded_installed
+
+
+def _version_segments(version: str) -> tuple[int, ...] | None:
+    normalized = _normalize_version(version)
+    if not normalized:
+        return None
+    core = normalized.split("+", 1)[0].split("-", 1)[0]
+    raw_segments = core.split(".")
+    if not raw_segments:
+        return None
+    segments: list[int] = []
+    for raw_segment in raw_segments:
+        if not raw_segment.isdigit():
+            return None
+        segments.append(int(raw_segment))
+    return tuple(segments)
+
+
+def _checksum_for_filename(content: bytes, filename: str) -> str | None:
+    expected_filename = filename.strip()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BinaryToolDownloadError("Release checksums are not valid UTF-8") from exc
+    for line in text.splitlines():
+        columns = line.strip().split()
+        if len(columns) != 2:
+            continue
+        checksum, candidate_filename = columns
+        candidate_filename = candidate_filename.removeprefix("*")
+        if candidate_filename == expected_filename:
+            return checksum.strip().lower()
+    return None
+
+
 def _windows_path_extensions() -> tuple[str, ...]:
     raw_extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     suffixes: list[str] = []
@@ -823,6 +1249,17 @@ def _windows_path_extensions() -> tuple[str, ...]:
             continue
         suffixes.append(normalized if normalized.startswith(".") else f".{normalized}")
     return tuple(dict.fromkeys(suffixes)) or (".com", ".exe", ".bat", ".cmd")
+
+
+def _github_token_from_env() -> str | None:
+    return _normalize_secret_value(
+        os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    )
+
+
+def _normalize_secret_value(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
 
 
 def _managed_tool_install_lock(

@@ -168,6 +168,7 @@ const DISCORD_PLATFORM = 'discord';
 const XIAOLUBAN_PLATFORM = 'xiaoluban';
 const WECHAT_PLATFORM = 'wechat';
 const W3_PLATFORM = 'w3';
+const RELAY_KNOWLEDGE_PLATFORM = 'relay-knowledge';
 const XIAOLUBAN_NO_WORKSPACES_VALUE = '__no_xiaoluban_notification_workspaces__';
 const XIAOLUBAN_ALL_WORKSPACES_VALUE = '__all_xiaoluban_notification_workspaces__';
 const DEFAULT_TRIGGER_RULE = 'mention_only';
@@ -6425,6 +6426,10 @@ async function handleOpenConnectorCard(provider) {
         renderGatewayFeatureModal();
         return;
     }
+    if (normalizedProvider === RELAY_KNOWLEDGE_PLATFORM) {
+        handleOpenRuntimeToolsModal();
+        return;
+    }
     const item = getConnectorItemByProvider(normalizedProvider);
     if (Number(item?.account_count || 0) === 0) {
         await handleConnectConnectorFromModal(normalizedProvider);
@@ -6446,6 +6451,10 @@ async function handleManageConnectorCard(provider) {
     }
     if (normalizedProvider === W3_PLATFORM) {
         await loadW3ConnectorState();
+    }
+    if (normalizedProvider === RELAY_KNOWLEDGE_PLATFORM) {
+        handleOpenRuntimeToolsModal();
+        return;
     }
     currentGatewayFeatureState = {
         ...currentGatewayFeatureState,
@@ -6718,6 +6727,10 @@ async function handleConnectConnectorFromModal(provider) {
             connectorModalProvider: normalizedProvider,
         };
         renderGatewayFeatureModal();
+        return;
+    }
+    if (normalizedProvider === RELAY_KNOWLEDGE_PLATFORM) {
+        handleOpenRuntimeToolsModal();
     }
 }
 

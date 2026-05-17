@@ -970,15 +970,17 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `relay_teams.gateway.discord`: `discord_accounts`, `discord_inbound_queue`.
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.connector`: no SQLite tables. Connector status is derived from
-  `triggers` GitHub rows, the existing gateway account tables, and W3 connector
-  metadata stored under the app config directory. W3 writes non-sensitive JSON
-  configuration to `connectors/w3.json`, stores its password in the unified
-  secret store, and never persists the raw MaaS `cloudDragonTokens.authToken`.
-  That token is resolved on demand as the W3 `WEB_TOKEN` / request
-  `X-Auth-Token`. MaaS and CodeAgent password model profiles may store
-  `auth_source = "w3"` in `model.json`; that is only a reference to the W3
-  connector credentials, so W3 password updates do not rewrite model profile
-  secrets.
+  `triggers` GitHub rows, the existing gateway account tables, runtime CLI tool
+  status for Relay Knowledge, and W3 connector metadata stored under the app
+  config directory. The Relay Knowledge connector does not create tables; its
+  managed binary is downloaded into the app bin directory. W3 writes
+  non-sensitive JSON configuration to `connectors/w3.json`, stores its password
+  in the unified secret store, and never persists the raw MaaS
+  `cloudDragonTokens.authToken`. That token is resolved on demand as the W3
+  `WEB_TOKEN` / request `X-Auth-Token`. MaaS and CodeAgent password model
+  profiles may store `auth_source = "w3"` in `model.json`; that is only a
+  reference to the W3 connector credentials, so W3 password updates do not
+  rewrite model profile secrets.
 - `relay_teams.memory`: `memory_entries`.
 - Role document files: role Markdown front matter stores `RoleDefinition`
   metadata, including the optional `contract` object for behavioral
