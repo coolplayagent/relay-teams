@@ -11,6 +11,7 @@ const CONNECTOR_ICON_BY_PROVIDER = Object.freeze({
     wechat: '/assets/connectors/wechat.svg',
     xiaoluban: '/assets/connectors/xiaoluban.svg',
     w3: '/assets/connectors/w3.svg',
+    'relay-knowledge': '/assets/connectors/relay-knowledge.svg',
 });
 
 const CONNECTOR_GROUP_BY_PROVIDER = Object.freeze({
@@ -20,6 +21,7 @@ const CONNECTOR_GROUP_BY_PROVIDER = Object.freeze({
     wechat: 'internal',
     xiaoluban: 'internal',
     w3: 'official',
+    'relay-knowledge': 'official',
 });
 
 const CONNECTOR_GROUP_LABEL_KEYS = Object.freeze({
@@ -42,6 +44,7 @@ const PROVIDER_NAME_KEYS = Object.freeze({
     wechat: 'feature.connectors.provider.wechat.name',
     xiaoluban: 'feature.connectors.provider.xiaoluban.name',
     w3: 'feature.connectors.provider.w3.name',
+    'relay-knowledge': 'feature.connectors.provider.relay_knowledge.name',
 });
 
 const PROVIDER_DESCRIPTION_KEYS = Object.freeze({
@@ -51,6 +54,7 @@ const PROVIDER_DESCRIPTION_KEYS = Object.freeze({
     wechat: 'feature.connectors.provider.wechat.description',
     xiaoluban: 'feature.connectors.provider.xiaoluban.description',
     w3: 'feature.connectors.provider.w3.description',
+    'relay-knowledge': 'feature.connectors.provider.relay_knowledge.description',
 });
 
 const CAPABILITY_LABEL_KEYS = Object.freeze({
@@ -71,6 +75,10 @@ const CAPABILITY_LABEL_KEYS = Object.freeze({
     maas_models: 'feature.connectors.capability.maas_models',
     codeagent_models: 'feature.connectors.capability.codeagent_models',
     model_import: 'feature.connectors.capability.model_import',
+    cli_download: 'feature.connectors.capability.cli_download',
+    cli_upgrade: 'feature.connectors.capability.cli_upgrade',
+    service_status: 'feature.connectors.capability.service_status',
+    service_doctor: 'feature.connectors.capability.service_doctor',
 });
 
 const CONNECT_ACTION_LABEL_KEYS = Object.freeze({
@@ -272,9 +280,13 @@ function renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs) {
     const cardStatusClass = hasLoadedItems
         ? summary.error > 0
             ? 'error'
-            : summary.missing > 0
+            : summary.downloading > 0
                 ? 'needs_config'
-                : 'connected'
+                : summary.missing > 0
+                ? 'needs_config'
+                : summary.outdated > 0
+                    ? 'needs_config'
+                    : 'connected'
         : 'needs_config';
     return `
         <section class="connectors-section connectors-runtime-tools">
@@ -321,10 +333,19 @@ function renderRuntimeToolRow(item, runtimeToolJobs) {
     const jobStatus = String(job?.status || '').trim();
     const isBusy = status === 'downloading' || jobStatus === 'running' || jobStatus === 'queued';
     const isReady = status === 'ready' || jobStatus === 'succeeded';
+    const updateAvailable = item?.update_available === true && jobStatus !== 'succeeded';
     const path = String(job?.path || item?.path || '').trim();
     const version = String(item?.version || '').trim();
+    const targetVersion = String(item?.target_version || '').trim();
     const source = formatRuntimeToolSource(item?.path_source);
-    const detail = [version ? formatMessage('feature.connectors.runtime_tools.version', { version }) : '', source, path]
+    const detail = [
+        version ? formatMessage('feature.connectors.runtime_tools.version', { version }) : '',
+        updateAvailable && targetVersion
+            ? formatMessage('feature.connectors.runtime_tools.update_available', { version: targetVersion })
+            : '',
+        source,
+        path,
+    ]
         .map(value => String(value || '').trim())
         .filter(Boolean)
         .join(' · ');
@@ -338,9 +359,9 @@ function renderRuntimeToolRow(item, runtimeToolJobs) {
                 ${job?.error_message || item?.error_message ? `<p class="connectors-runtime-error">${escapeHtml(job?.error_message || item?.error_message)}</p>` : ''}
             </div>
             <div class="connectors-runtime-actions">
-                ${isReady ? '' : `
+                ${isReady && !updateAvailable ? '' : `
                     <button class="connectors-card-action" type="button" data-runtime-tool-download="${escapeHtml(toolId)}"${isBusy ? ' disabled' : ''}>
-                        ${escapeHtml(isBusy ? t('feature.connectors.runtime_tools.downloading') : t('feature.connectors.runtime_tools.download'))}
+                        ${escapeHtml(formatRuntimeToolActionLabel({ isBusy, updateAvailable }))}
                     </button>
                 `}
             </div>
@@ -366,7 +387,9 @@ function summarizeRuntimeTools(items, runtimeToolJobs) {
             : jobStatus === 'failed'
                 ? 'error'
                 : String(item?.status || 'missing').trim();
-        if (status === 'ready' || jobStatus === 'succeeded') {
+        if (item?.update_available === true && status === 'ready' && jobStatus !== 'succeeded') {
+            summary.outdated += 1;
+        } else if (status === 'ready' || jobStatus === 'succeeded') {
             summary.ready += 1;
         } else if (status === 'downloading') {
             summary.downloading += 1;
@@ -376,13 +399,14 @@ function summarizeRuntimeTools(items, runtimeToolJobs) {
             summary.missing += 1;
         }
         return summary;
-    }, { ready: 0, missing: 0, downloading: 0, error: 0 });
+    }, { ready: 0, missing: 0, outdated: 0, downloading: 0, error: 0 });
 }
 
 function formatRuntimeToolSummary(summary) {
     return formatMessage('feature.connectors.runtime_tools.summary', {
         ready: summary.ready,
         missing: summary.missing,
+        outdated: summary.outdated,
         downloading: summary.downloading,
         error: summary.error,
     });
@@ -395,10 +419,24 @@ function formatRuntimeToolCardStatus(summary) {
     if (summary.error > 0) {
         return t('feature.connectors.runtime_tools.status.error');
     }
+    if (summary.outdated > 0) {
+        return t('feature.connectors.runtime_tools.status.update_available');
+    }
     if (summary.missing > 0) {
         return t('feature.connectors.runtime_tools.status.missing');
     }
     return t('feature.connectors.runtime_tools.status.ready');
+}
+
+function formatRuntimeToolActionLabel({ isBusy, updateAvailable }) {
+    if (isBusy) {
+        return updateAvailable
+            ? t('feature.connectors.runtime_tools.updating')
+            : t('feature.connectors.runtime_tools.downloading');
+    }
+    return updateAvailable
+        ? t('feature.connectors.runtime_tools.update')
+        : t('feature.connectors.runtime_tools.download');
 }
 
 function renderRuntimeToolProgress(job) {
@@ -433,6 +471,9 @@ function formatRuntimeToolSource(value) {
 }
 
 function formatCardActionLabel(provider, status, accountCount) {
+    if (provider === 'relay-knowledge') {
+        return t('feature.connectors.runtime_tools.open');
+    }
     if (provider === 'github') {
         return status === 'connected'
             ? t('feature.connectors.action.configure')

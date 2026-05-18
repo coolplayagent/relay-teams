@@ -4,6 +4,13 @@ from datetime import UTC, datetime
 
 import pytest
 
+from relay_teams.binary_tools import (
+    BinaryToolId,
+    BinaryToolItem,
+    BinaryToolListResponse,
+    BinaryToolSourceKind,
+    BinaryToolStatus,
+)
 from relay_teams.connector import ConnectorService, ConnectorStatus
 from relay_teams.connector.models import (
     ConnectorAuthType,
@@ -46,6 +53,7 @@ from relay_teams.triggers import (
     GitHubTriggerAccountRecord,
     GitHubTriggerAccountStatus,
 )
+from relay_teams.connector import service as connector_service_module
 
 
 class _GitHubService:
@@ -219,6 +227,37 @@ class _W3ConnectorService:
         )
 
 
+class _RuntimeToolService:
+    def __init__(
+        self,
+        relay_knowledge_status: BinaryToolStatus = BinaryToolStatus.MISSING,
+        *,
+        relay_knowledge_version: str | None = None,
+        relay_knowledge_target_version: str | None = "1.0.0",
+        relay_knowledge_update_available: bool = False,
+    ) -> None:
+        self._relay_knowledge_status = relay_knowledge_status
+        self._relay_knowledge_version = relay_knowledge_version
+        self._relay_knowledge_target_version = relay_knowledge_target_version
+        self._relay_knowledge_update_available = relay_knowledge_update_available
+
+    async def list_tools(self) -> BinaryToolListResponse:
+        return BinaryToolListResponse(
+            items=(
+                BinaryToolItem(
+                    tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+                    display_name="Relay Knowledge CLI",
+                    version=self._relay_knowledge_version,
+                    target_version=self._relay_knowledge_target_version,
+                    update_available=self._relay_knowledge_update_available,
+                    source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+                    status=self._relay_knowledge_status,
+                    executable_name="relay-knowledge",
+                ),
+            )
+        )
+
+
 @pytest.mark.asyncio
 async def test_connector_summary_uses_real_builtin_providers_only() -> None:
     service = _build_service(
@@ -229,20 +268,23 @@ async def test_connector_summary_uses_real_builtin_providers_only() -> None:
         xiaoluban_accounts=(_xiaoluban_account(),),
         feishu_running_ids=("fs_1",),
         w3_status=ConnectorStatus.CONNECTED,
+        relay_knowledge_status=BinaryToolStatus.READY,
+        relay_knowledge_version="1.0.0",
     )
 
     response = await service.list_connectors()
 
     assert [item.provider.value for item in response.items] == [
         "github",
+        "relay-knowledge",
         "discord",
         "feishu",
         "wechat",
         "xiaoluban",
         "w3",
     ]
-    assert response.summary.total == 6
-    assert response.summary.connected == 6
+    assert response.summary.total == 7
+    assert response.summary.connected == 7
 
 
 @pytest.mark.asyncio
@@ -253,13 +295,14 @@ async def test_empty_accounts_need_config() -> None:
 
     assert {item.connector_id: item.status for item in response.items} == {
         "github": ConnectorStatus.NEEDS_CONFIG,
+        "relay-knowledge": ConnectorStatus.NEEDS_CONFIG,
         "discord": ConnectorStatus.NEEDS_CONFIG,
         "feishu": ConnectorStatus.NEEDS_CONFIG,
         "wechat": ConnectorStatus.NEEDS_CONFIG,
         "xiaoluban": ConnectorStatus.NEEDS_CONFIG,
         "w3": ConnectorStatus.NEEDS_CONFIG,
     }
-    assert response.summary.needs_config == 6
+    assert response.summary.needs_config == 7
 
 
 @pytest.mark.asyncio
@@ -309,7 +352,7 @@ async def test_disabled_accounts_are_reported_disabled() -> None:
     assert {
         connector_id: status
         for connector_id, status in statuses.items()
-        if connector_id != "w3"
+        if connector_id not in {"relay-knowledge", "w3"}
     } == {
         "github": ConnectorStatus.DISABLED,
         "discord": ConnectorStatus.DISABLED,
@@ -317,6 +360,7 @@ async def test_disabled_accounts_are_reported_disabled() -> None:
         "wechat": ConnectorStatus.DISABLED,
         "xiaoluban": ConnectorStatus.DISABLED,
     }
+    assert statuses["relay-knowledge"] == ConnectorStatus.NEEDS_CONFIG
     assert statuses["w3"] == ConnectorStatus.NEEDS_CONFIG
     assert response.summary.disabled == 5
 
@@ -350,6 +394,8 @@ async def test_provider_test_results_include_runtime_checks() -> None:
         wechat_accounts=(_wechat_account(),),
         xiaoluban_accounts=(_xiaoluban_account(),),
         feishu_running_ids=("fs_1",),
+        relay_knowledge_status=BinaryToolStatus.READY,
+        relay_knowledge_version="1.0.0",
     )
 
     github = await service.test_connector("github")
@@ -357,6 +403,7 @@ async def test_provider_test_results_include_runtime_checks() -> None:
     feishu = await service.test_connector("feishu")
     wechat = await service.test_connector("wechat")
     xiaoluban = await service.test_connector("xiaoluban")
+    relay_knowledge = await service.test_connector("relay-knowledge")
     w3 = await service.test_connector("w3")
 
     assert github.ok is True
@@ -364,7 +411,97 @@ async def test_provider_test_results_include_runtime_checks() -> None:
     assert feishu.runtime_running is True
     assert wechat.login_active is True
     assert xiaoluban.runtime_running is True
+    assert relay_knowledge.ok is True
     assert w3.ok is False
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_connector_reports_available_update() -> None:
+    service = _build_service(
+        relay_knowledge_status=BinaryToolStatus.READY,
+        relay_knowledge_version="1.0.0",
+        relay_knowledge_target_version="1.1.0",
+        relay_knowledge_update_available=True,
+    )
+
+    response = await service.list_connectors()
+    relay_knowledge = next(
+        item for item in response.items if item.connector_id == "relay-knowledge"
+    )
+    result = await service.test_connector("relay-knowledge")
+
+    assert relay_knowledge.status == ConnectorStatus.CONNECTED
+    assert relay_knowledge.auth_type == ConnectorAuthType.CLI
+    assert "cli_upgrade" in relay_knowledge.capabilities
+    assert result.ok is False
+    assert {check.name: check.ok for check in result.checks}["target_version"] is False
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_connector_fails_target_version_when_cli_missing() -> (
+    None
+):
+    service = _build_service(
+        relay_knowledge_status=BinaryToolStatus.MISSING,
+        relay_knowledge_target_version="1.1.0",
+    )
+
+    result = await service.test_connector("relay-knowledge")
+
+    checks = {check.name: (check.ok, check.message) for check in result.checks}
+    assert result.ok is False
+    assert checks["cli_available"] == (False, "Relay Knowledge CLI is not installed.")
+    assert checks["target_version"] == (
+        False,
+        "Relay Knowledge CLI is not installed.",
+    )
+
+
+def test_relay_knowledge_runtime_tool_fallback_status_and_messages() -> None:
+    fallback = connector_service_module._runtime_tool(
+        BinaryToolListResponse(items=()),
+        BinaryToolId.RELAY_KNOWLEDGE,
+    )
+    error_tool = BinaryToolItem(
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        display_name="Relay Knowledge CLI",
+        target_version=None,
+        source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+        status=BinaryToolStatus.ERROR,
+        executable_name="relay-knowledge",
+        error_message="download failed",
+    )
+    target_only_tool = BinaryToolItem(
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        display_name="Relay Knowledge CLI",
+        target_version="1.2.0",
+        source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+        status=BinaryToolStatus.MISSING,
+        executable_name="relay-knowledge",
+    )
+    unknown_version_tool = BinaryToolItem(
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        display_name="Relay Knowledge CLI",
+        target_version=None,
+        source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+        status=BinaryToolStatus.MISSING,
+        executable_name="relay-knowledge",
+    )
+
+    assert fallback.status == BinaryToolStatus.MISSING
+    assert fallback.error_message == "Runtime tool is not registered."
+    assert (
+        connector_service_module._runtime_tool_connector_status(error_tool)
+        == ConnectorStatus.ERROR
+    )
+    assert (
+        connector_service_module._relay_knowledge_version_message(target_only_tool)
+        == "Relay Knowledge CLI target version is 1.2.0."
+    )
+    assert (
+        connector_service_module._relay_knowledge_version_message(unknown_version_tool)
+        == "Relay Knowledge CLI version could not be determined."
+    )
 
 
 @pytest.mark.asyncio
@@ -459,6 +596,10 @@ def _build_service(
     feishu_running_ids: tuple[str, ...] = (),
     shared_github_token: str | None = None,
     w3_status: ConnectorStatus = ConnectorStatus.NEEDS_CONFIG,
+    relay_knowledge_status: BinaryToolStatus = BinaryToolStatus.MISSING,
+    relay_knowledge_version: str | None = None,
+    relay_knowledge_target_version: str | None = "1.0.0",
+    relay_knowledge_update_available: bool = False,
 ) -> ConnectorService:
     resolved_github_tokens = (
         {
@@ -479,6 +620,12 @@ def _build_service(
         xiaoluban_gateway_service=_XiaolubanService(xiaoluban_accounts),
         xiaoluban_im_listener_service=_XiaolubanListenerService(),
         w3_connector_service=_W3ConnectorService(w3_status),
+        runtime_tool_service=_RuntimeToolService(
+            relay_knowledge_status,
+            relay_knowledge_version=relay_knowledge_version,
+            relay_knowledge_target_version=relay_knowledge_target_version,
+            relay_knowledge_update_available=relay_knowledge_update_available,
+        ),
         get_shared_github_token=lambda: shared_github_token,
     )
 

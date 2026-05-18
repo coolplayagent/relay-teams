@@ -11,6 +11,7 @@ class BinaryToolId(str, Enum):
     RIPGREP = "rg"
     GITHUB_CLI = "gh"
     CLAWHUB = "clawhub"
+    RELAY_KNOWLEDGE = "relay-knowledge"
 
 
 class BinaryToolSourceKind(str, Enum):
@@ -44,6 +45,8 @@ class BinaryToolItem(BaseModel):
     tool_id: BinaryToolId
     display_name: str = Field(min_length=1)
     version: str | None = None
+    target_version: str | None = None
+    update_available: bool = False
     source_kind: BinaryToolSourceKind
     status: BinaryToolStatus
     path_source: BinaryToolPathSource | None = None
@@ -64,6 +67,7 @@ class BinaryToolDownloadJob(BaseModel):
 
     job_id: str = Field(min_length=1)
     tool_id: BinaryToolId
+    target_version: str | None = None
     status: BinaryToolDownloadStatus
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

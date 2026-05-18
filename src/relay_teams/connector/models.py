@@ -16,6 +16,7 @@ class ConnectorProvider(str, Enum):
     WECHAT = "wechat"
     XIAOLUBAN = "xiaoluban"
     W3 = "w3"
+    RELAY_KNOWLEDGE = "relay-knowledge"
 
 
 class ConnectorCategory(str, Enum):
@@ -39,6 +40,7 @@ class ConnectorAuthType(str, Enum):
     WEBHOOK = "webhook"
     QR_LOGIN = "qr_login"
     USERNAME_PASSWORD = "username_password"
+    CLI = "cli"
 
 
 class ConnectorSummary(BaseModel):

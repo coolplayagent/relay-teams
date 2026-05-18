@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+import hashlib
 import io
 from pathlib import Path
 import subprocess
@@ -10,7 +11,7 @@ import tarfile
 import threading
 import time
 from types import TracebackType
-from typing import Self
+from typing import Self, cast
 import zipfile
 
 import httpx
@@ -109,10 +110,10 @@ async def test_start_download_inspects_ready_tool_off_event_loop(
     main_thread_id = threading.get_ident()
     inspect_thread_ids: list[int] = []
 
-    def inspect_tool(tool_id: BinaryToolId | str) -> BinaryToolItem:
-        resolved_tool_id = (
-            tool_id if isinstance(tool_id, BinaryToolId) else BinaryToolId(str(tool_id))
-        )
+    def inspect_tool(
+        target: binary_tool_service.BinaryToolReleaseTarget,
+    ) -> BinaryToolItem:
+        resolved_tool_id = target.tool_id
         inspect_thread_ids.append(threading.get_ident())
         return service._item(
             resolved_tool_id,
@@ -120,7 +121,7 @@ async def test_start_download_inspects_ready_tool_off_event_loop(
             path=tmp_path / service.executable_name(resolved_tool_id),
         )
 
-    monkeypatch.setattr(service, "inspect_tool", inspect_tool)
+    monkeypatch.setattr(service, "_inspect_tool_for_target", inspect_tool)
 
     job = await service.start_download(BinaryToolId.RIPGREP)
 
@@ -235,6 +236,247 @@ async def test_download_streams_tarball_to_target(
     await service.download_tool_to_path(BinaryToolId.RIPGREP, target)
 
     assert target.read_bytes() == b"new"
+
+
+@pytest.mark.asyncio
+async def test_download_relay_knowledge_uses_latest_release_and_checksums(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(binary_tool_service, "get_platform_key", lambda: "x64-linux")
+    archive = _build_tarball("relay-knowledge")
+    checksum = hashlib.sha256(archive).hexdigest()
+    requested_urls: list[str] = []
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        create_http_client=lambda **_kwargs: _RoutingClient(
+            {
+                binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL: (
+                    b'{"tag_name":"v1.2.0"}'
+                ),
+                "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+                "v1.2.0/relay-knowledge-v1.2.0-x86_64-unknown-linux-gnu.tar.gz": (
+                    archive
+                ),
+                "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+                "v1.2.0/checksums.txt": (
+                    f"{checksum}  "
+                    "relay-knowledge-v1.2.0-x86_64-unknown-linux-gnu.tar.gz\n"
+                ).encode("utf-8"),
+            },
+            requested_urls=requested_urls,
+        ),
+    )
+    target = tmp_path / "relay-knowledge"
+
+    await service.download_tool_to_path(BinaryToolId.RELAY_KNOWLEDGE, target)
+
+    assert target.read_bytes() == b"new"
+    assert any("/v1.2.0/" in url for url in requested_urls)
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_latest_release_target_is_cached(
+    tmp_path: Path,
+) -> None:
+    requested_urls: list[str] = []
+    timeout_seconds: list[float] = []
+    authorization_headers: list[str] = []
+
+    def create_client(**kwargs: object) -> _RoutingClient:
+        timeout = kwargs.get("timeout_seconds")
+        if isinstance(timeout, float):
+            timeout_seconds.append(timeout)
+        headers = kwargs.get("headers")
+        if isinstance(headers, Mapping):
+            authorization = headers.get("Authorization")
+            if isinstance(authorization, str):
+                authorization_headers.append(authorization)
+        return _RoutingClient(
+            {
+                binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL: (
+                    b'{"tag_name":"v1.3.0"}'
+                ),
+            },
+            requested_urls=requested_urls,
+        )
+
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        get_github_token=lambda: "ghp_test",
+        create_http_client=create_client,
+    )
+
+    first = await service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+    second = await service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+
+    assert first.version == "1.3.0"
+    assert second.version == "1.3.0"
+    assert requested_urls == [binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL]
+    assert timeout_seconds == [binary_tool_service._LATEST_RELEASE_TIMEOUT_SECONDS]
+    assert authorization_headers == ["Bearer ghp_test"]
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_latest_release_without_tag_uses_default(
+    tmp_path: Path,
+) -> None:
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        create_http_client=lambda **_kwargs: _RoutingClient(
+            {
+                binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL: (
+                    b'{"name":"Release without tag"}'
+                ),
+            },
+        ),
+    )
+
+    target = await service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+
+    assert target.version == binary_tool_service.RELAY_KNOWLEDGE_VERSION
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_latest_release_failure_uses_default(
+    tmp_path: Path,
+) -> None:
+    requested_urls: list[str] = []
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        create_http_client=lambda **_kwargs: _RoutingClient(
+            {},
+            requested_urls=requested_urls,
+        ),
+    )
+
+    first = await service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+    second = await service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+
+    assert first.version == binary_tool_service.RELAY_KNOWLEDGE_VERSION
+    assert second.version == binary_tool_service.RELAY_KNOWLEDGE_VERSION
+    assert requested_urls == [binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL]
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_latest_release_concurrent_misses_share_request(
+    tmp_path: Path,
+) -> None:
+    requested_urls: list[str] = []
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        create_http_client=lambda **_kwargs: _SlowRoutingClient(
+            {
+                binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL: (
+                    b'{"tag_name":"v1.4.0"}'
+                ),
+            },
+            requested_urls=requested_urls,
+        ),
+    )
+
+    targets = await asyncio.gather(
+        *(
+            service._resolve_release_target(BinaryToolId.RELAY_KNOWLEDGE)
+            for _ in range(5)
+        )
+    )
+
+    assert {target.version for target in targets} == {"1.4.0"}
+    assert requested_urls == [binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL]
+
+
+@pytest.mark.asyncio
+async def test_start_download_replaces_outdated_relay_knowledge(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(binary_tool_service, "get_platform_key", lambda: "x64-linux")
+    monkeypatch.setenv("PATH", "")
+    target = tmp_path / "relay-knowledge"
+    _write_executable(target, b"old")
+    archive = _build_tarball("relay-knowledge")
+    checksum = hashlib.sha256(archive).hexdigest()
+    monkeypatch.setattr(
+        binary_tool_service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=(),
+            returncode=0,
+            stdout="relay-knowledge 1.0.0\n",
+            stderr="",
+        ),
+    )
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        resolve_latest_releases=True,
+        create_http_client=lambda **_kwargs: _RoutingClient(
+            {
+                binary_tool_service.RELAY_KNOWLEDGE_LATEST_RELEASE_URL: (
+                    b'{"tag_name":"v1.1.0"}'
+                ),
+                "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+                "v1.1.0/relay-knowledge-v1.1.0-x86_64-unknown-linux-gnu.tar.gz": (
+                    archive
+                ),
+                "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+                "v1.1.0/checksums.txt": (
+                    f"{checksum}  "
+                    "relay-knowledge-v1.1.0-x86_64-unknown-linux-gnu.tar.gz\n"
+                ).encode("utf-8"),
+            }
+        ),
+    )
+
+    started = await service.start_download(BinaryToolId.RELAY_KNOWLEDGE)
+    for _ in range(20):
+        job = service.get_download_job(started.job_id)
+        if job.status == BinaryToolDownloadStatus.SUCCEEDED:
+            break
+        await asyncio.sleep(0.01)
+    job = service.get_download_job(started.job_id)
+
+    assert job.status == BinaryToolDownloadStatus.SUCCEEDED
+    assert job.target_version == "1.1.0"
+    assert target.read_bytes() == b"new"
+
+
+@pytest.mark.asyncio
+async def test_relay_knowledge_download_job_reuses_current_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "")
+    target = tmp_path / "relay-knowledge"
+    _write_executable(target, b"current")
+    monkeypatch.setattr(
+        binary_tool_service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=(),
+            returncode=0,
+            stdout="relay-knowledge 1.1.0\n",
+            stderr="",
+        ),
+    )
+    service = BinaryToolService(bin_dir=tmp_path)
+    job = BinaryToolDownloadJob(
+        job_id="job-current",
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        status=BinaryToolDownloadStatus.RUNNING,
+        message="Downloading Relay Knowledge CLI.",
+        target_version="1.1.0",
+    )
+
+    path = await service._install_tool_for_job(job)
+
+    assert path == target
+    assert target.read_bytes() == b"current"
 
 
 @pytest.mark.asyncio
@@ -664,6 +906,20 @@ def test_version_parsing_and_display_names(
         "run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             args=(),
+            returncode=0,
+            stdout="relay-knowledge 1.0.0\n",
+            stderr="",
+        ),
+    )
+    assert (
+        service.read_tool_version(BinaryToolId.RELAY_KNOWLEDGE, executable) == "1.0.0"
+    )
+
+    monkeypatch.setattr(
+        binary_tool_service.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=(),
             returncode=1,
             stdout="",
             stderr="bad",
@@ -672,6 +928,7 @@ def test_version_parsing_and_display_names(
     assert service.read_tool_version(BinaryToolId.RIPGREP, executable) is None
     assert service.display_name(BinaryToolId.GITHUB_CLI) == "GitHub CLI"
     assert service.display_name(BinaryToolId.CLAWHUB) == "ClawHub CLI"
+    assert service.display_name(BinaryToolId.RELAY_KNOWLEDGE) == "Relay Knowledge CLI"
 
 
 def test_clawhub_version_uses_cli_version_before_generic_version(
@@ -768,6 +1025,158 @@ def test_archive_helpers_and_header_parsing(tmp_path: Path) -> None:
     assert binary_tool_service._first_meaningful_line("", "\n") is None
 
 
+@pytest.mark.asyncio
+async def test_release_checksum_errors_are_reported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BinaryToolService(bin_dir=tmp_path)
+    release_target = binary_tool_service.BinaryToolReleaseTarget(
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        version="1.2.0",
+        tag_name="v1.2.0",
+    )
+    config = {
+        "platform": "x86_64-unknown-linux-gnu",
+        "extension": "tar.gz",
+    }
+
+    async def expected_checksum(
+        tool_id: BinaryToolId,
+        config: Mapping[str, str],
+        *,
+        release_target: binary_tool_service.BinaryToolReleaseTarget,
+    ) -> str:
+        _ = tool_id
+        _ = config
+        _ = release_target
+        return "0" * 64
+
+    monkeypatch.setattr(service, "_expected_release_checksum", expected_checksum)
+
+    with pytest.raises(BinaryToolDownloadError, match="Checksum mismatch"):
+        await service._verify_github_release_checksum(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            config,
+            release_target=release_target,
+            content=b"archive",
+        )
+
+
+@pytest.mark.asyncio
+async def test_expected_release_checksum_requires_matching_filename(
+    tmp_path: Path,
+) -> None:
+    service = BinaryToolService(
+        bin_dir=tmp_path,
+        create_http_client=lambda **_kwargs: _RoutingClient(
+            {
+                "https://github.com/coolplayagent/relay-knowledge/releases/download/"
+                "v1.2.0/checksums.txt": b"ignored\nabc123  other.tar.gz\n",
+            }
+        ),
+    )
+    release_target = binary_tool_service.BinaryToolReleaseTarget(
+        tool_id=BinaryToolId.RELAY_KNOWLEDGE,
+        version="1.2.0",
+        tag_name="v1.2.0",
+    )
+
+    with pytest.raises(BinaryToolDownloadError, match="Checksum not found"):
+        await service._expected_release_checksum(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            {
+                "platform": "x86_64-unknown-linux-gnu",
+                "extension": "tar.gz",
+            },
+            release_target=release_target,
+        )
+
+
+def test_release_metadata_and_checksum_helpers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BinaryToolService(bin_dir=tmp_path)
+    assert (
+        service._update_available(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            version="1.0.0",
+            target_version=None,
+        )
+        is False
+    )
+    assert (
+        service._update_available(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            version="1.0.0",
+            target_version="1.1.0",
+        )
+        is True
+    )
+    assert (
+        service._update_available(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            version="1.2.0",
+            target_version="1.1.0",
+        )
+        is False
+    )
+    assert (
+        service._update_available(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            version="v1.2",
+            target_version="1.2.0",
+        )
+        is False
+    )
+    assert (
+        service._update_available(
+            BinaryToolId.RELAY_KNOWLEDGE,
+            version="dev",
+            target_version="1.2.0",
+        )
+        is False
+    )
+    assert binary_tool_service._string_value({"name": 123}, "name") is None
+    assert binary_tool_service._version_tag("v1.2.0") == "v1.2.0"
+    assert (
+        binary_tool_service._checksum_for_filename(
+            b"ignored line\nABCDEF  target.tar.gz\n",
+            "target.tar.gz",
+        )
+        == "abcdef"
+    )
+    assert (
+        binary_tool_service._checksum_for_filename(
+            b"ABCDEF  *target.tar.gz\n",
+            "target.tar.gz",
+        )
+        == "abcdef"
+    )
+    with pytest.raises(BinaryToolDownloadError, match="Release checksums"):
+        binary_tool_service._checksum_for_filename(b"\xff", "target.tar.gz")
+    with pytest.raises(BinaryToolDownloadError, match="not valid JSON"):
+        binary_tool_service._json_object(b"{")
+    with pytest.raises(BinaryToolDownloadError, match="not an object"):
+        binary_tool_service._json_object(b"[]")
+
+    def load_non_string_key(_value: str) -> dict[int, str]:
+        return {1: "value"}
+
+    monkeypatch.setattr(binary_tool_service.json, "loads", load_non_string_key)
+    with pytest.raises(BinaryToolDownloadError, match="non-string keys"):
+        binary_tool_service._json_object(b"{}")
+
+
+def test_platform_config_rejects_unknown_tool(tmp_path: Path) -> None:
+    service = BinaryToolService(bin_dir=tmp_path)
+    unsupported_tool_id = cast(BinaryToolId, _UnsupportedToolId())
+
+    with pytest.raises(BinaryToolDownloadError, match="Unsupported platform download"):
+        service._platform_config(unsupported_tool_id)
+
+
 def _build_gh_zip() -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -805,6 +1214,11 @@ def _write_executable(path: Path, content: bytes) -> None:
         path.chmod(0o755)
 
 
+class _UnsupportedToolId:
+    def __init__(self) -> None:
+        self.value = "unsupported"
+
+
 class _FakeClient:
     def __init__(self, content: bytes) -> None:
         self._content = content
@@ -827,6 +1241,48 @@ class _FakeClient:
 class _SlowFakeClient(_FakeClient):
     def stream(self, method: str, url: httpx.URL | str) -> "_SlowFakeResponse":
         return _SlowFakeResponse(self._content)
+
+
+class _RoutingClient:
+    def __init__(
+        self,
+        content_by_url: Mapping[str, bytes],
+        *,
+        requested_urls: list[str] | None = None,
+    ) -> None:
+        self._content_by_url = dict(content_by_url)
+        self._requested_urls = requested_urls
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+    def stream(self, method: str, url: httpx.URL | str) -> "_FakeResponse":
+        normalized_url = str(url)
+        if self._requested_urls is not None:
+            self._requested_urls.append(normalized_url)
+        content = self._content_by_url.get(normalized_url)
+        if content is None:
+            return _FakeResponseWithStatus(404, b"")
+        return _FakeResponse(content)
+
+
+class _SlowRoutingClient(_RoutingClient):
+    def stream(self, method: str, url: httpx.URL | str) -> "_SlowFakeResponse":
+        normalized_url = str(url)
+        if self._requested_urls is not None:
+            self._requested_urls.append(normalized_url)
+        content = self._content_by_url.get(normalized_url)
+        if content is None:
+            return _SlowFakeResponse(b"")
+        return _SlowFakeResponse(content)
 
 
 class _FailingClient:
@@ -866,6 +1322,12 @@ class _FakeResponse:
         midpoint = max(1, len(self._content) // 2)
         yield self._content[:midpoint]
         yield self._content[midpoint:]
+
+
+class _FakeResponseWithStatus(_FakeResponse):
+    def __init__(self, status_code: int, content: bytes) -> None:
+        super().__init__(content)
+        self.status_code = status_code
 
 
 class _SlowFakeResponse(_FakeResponse):

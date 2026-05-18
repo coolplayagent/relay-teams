@@ -3416,15 +3416,17 @@ display.
 
 Connector APIs are aggregation endpoints under `/api/*`. Most connectors derive
 state from their owning domain: GitHub state comes from `triggers`; Feishu,
-WeChat, Discord, and Xiaoluban state comes from `gateway`. W3 is the unified
+WeChat, Discord, and Xiaoluban state comes from `gateway`; Relay Knowledge
+state comes from the managed runtime CLI tool registry. W3 is the unified
 authentication connector exception: it stores non-sensitive connector metadata
 in a JSON config file and stores the password in the unified secret store.
 
 ### `GET /connectors`
 
 Returns only built-in connectors backed by existing implementations: GitHub,
-Discord, Feishu, WeChat, Xiaoluban, and W3. Gmail, Slack, Jira, and other future
-providers are not returned until their backend capability exists.
+Relay Knowledge, Discord, Feishu, WeChat, Xiaoluban, and W3. Gmail, Slack,
+Jira, and other future providers are not returned until their backend capability
+exists.
 
 Response shape:
 - `summary`: counts for `connected`, `needs_config`, `disabled`, `error`, and
@@ -3434,14 +3436,19 @@ Response shape:
   `enabled_count`, `last_activity_at`, `last_error`, and `capabilities`
 
 Enums:
-- `provider`: `github`, `discord`, `feishu`, `wechat`, `xiaoluban`, or `w3`
+- `provider`: `github`, `relay-knowledge`, `discord`, `feishu`, `wechat`,
+  `xiaoluban`, or `w3`
 - `category`: `auth`, `development`, `im`, or `models`
 - `status`: `needs_config`, `connected`, `disabled`, or `error`
+- `auth_type`: includes connector-specific values such as `api_token`,
+  `username_password`, `qr_login`, or `cli`
 
 ### `POST /connectors/{connector_id}:test`
 
 Runs a lightweight health check for one built-in connector. GitHub uses the
-existing GitHub connectivity probe. Feishu checks account secret readiness and
+existing GitHub connectivity probe. Relay Knowledge checks whether the
+`relay-knowledge` runtime CLI is installed and whether the installed version is
+behind the latest target release. Feishu checks account secret readiness and
 subscription runtime state. WeChat returns account running, login, and recent
 error state. Xiaoluban checks token configuration, listener state, and IM
 workspace configuration. W3 validates that its saved username/password can
@@ -3486,9 +3493,12 @@ endpoint only reports status and never starts a download or installation.
 
 Response fields:
 - `items[]`
-  - `tool_id`: `rg`, `gh`, or `clawhub`
+  - `tool_id`: `rg`, `gh`, `clawhub`, or `relay-knowledge`
   - `display_name`
   - `version`, when the executable can be probed
+  - `target_version`, when the tool has a pinned or discovered target release
+  - `update_available`, when the installed tool is available but behind the
+    target release
   - `source_kind`: `github_release` or `npm_global`
   - `status`: `ready`, `missing`, `downloading`, or `error`
   - `path_source`: `managed`, `system`, or `npm_global`
@@ -3501,18 +3511,24 @@ Notes:
 - `rg` and `gh` are downloaded from their pinned GitHub release assets into the
   app bin directory when manually downloaded or first needed by runtime paths.
 - `clawhub` is installed with npm and reports system or npm global paths.
+- `relay-knowledge` downloads platform-specific archives from
+  `coolplayagent/relay-knowledge`, verifies the archive against the release
+  `checksums.txt`, and replaces an older managed binary when a newer release is
+  discovered.
 - System tools such as `git`, `npm`, and shell binaries are intentionally not
   listed because the project probes them but does not download them.
 
 ### `POST /connectors/runtime-tools/{tool_id}:download`
 
 Starts a manual runtime tool download or installation, or returns the existing
-running job for the same tool. If the tool is already available, the response is
-an immediately completed job. Unknown tool ids return `404`.
+running job for the same tool. If the tool is already available and not behind
+its target version, the response is an immediately completed job. Unknown tool
+ids return `404`.
 
 Response fields:
 - `job_id`
 - `tool_id`
+- `target_version`
 - `status`: `queued`, `running`, `succeeded`, or `failed`
 - `started_at`
 - `updated_at`

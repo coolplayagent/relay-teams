@@ -371,7 +371,11 @@ class ServerContainer:
             config_dir=app_config_dir,
         )
         self.binary_tool_service: BinaryToolService = BinaryToolService(
-            config_dir=app_config_dir
+            config_dir=app_config_dir,
+            get_github_token=lambda: (
+                self.github_config_service.get_github_config().token
+            ),
+            resolve_latest_releases=True,
         )
         self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
@@ -1184,6 +1188,7 @@ class ServerContainer:
             xiaoluban_gateway_service=self.xiaoluban_gateway_service,
             xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
             w3_connector_service=self.w3_connector_service,
+            runtime_tool_service=self.binary_tool_service,
             get_shared_github_token=lambda: (
                 self.github_config_service.get_github_config().token
             ),
