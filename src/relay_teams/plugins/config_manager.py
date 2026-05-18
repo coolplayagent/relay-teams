@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from collections.abc import Callable
 from os import environ, pathsep
 from pathlib import Path
 import shutil
+import stat
 
 from pydantic import JsonValue
 
@@ -1825,7 +1828,7 @@ class PluginConfigManager:
             raise ValueError(
                 "Refusing to remove directory outside plugin storage"
             ) from exc
-        shutil.rmtree(resolved_target)
+        shutil.rmtree(_filesystem_path(resolved_target), onexc=_make_writable_and_retry)
 
     @staticmethod
     def _cache_dir_name(value: str) -> str:
@@ -1833,6 +1836,27 @@ class PluginConfigManager:
         prefix = readable[:16].strip("_") or "git"
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
         return f"{prefix}_{digest}"
+
+
+def _filesystem_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = str(path.expanduser().resolve())
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved
+
+
+def _make_writable_and_retry(
+    function: Callable[[str], object],
+    path: str,
+    excinfo: BaseException,
+) -> None:
+    _ = excinfo
+    Path(path).chmod(stat.S_IWRITE)
+    function(path)
 
 
 def _plugin_dirs_from_env() -> tuple[Path, ...]:

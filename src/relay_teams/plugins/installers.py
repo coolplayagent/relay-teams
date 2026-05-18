@@ -29,6 +29,7 @@ _GIT_CLONE_TIMEOUT_SECONDS = 120.0
 _HTTP_DOWNLOAD_TIMEOUT_SECONDS = 120.0
 _IGNORED_COPY_DIR_NAMES = frozenset({".git", "__pycache__", "__MACOSX", ".DS_Store"})
 _SRI_RE = re.compile(r"^(sha(?:256|384|512))-(.+)$")
+_WINDOWS_ZIP_ILLEGAL_CHARS_RE = re.compile(r'[:<>|"?*]')
 _DIGEST_ALGORITHMS = {
     "sha256": hashlib.sha256,
     "sha384": hashlib.sha384,
@@ -212,8 +213,8 @@ def _copy_plugin_tree(*, source_dir: Path, target_dir: Path) -> None:
     _ensure_no_plugin_tree_symlinks(source_dir=source_dir)
     resolved_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(
-        source_dir,
-        resolved_target,
+        _filesystem_path(source_dir.expanduser().resolve()),
+        _filesystem_path(resolved_target),
         ignore=shutil.ignore_patterns(".git", "__pycache__"),
     )
 
@@ -309,13 +310,44 @@ def _extract_zip_archive(*, archive: zipfile.ZipFile, target_dir: Path) -> None:
             raise ValueError(
                 f"Plugin archive contains unsupported symlink: {item.filename}"
             )
-        destination = (target_dir / item.filename).resolve()
+        member_filename = _zip_member_filesystem_name(item.filename)
+        destination = (target_dir / member_filename).resolve()
         try:
             destination.relative_to(resolved_target)
         except ValueError as exc:
             raise ValueError(f"Plugin archive path is unsafe: {item.filename}") from exc
-        archive.extract(item, target_dir)
+        if item.is_dir():
+            Path(_filesystem_path(destination)).mkdir(parents=True, exist_ok=True)
+        else:
+            Path(_filesystem_path(destination.parent)).mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            with (
+                archive.open(item) as source,
+                open(
+                    _filesystem_path(destination),
+                    "wb",
+                ) as target,
+            ):
+                shutil.copyfileobj(source, target)
         _apply_archive_mode(path=destination, mode=item.external_attr >> 16)
+
+
+def _zip_member_filesystem_name(
+    filename: str,
+    *,
+    platform_name: str | None = None,
+) -> str:
+    active_platform_name = os.name if platform_name is None else platform_name
+    if active_platform_name != "nt":
+        return filename
+    sanitized_parts: list[str] = []
+    for part in filename.replace("\\", "/").split("/"):
+        sanitized = _WINDOWS_ZIP_ILLEGAL_CHARS_RE.sub("_", part).rstrip(". ")
+        if sanitized:
+            sanitized_parts.append(sanitized)
+    return "/".join(sanitized_parts)
 
 
 def _extract_tar_archive(*, archive: tarfile.TarFile, target_dir: Path) -> None:
@@ -335,13 +367,13 @@ def _extract_tar_archive(*, archive: tarfile.TarFile, target_dir: Path) -> None:
     for item in archive.getmembers():
         destination = target_dir / item.name
         if item.isdir():
-            destination.mkdir(parents=True, exist_ok=True)
+            Path(_filesystem_path(destination)).mkdir(parents=True, exist_ok=True)
             continue
         extracted = archive.extractfile(item)
         if extracted is None:
             raise ValueError(f"Plugin archive file cannot be extracted: {item.name}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with extracted, destination.open("wb") as target:
+        Path(_filesystem_path(destination.parent)).mkdir(parents=True, exist_ok=True)
+        with extracted, open(_filesystem_path(destination), "wb") as target:
             shutil.copyfileobj(extracted, target)
         _apply_archive_mode(path=destination, mode=item.mode)
 
@@ -351,8 +383,9 @@ def _zip_info_is_symlink(item: zipfile.ZipInfo) -> bool:
 
 
 def _apply_archive_mode(*, path: Path, mode: int) -> None:
-    if mode and path.is_file():
-        path.chmod(stat.S_IMODE(mode))
+    filesystem_path = Path(_filesystem_path(path))
+    if mode and filesystem_path.is_file():
+        filesystem_path.chmod(stat.S_IMODE(mode))
 
 
 def _archive_plugin_root(extract_dir: Path) -> Path:
@@ -480,7 +513,18 @@ def _git_args(args: list[str]) -> list[str]:
 
 
 def _remove_tree(path: Path) -> None:
-    shutil.rmtree(path, onexc=_make_writable_and_retry)
+    shutil.rmtree(_filesystem_path(path), onexc=_make_writable_and_retry)
+
+
+def _filesystem_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = str(path.expanduser().resolve())
+    if resolved.startswith("\\\\?\\"):
+        return resolved
+    if resolved.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + resolved[2:]
+    return "\\\\?\\" + resolved
 
 
 def _make_writable_and_retry(
