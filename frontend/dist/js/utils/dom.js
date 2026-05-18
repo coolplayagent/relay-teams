@@ -20,7 +20,6 @@ export const els = {
   chatMessages: qs("#chat-messages"),
   chatContainer: qs(".chat-container"),
   agentDrawer: qs("#agent-drawer"),
-  toggleSubagentsBtn: qs("#toggle-subagents"),
   rightRail: qs("#right-rail"),
   rightRailResizer: qs("#right-rail-resizer"),
   railInspector: qs("#rail-inspector"),

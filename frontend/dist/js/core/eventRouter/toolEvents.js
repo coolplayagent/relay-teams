@@ -39,14 +39,15 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
+    const overlayOptions = {
+        runId,
+        instanceId: isPrimary ? 'primary' : instanceId,
+        roleId: isPrimary ? primaryRoleId : roleId,
+        label,
+        eventId: eventMeta?.event_id || '',
+    };
     if (!container) {
-        applyStreamOverlayEvent('tool_call', payload, {
-            runId,
-            instanceId: isPrimary ? 'primary' : instanceId,
-            roleId: isPrimary ? primaryRoleId : roleId,
-            label,
-            eventId: eventMeta?.event_id || '',
-        });
+        applyStreamOverlayEvent('tool_call', payload, overlayOptions);
         return;
     }
     appendToolCallBlock(
@@ -73,13 +74,15 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
     const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
+    const overlayOptions = {
+        runId,
+        instanceId: isPrimary ? 'primary' : instanceId,
+        roleId,
+        label: isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent'),
+        eventId: eventMeta?.event_id || '',
+    };
     if (!container) {
-        applyStreamOverlayEvent('tool_input_validation_failed', payload, {
-            runId,
-            instanceId: isPrimary ? 'primary' : instanceId,
-            roleId,
-            eventId: eventMeta?.event_id || '',
-        });
+        applyStreamOverlayEvent('tool_input_validation_failed', payload, overlayOptions);
         return;
     }
     const bound = markToolInputValidationFailed(streamKey, payload, {
@@ -107,14 +110,15 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
     const isError = typeof resultEnvelope === 'object'
         ? resultEnvelope.ok === false
         : !!payload.error;
+    const overlayOptions = {
+        runId,
+        instanceId: isPrimary ? 'primary' : instanceId,
+        roleId: isPrimary ? primaryRoleId : roleId,
+        label,
+        eventId: eventMeta?.event_id || '',
+    };
     if (!container) {
-        applyStreamOverlayEvent('tool_result', payload, {
-            runId,
-            instanceId: isPrimary ? 'primary' : instanceId,
-            roleId: isPrimary ? primaryRoleId : roleId,
-            label,
-            eventId: eventMeta?.event_id || '',
-        });
+        applyStreamOverlayEvent('tool_result', payload, overlayOptions);
         return;
     }
     updateToolResult(
@@ -145,6 +149,13 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
+    const overlayOptions = {
+        runId,
+        instanceId: isPrimary ? 'primary' : instanceId,
+        roleId,
+        label: isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent'),
+        eventId: eventMeta?.event_id || '',
+    };
     markToolApprovalRequested(payload);
     if (runId && payload?.tool_call_id) {
         document.dispatchEvent(
@@ -157,12 +168,7 @@ export function handleToolApprovalRequested(payload, eventMeta, instanceId) {
         );
     }
     if (!container) {
-        applyStreamOverlayEvent('tool_approval_requested', payload, {
-            runId,
-            instanceId: isPrimary ? 'primary' : instanceId,
-            roleId,
-            eventId: eventMeta?.event_id || '',
-        });
+        applyStreamOverlayEvent('tool_approval_requested', payload, overlayOptions);
         return;
     }
     const bound = attachToolApprovalControls(streamKey, payload.tool_name, payload, {}, {
@@ -180,14 +186,16 @@ export function handleToolApprovalResolved(payload, instanceId, eventMeta = null
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
+    const overlayOptions = {
+        runId,
+        instanceId: isPrimary ? 'primary' : instanceId,
+        roleId,
+        label: isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent'),
+        eventId: eventMeta?.event_id || '',
+    };
     markRecoveryToolApprovalResolved(payload?.tool_call_id || '');
     if (!container) {
-        applyStreamOverlayEvent('tool_approval_resolved', payload, {
-            runId,
-            instanceId: isPrimary ? 'primary' : instanceId,
-            roleId,
-            eventId: eventMeta?.event_id || '',
-        });
+        applyStreamOverlayEvent('tool_approval_resolved', payload, overlayOptions);
         return;
     }
     markToolApprovalResolved(streamKey, payload, {

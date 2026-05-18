@@ -602,15 +602,6 @@ body.light-theme .session-round-section.round-section-emphasis .round-detail-hea
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
-body.light-theme .subagent-toggle-btn {
-    background: var(--bg-surface-muted);
-}
-
-body.light-theme .subagent-toggle-btn:hover,
-body.light-theme .subagent-toggle-btn.active {
-    background: var(--bg-hover);
-}
-
 body.light-theme .tool-call,
 body.light-theme .markdown-code-block,
 body.light-theme .msg-content pre,

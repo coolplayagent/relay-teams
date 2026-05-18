@@ -939,34 +939,6 @@ body.is-resizing-rails .right-rail-resizer {
   opacity: 0.6;
 }
 
-.subagent-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.45rem 0.8rem;
-  border-radius: 999px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  cursor: pointer;
-  margin-right: 0.5rem;
-}
-
-.subagent-toggle-btn.active {
-  border-color: color-mix(in srgb, var(--primary) 38%, var(--border-color));
-}
-
-.subagent-toggle-label {
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-
-.subagent-toggle-summary {
-  font-size: 0.72rem;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-}
-
 .right-rail-resizer.hidden {
   opacity: 0;
   pointer-events: none;

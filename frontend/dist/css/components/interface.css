@@ -87,35 +87,6 @@
     color: var(--text-primary);
 }
 
-.subagent-toggle-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-height: 34px;
-    padding: 0.45rem 0.7rem;
-    margin-right: 0;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    background: var(--bg-surface-muted);
-    color: var(--text-primary);
-}
-
-.subagent-toggle-btn:hover,
-.subagent-toggle-btn.active {
-    border-color: rgba(145, 166, 152, 0.38);
-    background: var(--bg-hover);
-}
-
-.subagent-toggle-label {
-    font-size: 0.78rem;
-    font-weight: 500;
-}
-
-.subagent-toggle-summary {
-    font-size: 0.72rem;
-    color: var(--text-secondary);
-}
-
 .projects-empty-state {
     padding: 0.8rem 0.2rem;
 }

@@ -446,6 +446,25 @@ def test_randomized_stream_switch_pressure_preserves_tool_calls_in_browser(
     assert payload["toolBlocks"] == 216
 
 
+def test_visible_subagent_live_overlay_survives_switch_back_in_browser(
+    browser_page: Page,
+    tmp_path: Path,
+) -> None:
+    page = browser_page
+    _open_harness(page, tmp_path)
+
+    payload = page.evaluate(
+        """
+        () => window.__streamTimelineHarness.renderVisibleSubagentOverlaySwitchBack()
+        """
+    )
+
+    assert payload["thinkingBlockCount"] == 1
+    assert payload["messageTextCount"] == 1
+    assert payload["toolBlockCount"] == 1
+    assert payload["ordered"] is True
+
+
 def test_terminal_completed_overlay_does_not_block_processed_group_in_browser(
     browser_page: Page,
     tmp_path: Path,
@@ -1815,6 +1834,61 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
           duplicateMax,
           containers: containers.size,
           toolBlocks,
+        }};
+      }},
+
+      renderVisibleSubagentOverlaySwitchBack() {{
+        clearAllStreamState();
+        const container = makeContainer('visible-subagent-switch-back');
+        const runId = 'subagent_run_visible_switch';
+        const instanceId = 'inst-visible';
+        const roleId = 'Writer';
+        getOrCreateStreamBlock(container, instanceId, roleId, 'Writer', runId);
+        startThinkingBlock(instanceId, 0, {{
+          container,
+          runId,
+          roleId,
+          label: 'Writer',
+        }});
+        appendThinkingChunk(instanceId, 0, 'VISIBLE_THINK', {{
+          container,
+          runId,
+          roleId,
+          label: 'Writer',
+        }});
+        appendToolCallBlock(
+          container,
+          instanceId,
+          'shell',
+          {{ command: 'date' }},
+          'call-visible-switch',
+          {{ runId, roleId, label: 'Writer' }},
+        );
+        appendStreamChunk(instanceId, 'VISIBLE_TEXT', runId, roleId, 'Writer');
+
+        container.replaceChildren();
+        renderHistory(container, [], {{
+          runId,
+          streamOverlayEntry: getInstanceStreamOverlay(runId, instanceId),
+          canonicalStreamKey: instanceId,
+        }});
+        const text = container.textContent || '';
+        const thinkingEl = container.querySelector('.thinking-block');
+        const toolEl = container.querySelector('.tool-block');
+        const textEl = Array.from(container.querySelectorAll('.msg-text'))
+          .find(item => (item.textContent || '').includes('VISIBLE_TEXT')) || null;
+        return {{
+          thinkingBlockCount: container.querySelectorAll('.thinking-block').length,
+          messageTextCount: Array.from(container.querySelectorAll('.msg-text'))
+            .filter(item => (item.textContent || '').includes('VISIBLE_TEXT')).length,
+          toolBlockCount: container.querySelectorAll('.tool-block').length,
+          ordered: !!(
+            thinkingEl
+            && toolEl
+            && textEl
+            && (thinkingEl.compareDocumentPosition(toolEl) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && (toolEl.compareDocumentPosition(textEl) & Node.DOCUMENT_POSITION_FOLLOWING)
+          ),
         }};
       }},
 
