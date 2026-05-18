@@ -5,10 +5,45 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
-from relay_teams.plugins.plugin_models import PluginManifest
+from relay_teams.plugins.claude_plugin_adapter import (
+    adapt_agent_role_files,
+    adapt_markdown_front_matter_files,
+)
+from relay_teams.plugins.plugin_models import PluginManifest, PluginUserConfigField
 
 _OPENCLAW_ADAPTER_NAME = "openclaw"
 _OPENCLAW_MANIFEST = "openclaw.plugin.json"
+_RELAY_MANIFEST_ALIAS_FIELDS = frozenset(
+    {
+        "$schema",
+        "agents",
+        "mcpServers",
+        "userConfig",
+    }
+)
+_RELAY_COMPONENT_PATH_FIELDS = frozenset(
+    {
+        "skills",
+        "roles",
+        "agents",
+        "commands",
+        "hooks",
+        "mcp_servers",
+        "mcpServers",
+        "monitors",
+        "settings",
+    }
+)
+_IGNORED_STATIC_COMPONENT_DIRS = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        "node_modules",
+        ".venv",
+        "venv",
+    }
+)
+_MAX_NESTED_SKILL_DEPTH = 4
 
 
 def adapt_openclaw_plugin_tree(
@@ -20,12 +55,21 @@ def adapt_openclaw_plugin_tree(
 ) -> None:
     if adapter != _OPENCLAW_ADAPTER_NAME:
         return
+    adapt_agent_role_files(plugin_root=plugin_root)
+    adapt_markdown_front_matter_files(plugin_root=plugin_root)
     relay_manifest_path = plugin_root / manifest_config_dir_name / "plugin.json"
     claude_manifest_path = plugin_root / ".claude-plugin" / "plugin.json"
     if relay_manifest_path.exists():
-        _sanitize_existing_relay_manifest(relay_manifest_path)
+        _sanitize_existing_relay_manifest(
+            manifest_path=relay_manifest_path,
+            plugin_root=plugin_root,
+        )
         return
     if claude_manifest_path.exists():
+        _sanitize_existing_relay_manifest(
+            manifest_path=claude_manifest_path,
+            plugin_root=plugin_root,
+        )
         return
     openclaw_manifest_path = plugin_root / _OPENCLAW_MANIFEST
     if not openclaw_manifest_path.exists():
@@ -59,24 +103,117 @@ def adapt_openclaw_plugin_tree(
     )
 
 
-def _sanitize_existing_relay_manifest(manifest_path: Path) -> None:
+def _sanitize_existing_relay_manifest(
+    *, manifest_path: Path, plugin_root: Path
+) -> None:
     raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     raw = _string_key_mapping(raw_manifest)
     if not raw:
         return
-    allowed_fields = set(PluginManifest.model_fields) | {
-        "$schema",
-        "agents",
-        "mcpServers",
-        "userConfig",
+    allowed_fields = set(PluginManifest.model_fields) | _RELAY_MANIFEST_ALIAS_FIELDS
+    manifest = {
+        key: _sanitize_relay_manifest_value(
+            key=key,
+            value=value,
+            plugin_root=plugin_root,
+        )
+        for key, value in raw.items()
+        if key in allowed_fields
     }
-    manifest = {key: value for key, value in raw.items() if key in allowed_fields}
     if manifest == raw:
         return
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _sanitize_relay_manifest_value(
+    *,
+    key: str,
+    value: object,
+    plugin_root: Path,
+) -> object:
+    if key == "name" and isinstance(value, str):
+        return _safe_plugin_name(value)
+    if key in _RELAY_COMPONENT_PATH_FIELDS:
+        return _sanitize_component_path_value(
+            key=key,
+            value=value,
+            plugin_root=plugin_root,
+        )
+    if key not in {"user_config", "userConfig"}:
+        return value
+    user_config = _string_key_mapping(value)
+    if not user_config:
+        return value
+    allowed_fields = set(PluginUserConfigField.model_fields)
+    sanitized: dict[str, object] = {}
+    for field_name, raw_field in user_config.items():
+        field = _string_key_mapping(raw_field)
+        if not field:
+            sanitized[field_name] = raw_field
+            continue
+        sanitized[field_name] = {
+            item_key: item_value
+            for item_key, item_value in field.items()
+            if item_key in allowed_fields
+        }
+    return sanitized
+
+
+def _sanitize_component_path_value(
+    *,
+    key: str,
+    value: object,
+    plugin_root: Path,
+) -> object:
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized or normalized.startswith(("./", "../")):
+            return _directory_component_path(
+                key=key,
+                value=value,
+                plugin_root=plugin_root,
+            )
+        if normalized.startswith(("/", "\\")):
+            return value
+        return _directory_component_path(
+            key=key,
+            value=f"./{normalized}",
+            plugin_root=plugin_root,
+        )
+    if isinstance(value, list | tuple):
+        return [
+            _sanitize_component_path_value(
+                key=key,
+                value=item,
+                plugin_root=plugin_root,
+            )
+            if isinstance(item, str)
+            else item
+            for item in value
+        ]
+    return value
+
+
+def _directory_component_path(*, key: str, value: str, plugin_root: Path) -> str:
+    if key not in {"skills", "roles", "agents", "commands"}:
+        return value
+    normalized = value.strip()
+    if not normalized:
+        return value
+    candidate = (plugin_root / normalized).resolve()
+    try:
+        candidate.relative_to(plugin_root.resolve())
+    except ValueError:
+        return value
+    if candidate.is_file():
+        parent = candidate.parent
+        if parent == plugin_root.resolve():
+            return "."
+        return "./" + parent.relative_to(plugin_root.resolve()).as_posix()
+    return value
 
 
 def _relay_manifest_from_static_roots(
@@ -134,6 +271,12 @@ def _add_static_component_paths(
 ) -> None:
     if (plugin_root / "skills").is_dir():
         manifest["skills"] = "./skills"
+    else:
+        nested_skill_paths = _nested_skill_component_paths(plugin_root)
+        if len(nested_skill_paths) == 1:
+            manifest["skills"] = nested_skill_paths[0]
+        elif nested_skill_paths:
+            manifest["skills"] = nested_skill_paths
     if (plugin_root / "agents").is_dir():
         manifest["roles"] = "./agents"
     elif (plugin_root / "roles").is_dir():
@@ -146,6 +289,26 @@ def _add_static_component_paths(
         manifest["mcp_servers"] = "./mcp.json"
     if (plugin_root / "hooks" / "hooks.json").is_file():
         manifest["hooks"] = "./hooks/hooks.json"
+
+
+def _nested_skill_component_paths(plugin_root: Path) -> tuple[str, ...]:
+    skill_paths: list[str] = []
+    for manifest_path in sorted(plugin_root.rglob("SKILL.md")):
+        try:
+            relative_parent = manifest_path.parent.relative_to(plugin_root)
+        except ValueError:
+            continue
+        if any(
+            part in _IGNORED_STATIC_COMPONENT_DIRS for part in relative_parent.parts
+        ):
+            continue
+        if len(relative_parent.parts) > _MAX_NESTED_SKILL_DEPTH:
+            continue
+        if not relative_parent.parts:
+            skill_paths.append(".")
+            continue
+        skill_paths.append("./" + relative_parent.as_posix())
+    return tuple(dict.fromkeys(skill_paths))
 
 
 def _has_mappable_manifest_components(manifest: dict[str, object]) -> bool:

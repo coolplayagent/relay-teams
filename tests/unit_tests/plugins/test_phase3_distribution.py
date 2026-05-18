@@ -124,6 +124,33 @@ def test_prune_installed_plugins_aborts_on_invalid_state_file(tmp_path: Path) ->
     assert installed.root_dir.exists()
 
 
+def test_config_manager_removes_validation_cache_tree(tmp_path: Path) -> None:
+    cache_root = tmp_path / "app" / "plugins" / "cache" / "validation"
+    target = (
+        cache_root
+        / "plugin"
+        / "skills"
+        / "minimax-docx"
+        / "scripts"
+        / "dotnet"
+        / "MiniMaxAIDocx.Core"
+        / "obj"
+        / "Debug"
+        / "net8.0"
+    )
+    target.mkdir(parents=True)
+    file_path = target / "build.cache"
+    file_path.write_text("cached", encoding="utf-8")
+    file_path.chmod(stat.S_IREAD)
+
+    PluginConfigManager._remove_directory_under(
+        parent=cache_root,
+        target=cache_root / "plugin",
+    )
+
+    assert not (cache_root / "plugin").exists()
+
+
 def test_update_plugin_rejects_version_for_local_plugins(tmp_path: Path) -> None:
     app_config_dir = tmp_path / "app"
     plugin_root = tmp_path / "quality"
@@ -2568,6 +2595,7 @@ def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
                         "name": "bundle",
                         "latestVersion": "1.0.0",
                         "family": "bundle-plugin",
+                        "capabilities": {"bundleFormat": "generic"},
                     }
                 ]
             }
@@ -2575,6 +2603,7 @@ def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
             return {
                 "version": "1.0.0",
                 "family": "bundle-plugin",
+                "capabilities": {"bundleFormat": "generic"},
             }
         if url == "https://clawhub.test/api/v1/packages/needs-details":
             return {
@@ -2661,6 +2690,73 @@ def test_clawhub_marketplace_provider_marks_blocked_releases_unsupported() -> No
     assert entry.supported_versions() == ()
     assert entry.versions[0].unsupported_reason == (
         "ClawHub package release is quarantined"
+    )
+
+
+def test_clawhub_marketplace_provider_marks_placeholder_bundle_format_unsupported() -> (
+    None
+):
+    provider = clawhub_marketplace_provider.ClawHubMarketplaceProvider()
+
+    entry = provider._entry_from_raw_package(
+        raw_package={
+            "name": "placeholder-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilityTags": ["format:Bundle format"],
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert entry.supported_versions() == ()
+    assert entry.versions[0].unsupported_reason == (
+        "ClawHub bundle plugin does not declare a concrete bundle format"
+    )
+
+    unsupported_format = provider._entry_from_raw_package(
+        raw_package={
+            "name": "codex-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {"bundleFormat": "codex"},
+        },
+        base_url="https://clawhub.test",
+    )
+    invalid_host = provider._entry_from_raw_package(
+        raw_package={
+            "name": "invalid-host",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {
+                "bundleFormat": "generic",
+                "capabilityTags": ['host:"main": "./dist/plugin.js"'],
+            },
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert unsupported_format.supported_versions() == ()
+    assert unsupported_format.versions[0].unsupported_reason == (
+        "Unsupported ClawHub bundle format: codex"
+    )
+    assert invalid_host.supported_versions() == ()
+    assert invalid_host.versions[0].unsupported_reason == (
+        "ClawHub bundle plugin host target metadata is invalid"
+    )
+
+    known_unmappable = provider._entry_from_raw_package(
+        raw_package={
+            "name": "kdp-author-engine-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {"bundleFormat": "generic"},
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert known_unmappable.supported_versions() == ()
+    assert known_unmappable.versions[0].unsupported_reason == (
+        "ClawHub package artifact does not contain Relay Teams mappable plugin components"
     )
 
 
@@ -3180,6 +3276,28 @@ def test_openclaw_adapter_creates_manifest_for_static_bundle(tmp_path: Path) -> 
     assert manifest["skills"] == "./skills"
 
 
+def test_openclaw_adapter_maps_nested_skill_manifest(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "bundle"
+    skill_dir = plugin_root / "verified-agent-identity"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# Verified Agent Identity\n\nUse this skill for identity checks.\n",
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="4.0.0",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["name"] == "bundle"
+    assert manifest["version"] == "4.0.0"
+    assert manifest["skills"] == "./verified-agent-identity"
+
+
 def test_archive_plugin_root_ignores_macos_metadata(tmp_path: Path) -> None:
     extract_dir = tmp_path / "extract"
     plugin_root = extract_dir / "quality"
@@ -3297,8 +3415,16 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
                     "token": {
                         "type": "string",
                         "sensitive": True,
-                    }
+                    },
+                    "preferred_currency": {
+                        "type": "string",
+                        "title": "Preferred currency",
+                        "default": "USD",
+                        "pattern": "^[A-Z]{3}$",
+                    },
                 },
+                "displayName": "Extra Manifest",
+                "icon": "./icon.png",
                 "id": "extra-manifest",
                 "commandNamespace": "extra",
             }
@@ -3324,9 +3450,97 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
             "token": {
                 "type": "string",
                 "sensitive": True,
+            },
+            "preferred_currency": {
+                "type": "string",
+                "title": "Preferred currency",
+                "default": "USD",
+            },
+        },
+    }
+
+    claude_manifest_root = tmp_path / "claude-manifest"
+    (claude_manifest_root / ".claude-plugin").mkdir(parents=True)
+    (claude_manifest_root / "agents").mkdir()
+    (claude_manifest_root / "commands").mkdir()
+    (claude_manifest_root / "commands" / "setup.md").write_text(
+        "---\n"
+        "name: setup\n"
+        "description: Setup command. Usage: /setup <target>\n"
+        "---\n"
+        "# Setup\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / "skills" / "conflict-patterns").mkdir(parents=True)
+    (claude_manifest_root / "skills" / "conflict-patterns" / "SKILL.md").write_text(
+        "---\n"
+        "name: Conflict Patterns\n"
+        "description: Identify conflicts. Usage: /skill-git:check <skill-name>\n"
+        "version: 1.0.0\n"
+        "---\n"
+        "# Conflict Patterns\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / "agents" / "performance-marketer.md").write_text(
+        "---\nname: Performance Marketer\n---\nRun campaigns.\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "@markifact/mcp",
+                "version": "1.0.0",
+                "mcpServers": "mcp.json",
+                "commands": ["commands/setup.md"],
+                "userConfig": {
+                    "preferred_currency": {
+                        "type": "string",
+                        "default": "USD",
+                        "pattern": "^[A-Z]{3}$",
+                    }
+                },
+                "displayName": "Markifact Performance Marketing",
+                "icon": "./icon.png",
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapt_openclaw_plugin_tree(
+        plugin_root=claude_manifest_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+    claude_manifest = json.loads(
+        (claude_manifest_root / ".claude-plugin" / "plugin.json").read_text("utf-8")
+    )
+    assert claude_manifest == {
+        "name": "markifact-mcp",
+        "version": "1.0.0",
+        "mcpServers": "./mcp.json",
+        "commands": ["./commands"],
+        "userConfig": {
+            "preferred_currency": {
+                "type": "string",
+                "default": "USD",
             }
         },
     }
+    agent_role = (
+        claude_manifest_root / "agents" / "performance-marketer.md"
+    ).read_text("utf-8")
+    assert "role_id: Performance Marketer" in agent_role
+    assert "mode: subagent" in agent_role
+    skill_manifest = (
+        claude_manifest_root / "skills" / "conflict-patterns" / "SKILL.md"
+    ).read_text("utf-8")
+    assert (
+        "description: 'Identify conflicts. Usage: /skill-git:check <skill-name>'"
+        in skill_manifest
+    )
+    command_manifest = (claude_manifest_root / "commands" / "setup.md").read_text(
+        "utf-8"
+    )
+    assert "description: 'Setup command. Usage: /setup <target>'" in command_manifest
 
     unmappable_root = tmp_path / "unmappable"
     unmappable_root.mkdir()

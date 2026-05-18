@@ -43,11 +43,26 @@ def adapt_plugin_tree(*, plugin_root: Path, adapter: str) -> None:
         return
     manifest = _adapt_manifest(plugin_root)
     _adapt_hook_configs(plugin_root, manifest=manifest)
+    adapt_agent_role_files(plugin_root=plugin_root)
+    adapt_markdown_front_matter_files(plugin_root=plugin_root)
+
+
+def adapt_agent_role_files(*, plugin_root: Path) -> None:
     agents_dir = plugin_root / "agents"
     if not agents_dir.exists() or not agents_dir.is_dir():
         return
     for agent_path in sorted(agents_dir.glob("*.md")):
         _adapt_agent_role_file(agent_path)
+
+
+def adapt_markdown_front_matter_files(*, plugin_root: Path) -> None:
+    for skill_path in sorted(plugin_root.rglob("SKILL.md")):
+        _adapt_markdown_front_matter_file(skill_path)
+    commands_dir = plugin_root / "commands"
+    if not commands_dir.is_dir():
+        return
+    for command_path in sorted(commands_dir.glob("*.md")):
+        _adapt_markdown_front_matter_file(command_path)
 
 
 def _adapt_manifest(plugin_root: Path) -> dict[str, object]:
@@ -171,6 +186,30 @@ def _adapt_agent_role_file(path: Path) -> None:
     )
 
 
+def _adapt_markdown_front_matter_file(path: Path) -> None:
+    raw = path.read_text(encoding="utf-8")
+    front_matter, body = _split_front_matter(raw)
+    if not front_matter:
+        return
+    try:
+        yaml.safe_load(front_matter)
+        return
+    except yaml.YAMLError:
+        pass
+    parsed = _simple_front_matter_mapping(front_matter)
+    if not parsed:
+        return
+    rendered_front_matter = yaml.safe_dump(
+        parsed,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    path.write_text(
+        f"{_FRONT_MATTER_DELIMITER}\n{rendered_front_matter}{_FRONT_MATTER_DELIMITER}\n{body}",
+        encoding="utf-8",
+    )
+
+
 def _split_front_matter(content: str) -> tuple[str, str]:
     if not content.startswith(_FRONT_MATTER_DELIMITER):
         return "", content
@@ -179,6 +218,22 @@ def _split_front_matter(content: str) -> tuple[str, str]:
         if lines[idx].strip() == _FRONT_MATTER_DELIMITER:
             return "".join(lines[1:idx]), "".join(lines[idx + 1 :])
     return "", content
+
+
+def _simple_front_matter_mapping(front_matter: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for line in front_matter.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, separator, value = stripped.partition(":")
+        if not separator:
+            return {}
+        normalized_key = key.strip()
+        if not normalized_key:
+            return {}
+        parsed[normalized_key] = value.strip()
+    return parsed
 
 
 def _string_key_mapping(value: object) -> dict[str, object]:
