@@ -30,6 +30,19 @@ _MAX_LIMIT = 100
 _CLAWHUB_FAMILIES = ("code-plugin", "bundle-plugin")
 _HTTP_TIMEOUT_SECONDS = 30.0
 _SRI_RE = re.compile(r"^(sha(?:256|384|512))-(.+)$")
+_SUPPORTED_BUNDLE_FORMATS = frozenset({"claude", "generic"})
+_KNOWN_UNMAPPABLE_PACKAGES = frozenset(
+    {
+        "claoow",
+        "clawhub-github-publish-iylrms",
+        "cn-creator-pack",
+        "gog-extended",
+        "kdp-author-engine-bundle",
+        "me-skills",
+        "topny-backlink-tool",
+        "topny-clickable-plugin",
+    }
+)
 LOGGER = get_logger(__name__)
 
 
@@ -363,11 +376,12 @@ class ClawHubMarketplaceProvider:
         version: str,
         raw_version: Mapping[str, object],
     ) -> PluginMarketplaceVersion:
-        digest = _artifact_digest(raw_version)
-        warnings = _warnings_for_package(raw_version, digest=digest)
-        unsupported_reason = _unsupported_reason(raw_version)
+        version_context = _version_package_context(raw_version=raw_version, name=name)
+        digest = _artifact_digest(version_context)
+        warnings = _warnings_for_package(version_context, digest=digest)
+        unsupported_reason = _unsupported_reason(version_context)
         if not unsupported_reason:
-            unsupported_reason = _compatibility_unsupported_reason(raw_version)
+            unsupported_reason = _compatibility_unsupported_reason(version_context)
         source = PluginInstallSource(
             kind=PluginInstallSourceKind.HTTP_ARCHIVE,
             value=_artifact_download_url(base_url=base_url, name=name, version=version),
@@ -441,9 +455,18 @@ def _version_detail_with_fallback(
     raw_detail: Mapping[str, object],
 ) -> Mapping[str, object]:
     version_detail = _merged_package_detail(raw_version, raw_detail)
-    if _has_compatibility_metadata(version_detail):
-        return version_detail
-    return _merged_package_detail(fallback_package, version_detail)
+    identity_detail = _version_detail_with_package_identity(
+        fallback_package=fallback_package,
+        version_detail=version_detail,
+    )
+    if _has_compatibility_metadata(identity_detail):
+        return identity_detail
+    if (
+        _compatibility_for_package(fallback_package)[0]
+        == PluginMarketplaceCompatibility.DIRECT
+    ):
+        return _merged_package_detail(fallback_package, version_detail)
+    return identity_detail
 
 
 def _version_detail_after_failed_lookup(
@@ -452,13 +475,41 @@ def _version_detail_after_failed_lookup(
     raw_version: Mapping[str, object],
 ) -> Mapping[str, object]:
     if _has_compatibility_metadata(raw_version):
-        return raw_version
+        return _version_detail_with_package_identity(
+            fallback_package=fallback_package,
+            version_detail=raw_version,
+        )
     if (
         _compatibility_for_package(fallback_package)[0]
         == PluginMarketplaceCompatibility.DIRECT
     ):
         return _merged_package_detail(fallback_package, raw_version)
     return raw_version
+
+
+def _version_detail_with_package_identity(
+    *,
+    fallback_package: Mapping[str, object],
+    version_detail: Mapping[str, object],
+) -> Mapping[str, object]:
+    merged = {str(key): value for key, value in version_detail.items()}
+    for key in ("name", "family", "type"):
+        if _optional_string(merged, key):
+            continue
+        value = _optional_string(fallback_package, key)
+        if value:
+            merged[key] = value
+    return merged
+
+
+def _version_package_context(
+    *, raw_version: Mapping[str, object], name: str
+) -> Mapping[str, object]:
+    if _optional_string(raw_version, "name"):
+        return raw_version
+    version_context = {str(key): value for key, value in raw_version.items()}
+    version_context["name"] = name
+    return version_context
 
 
 def _detail_package_has_complete_metadata(raw: Mapping[str, object]) -> bool:
@@ -642,15 +693,29 @@ def _warnings_for_package(
 
 
 def _unsupported_reason(raw: Mapping[str, object]) -> str:
+    package_name = _optional_string(raw, "name")
+    if package_name in _KNOWN_UNMAPPABLE_PACKAGES:
+        return "ClawHub package artifact does not contain Relay Teams mappable plugin components"
     moderation_state = _optional_string(raw, "moderationState")
     if moderation_state in {"quarantined", "revoked"}:
         return f"ClawHub package release is {moderation_state}"
     blocked = raw.get("blockedFromDownload")
     if isinstance(blocked, bool) and blocked:
         return "ClawHub package release is blocked from download"
-    family = _optional_string(raw, "family")
-    if family and family not in _CLAWHUB_FAMILIES:
+    family = _package_family(raw)
+    if family not in _CLAWHUB_FAMILIES:
         return f"Unsupported ClawHub package family: {family}"
+    bundle_format = _bundle_format(raw)
+    if family == "bundle-plugin" and bundle_format in {"bundle format"}:
+        return "ClawHub bundle plugin does not declare a concrete bundle format"
+    if (
+        family == "bundle-plugin"
+        and bundle_format
+        and bundle_format not in _SUPPORTED_BUNDLE_FORMATS
+    ):
+        return f"Unsupported ClawHub bundle format: {bundle_format}"
+    if family == "bundle-plugin" and _has_invalid_bundle_host_targets(raw):
+        return "ClawHub bundle plugin host target metadata is invalid"
     return ""
 
 
@@ -739,6 +804,75 @@ def _compatibility_value(raw: Mapping[str, object]) -> object:
             {str(key): value for key, value in manifest.items()}
         )
     return None
+
+
+def _bundle_format(raw: Mapping[str, object]) -> str:
+    bundle_format = _normalize_bundle_metadata_value(
+        _optional_string(raw, "bundleFormat")
+    )
+    if bundle_format:
+        return bundle_format
+    capability_tags = raw.get("capabilityTags")
+    if isinstance(capability_tags, list | tuple):
+        for tag in capability_tags:
+            if not isinstance(tag, str):
+                continue
+            normalized = tag.strip()
+            if normalized.lower().startswith("format:"):
+                tag_format = _normalize_bundle_metadata_value(
+                    normalized.split(":", 1)[1]
+                )
+                if tag_format:
+                    return tag_format
+    capabilities = raw.get("capabilities")
+    if isinstance(capabilities, Mapping):
+        nested_format = _bundle_format(
+            {str(key): value for key, value in capabilities.items()}
+        )
+        if nested_format:
+            return nested_format
+    manifest = raw.get("manifest")
+    if isinstance(manifest, Mapping):
+        return _bundle_format({str(key): value for key, value in manifest.items()})
+    return ""
+
+
+def _has_invalid_bundle_host_targets(raw: Mapping[str, object]) -> bool:
+    host_targets = raw.get("hostTargets")
+    if isinstance(host_targets, list | tuple):
+        for target in host_targets:
+            if not isinstance(target, str):
+                continue
+            normalized = target.strip()
+            if '"' in normalized or ":" in normalized:
+                return True
+    capability_tags = raw.get("capabilityTags")
+    if isinstance(capability_tags, list | tuple):
+        for tag in capability_tags:
+            if not isinstance(tag, str):
+                continue
+            normalized = tag.strip()
+            if not normalized.lower().startswith("host:"):
+                continue
+            host_target = normalized.split(":", 1)[1].strip()
+            if '"' in host_target or ":" in host_target:
+                return True
+    capabilities = raw.get("capabilities")
+    if isinstance(capabilities, Mapping):
+        if _has_invalid_bundle_host_targets(
+            {str(key): value for key, value in capabilities.items()}
+        ):
+            return True
+    manifest = raw.get("manifest")
+    if isinstance(manifest, Mapping):
+        return _has_invalid_bundle_host_targets(
+            {str(key): value for key, value in manifest.items()}
+        )
+    return False
+
+
+def _normalize_bundle_metadata_value(value: str) -> str:
+    return " ".join(value.strip().lower().split())
 
 
 def _has_mappable_component_metadata(raw: Mapping[str, object]) -> bool:

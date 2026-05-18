@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+from typing import cast
 import zipfile
 
 import pytest
@@ -23,7 +24,12 @@ from relay_teams.env import ProxyEnvConfig
 from relay_teams.plugins.claude_plugin_adapter import adapt_plugin_tree
 from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.plugins.integrity import compute_plugin_tree_sha256
-from relay_teams.plugins.openclaw_plugin_adapter import adapt_openclaw_plugin_tree
+from relay_teams.plugins.openclaw_plugin_adapter import (
+    _directory_component_path,
+    _sanitize_component_path_value,
+    _sanitize_relay_manifest_value,
+    adapt_openclaw_plugin_tree,
+)
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.marketplace_models import (
     PluginMarketplaceCompatibility,
@@ -83,6 +89,20 @@ class _FailingSetSecretStore(_FileOnlySecretStore):
         )
 
 
+class _FakeResolvedPath:
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def expanduser(self) -> _FakeResolvedPath:
+        return self
+
+    def resolve(self) -> _FakeResolvedPath:
+        return self
+
+    def __str__(self) -> str:
+        return self._value
+
+
 def test_update_plugin_installs_new_version_and_prune_removes_old_copy(
     tmp_path: Path,
 ) -> None:
@@ -122,6 +142,33 @@ def test_prune_installed_plugins_aborts_on_invalid_state_file(tmp_path: Path) ->
         manager.prune_installed_plugins()
 
     assert installed.root_dir.exists()
+
+
+def test_config_manager_removes_validation_cache_tree(tmp_path: Path) -> None:
+    cache_root = tmp_path / "app" / "plugins" / "cache" / "validation"
+    target = (
+        cache_root
+        / "plugin"
+        / "skills"
+        / "minimax-docx"
+        / "scripts"
+        / "dotnet"
+        / "MiniMaxAIDocx.Core"
+        / "obj"
+        / "Debug"
+        / "net8.0"
+    )
+    target.mkdir(parents=True)
+    file_path = target / "build.cache"
+    file_path.write_text("cached", encoding="utf-8")
+    file_path.chmod(stat.S_IREAD)
+
+    PluginConfigManager._remove_directory_under(
+        parent=cache_root,
+        target=cache_root / "plugin",
+    )
+
+    assert not (cache_root / "plugin").exists()
 
 
 def test_update_plugin_rejects_version_for_local_plugins(tmp_path: Path) -> None:
@@ -2568,6 +2615,7 @@ def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
                         "name": "bundle",
                         "latestVersion": "1.0.0",
                         "family": "bundle-plugin",
+                        "capabilities": {"bundleFormat": "generic"},
                     }
                 ]
             }
@@ -2575,6 +2623,7 @@ def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
             return {
                 "version": "1.0.0",
                 "family": "bundle-plugin",
+                "capabilities": {"bundleFormat": "generic"},
             }
         if url == "https://clawhub.test/api/v1/packages/needs-details":
             return {
@@ -2642,6 +2691,7 @@ def test_clawhub_marketplace_lightweight_index_filters_to_installable_plugins(
     assert all(entry.supported_versions() for entry in index.plugins)
     assert index.plugins[0].compatibility == "direct"
     assert index.plugins[1].supported_versions()[0].version == "1.0.0"
+    assert index.plugins[1].supported_versions()[0].unsupported_reason == ""
     assert index.plugins[2].compatibility == "direct"
 
 
@@ -2662,6 +2712,134 @@ def test_clawhub_marketplace_provider_marks_blocked_releases_unsupported() -> No
     assert entry.versions[0].unsupported_reason == (
         "ClawHub package release is quarantined"
     )
+
+
+def test_clawhub_marketplace_provider_marks_placeholder_bundle_format_unsupported() -> (
+    None
+):
+    provider = clawhub_marketplace_provider.ClawHubMarketplaceProvider()
+
+    entry = provider._entry_from_raw_package(
+        raw_package={
+            "name": "placeholder-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilityTags": ["format:Bundle format"],
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert entry.supported_versions() == ()
+    assert entry.versions[0].unsupported_reason == (
+        "ClawHub bundle plugin does not declare a concrete bundle format"
+    )
+
+    unsupported_format = provider._entry_from_raw_package(
+        raw_package={
+            "name": "codex-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {"bundleFormat": "codex"},
+        },
+        base_url="https://clawhub.test",
+    )
+    invalid_host = provider._entry_from_raw_package(
+        raw_package={
+            "name": "invalid-host",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {
+                "bundleFormat": "generic",
+                "capabilityTags": ['host:"main": "./dist/plugin.js"'],
+            },
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert unsupported_format.supported_versions() == ()
+    assert unsupported_format.versions[0].unsupported_reason == (
+        "Unsupported ClawHub bundle format: codex"
+    )
+    assert invalid_host.supported_versions() == ()
+    assert invalid_host.versions[0].unsupported_reason == (
+        "ClawHub bundle plugin host target metadata is invalid"
+    )
+
+    known_unmappable = provider._entry_from_raw_package(
+        raw_package={
+            "name": "kdp-author-engine-bundle",
+            "family": "bundle-plugin",
+            "version": "1.0.0",
+            "capabilities": {"bundleFormat": "generic"},
+        },
+        base_url="https://clawhub.test",
+    )
+
+    assert known_unmappable.supported_versions() == ()
+    assert known_unmappable.versions[0].unsupported_reason == (
+        "ClawHub package artifact does not contain Relay Teams mappable plugin components"
+    )
+    version_without_name = provider._version_from_raw_package(
+        base_url="https://clawhub.test",
+        name="kdp-author-engine-bundle",
+        version="1.0.0",
+        raw_version={
+            "version": "1.0.0",
+            "family": "bundle-plugin",
+            "capabilities": {"bundleFormat": "generic"},
+        },
+    )
+    assert version_without_name.unsupported_reason == (
+        "ClawHub package artifact does not contain Relay Teams mappable plugin components"
+    )
+    type_only_bundle = provider._version_from_raw_package(
+        base_url="https://clawhub.test",
+        name="codex-bundle",
+        version="1.0.0",
+        raw_version={
+            "version": "1.0.0",
+            "type": "bundle-plugin",
+            "capabilities": {"bundleFormat": "codex"},
+        },
+    )
+    assert (
+        type_only_bundle.unsupported_reason
+        == "Unsupported ClawHub bundle format: codex"
+    )
+    detail_with_family = clawhub_marketplace_provider._version_detail_with_fallback(
+        fallback_package={
+            "name": "codex-bundle",
+            "family": "bundle-plugin",
+            "runtimeExtensions": ["./dist/index.js"],
+        },
+        raw_version={"version": "1.0.0"},
+        raw_detail={"capabilities": {"bundleFormat": "codex"}},
+    )
+    assert detail_with_family["family"] == "bundle-plugin"
+    assert "runtimeExtensions" not in detail_with_family
+    sparse_direct_detail = clawhub_marketplace_provider._version_detail_with_fallback(
+        fallback_package={
+            "name": "quality-helper",
+            "family": "code-plugin",
+            "skills": ["quality"],
+        },
+        raw_version={"version": "1.0.0"},
+        raw_detail={"sha256": "abc"},
+    )
+    assert sparse_direct_detail["skills"] == ["quality"]
+    failed_lookup_detail_with_family = (
+        clawhub_marketplace_provider._version_detail_after_failed_lookup(
+            fallback_package={
+                "name": "codex-bundle",
+                "family": "bundle-plugin",
+            },
+            raw_version={
+                "version": "1.0.0",
+                "capabilities": {"bundleFormat": "codex"},
+            },
+        )
+    )
+    assert failed_lookup_detail_with_family["family"] == "bundle-plugin"
 
 
 def test_clawhub_marketplace_provider_helper_edge_cases() -> None:
@@ -2700,6 +2878,52 @@ def test_clawhub_marketplace_provider_helper_edge_cases() -> None:
     manifest_capability = clawhub_marketplace_provider._compatibility_for_package(
         {"manifest": {"capabilities": {"commands": ["check"]}}}
     )
+    nested_bundle_format = clawhub_marketplace_provider._bundle_format(
+        {"capabilities": {"capabilityTags": ["format: relay teams"]}}
+    )
+    manifest_bundle_format = clawhub_marketplace_provider._bundle_format(
+        {"manifest": {"capabilities": {"bundleFormat": "codex"}}}
+    )
+    manifest_bundle_format_after_empty_capabilities = (
+        clawhub_marketplace_provider._bundle_format(
+            {
+                "capabilities": {},
+                "manifest": {"capabilities": {"bundleFormat": "codex"}},
+            }
+        )
+    )
+    manifest_bundle_format_after_empty_tag = (
+        clawhub_marketplace_provider._bundle_format(
+            {
+                "capabilityTags": ["format:"],
+                "manifest": {"capabilities": {"bundleFormat": "codex"}},
+            }
+        )
+    )
+    invalid_host_tag = clawhub_marketplace_provider._has_invalid_bundle_host_targets(
+        {"capabilityTags": ["host: claude:desktop"]}
+    )
+    invalid_nested_host = clawhub_marketplace_provider._has_invalid_bundle_host_targets(
+        {"capabilities": {"hostTargets": ["claude:desktop"]}}
+    )
+    invalid_manifest_host = (
+        clawhub_marketplace_provider._has_invalid_bundle_host_targets(
+            {"manifest": {"capabilities": {"capabilityTags": ['host:"main"']}}}
+        )
+    )
+    invalid_manifest_host_after_empty_capabilities = (
+        clawhub_marketplace_provider._has_invalid_bundle_host_targets(
+            {
+                "capabilities": {},
+                "manifest": {"capabilities": {"hostTargets": ["claude:desktop"]}},
+            }
+        )
+    )
+    nested_mappable_metadata = (
+        clawhub_marketplace_provider._has_mappable_component_metadata(
+            {"capabilities": {"commands": ["setup"]}}
+        )
+    )
     warnings = clawhub_marketplace_provider._warnings_for_package(
         {
             "scanStatus": "pending",
@@ -2731,6 +2955,15 @@ def test_clawhub_marketplace_provider_helper_edge_cases() -> None:
     assert family == "bundle-plugin"
     assert bundled[0] == "direct"
     assert manifest_capability[0] == "direct"
+    assert nested_bundle_format == "relay teams"
+    assert manifest_bundle_format == "codex"
+    assert manifest_bundle_format_after_empty_capabilities == "codex"
+    assert manifest_bundle_format_after_empty_tag == "codex"
+    assert invalid_host_tag is True
+    assert invalid_nested_host is True
+    assert invalid_manifest_host is True
+    assert invalid_manifest_host_after_empty_capabilities is True
+    assert nested_mappable_metadata is True
     assert warnings == (
         "ClawHub scan status is pending.",
         "ClawHub package uses a legacy ZIP artifact.",
@@ -3180,6 +3413,193 @@ def test_openclaw_adapter_creates_manifest_for_static_bundle(tmp_path: Path) -> 
     assert manifest["skills"] == "./skills"
 
 
+def test_openclaw_adapter_creates_manifest_for_root_skill_static_bundle(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "bundle"
+    plugin_root.mkdir()
+    (plugin_root / "SKILL.md").write_text(
+        "# Bundle\n\nUse this skill from the bundle root.\n",
+        encoding="utf-8",
+    )
+    nested_skill_dir = plugin_root / "nested"
+    nested_skill_dir.mkdir()
+    (nested_skill_dir / "SKILL.md").write_text(
+        "# Nested\n\nUse this nested skill for checks.\n",
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version=None,
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["version"] == "local"
+    assert manifest["skills"] == "."
+
+
+def test_openclaw_adapter_maps_nested_skill_manifest(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "bundle"
+    skill_dir = plugin_root / "verified-agent-identity"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "# Verified Agent Identity\n\nUse this skill for identity checks.\n",
+        encoding="utf-8",
+    )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="4.0.0",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["name"] == "bundle"
+    assert manifest["version"] == "4.0.0"
+    assert manifest["skills"] == "./verified-agent-identity"
+
+
+def test_openclaw_adapter_maps_multiple_nested_skill_manifests(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "bundle"
+    for relative in (
+        "alpha",
+        "packs/beta",
+        "node_modules/ignored",
+        ".venv/ignored",
+        "a/b/c/d/e",
+    ):
+        skill_dir = plugin_root / relative
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "# Skill\n\nUse this skill for tests.\n",
+            encoding="utf-8",
+        )
+
+    adapt_openclaw_plugin_tree(
+        plugin_root=plugin_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+        source_version="4.0.0",
+    )
+
+    manifest = json.loads((plugin_root / "app" / "plugin.json").read_text("utf-8"))
+    assert manifest["skills"] == ["./alpha", "./packs/beta"]
+
+
+def test_openclaw_adapter_sanitizes_component_path_edge_cases(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "bundle"
+    (plugin_root / "commands").mkdir(parents=True)
+    (plugin_root / "commands" / "setup.md").write_text("Setup.\n", encoding="utf-8")
+    (plugin_root / "commands" / "teardown.md").write_text(
+        "Teardown.\n",
+        encoding="utf-8",
+    )
+    (plugin_root / "README.md").write_text("Docs.\n", encoding="utf-8")
+
+    assert _sanitize_component_path_value(
+        key="commands",
+        value=[
+            " commands/setup.md ",
+            "commands/teardown.md",
+            "README.md",
+            "",
+            "../outside.md",
+            "\\absolute\\command.md",
+            7,
+        ],
+        plugin_root=plugin_root,
+    ) == [
+        "./commands",
+        "./README.md",
+        "",
+        "../outside.md",
+        "\\absolute\\command.md",
+        7,
+    ]
+    assert _sanitize_component_path_value(
+        key="settings",
+        value={"path": "settings/config.json"},
+        plugin_root=plugin_root,
+    ) == {"path": "settings/config.json"}
+    assert (
+        _directory_component_path(
+            key="settings",
+            value="settings/config.json",
+            plugin_root=plugin_root,
+        )
+        == "settings/config.json"
+    )
+    assert (
+        _directory_component_path(
+            key="commands",
+            value="./README.md",
+            plugin_root=plugin_root,
+        )
+        == "./README.md"
+    )
+    assert (
+        _directory_component_path(
+            key="commands",
+            value="./commands/setup.md",
+            plugin_root=plugin_root,
+        )
+        == "./commands"
+    )
+
+
+def test_openclaw_adapter_sanitizes_existing_manifest_user_config(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "bundle"
+    plugin_root.mkdir()
+    raw_scalar = ["token"]
+
+    assert (
+        _sanitize_relay_manifest_value(
+            key="description",
+            value="Plugin",
+            plugin_root=plugin_root,
+        )
+        == "Plugin"
+    )
+    assert (
+        _sanitize_relay_manifest_value(
+            key="userConfig",
+            value=raw_scalar,
+            plugin_root=plugin_root,
+        )
+        is raw_scalar
+    )
+    assert _sanitize_relay_manifest_value(
+        key="userConfig",
+        value={
+            "token": {
+                "type": "string",
+                "title": "Token",
+                "pattern": "ignored",
+                "sensitive": True,
+            },
+            "legacy": "enabled",
+        },
+        plugin_root=plugin_root,
+    ) == {
+        "token": {
+            "type": "string",
+            "title": "Token",
+            "sensitive": True,
+        },
+        "legacy": "enabled",
+    }
+
+
 def test_archive_plugin_root_ignores_macos_metadata(tmp_path: Path) -> None:
     extract_dir = tmp_path / "extract"
     plugin_root = extract_dir / "quality"
@@ -3284,6 +3704,21 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
 
     extra_manifest_root = tmp_path / "extra-manifest"
     (extra_manifest_root / "app").mkdir(parents=True)
+    (extra_manifest_root / "agents").mkdir()
+    (extra_manifest_root / "agents" / "researcher.md").write_text(
+        "---\nname: Researcher\n---\nResearch.\n",
+        encoding="utf-8",
+    )
+    (extra_manifest_root / "commands").mkdir()
+    (extra_manifest_root / "commands" / "setup.md").write_text(
+        "---\nname: setup\n---\nSetup.\n",
+        encoding="utf-8",
+    )
+    (extra_manifest_root / "commands" / "teardown.md").write_text(
+        "---\nname: teardown\n---\nTeardown.\n",
+        encoding="utf-8",
+    )
+    (extra_manifest_root / "README.md").write_text("Bundle docs.\n", encoding="utf-8")
     (extra_manifest_root / "app" / "plugin.json").write_text(
         json.dumps(
             {
@@ -3291,14 +3726,32 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
                 "name": "extra-manifest",
                 "version": "1.0.0",
                 "description": "OpenClaw package",
-                "agents": "./agents",
+                "agents": "agents/researcher.md",
+                "commands": [
+                    "commands/setup.md",
+                    "commands/teardown.md",
+                    "../outside.md",
+                    "README.md",
+                    7,
+                ],
+                "hooks": "\\absolute\\hooks.json",
                 "mcpServers": "./mcp.json",
+                "monitors": "   ",
+                "settings": ["settings/config.json", {"path": "settings/config.json"}],
                 "userConfig": {
                     "token": {
                         "type": "string",
                         "sensitive": True,
-                    }
+                    },
+                    "preferred_currency": {
+                        "type": "string",
+                        "title": "Preferred currency",
+                        "default": "USD",
+                        "pattern": "^[A-Z]{3}$",
+                    },
                 },
+                "displayName": "Extra Manifest",
+                "icon": "./icon.png",
                 "id": "extra-manifest",
                 "commandNamespace": "extra",
             }
@@ -3319,14 +3772,133 @@ def test_openclaw_adapter_noops_for_unmappable_or_existing_manifest(
         "version": "1.0.0",
         "description": "OpenClaw package",
         "agents": "./agents",
+        "commands": ["./commands", "../outside.md", "./README.md", 7],
+        "hooks": "\\absolute\\hooks.json",
         "mcpServers": "./mcp.json",
+        "monitors": "   ",
+        "settings": ["./settings/config.json", {"path": "settings/config.json"}],
         "userConfig": {
             "token": {
                 "type": "string",
                 "sensitive": True,
+            },
+            "preferred_currency": {
+                "type": "string",
+                "title": "Preferred currency",
+                "default": "USD",
+            },
+        },
+    }
+
+    claude_manifest_root = tmp_path / "claude-manifest"
+    (claude_manifest_root / ".claude-plugin").mkdir(parents=True)
+    (claude_manifest_root / "agents").mkdir()
+    (claude_manifest_root / "commands").mkdir()
+    (claude_manifest_root / "commands" / "setup.md").write_text(
+        "---\n"
+        "name: setup\n"
+        "description: Setup command. Usage: /setup <target>\n"
+        "aliases:\n"
+        "  - /bootstrap\n"
+        "  - setup-env\n"
+        "---\n"
+        "# Setup\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / "commands" / "deploy").mkdir()
+    (claude_manifest_root / "commands" / "deploy" / "release.md").write_text(
+        "---\n"
+        "name: release\n"
+        "description: Release command. Usage: /deploy:release <target>\n"
+        "---\n"
+        "# Release\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / "skills" / "conflict-patterns").mkdir(parents=True)
+    (claude_manifest_root / "skills" / "conflict-patterns" / "SKILL.md").write_text(
+        "---\n"
+        "name: Conflict Patterns\n"
+        "description: Identify conflicts. Usage: /skill-git:check <skill-name>\n"
+        "version: 1.0.0\n"
+        "---\n"
+        "# Conflict Patterns\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / "agents" / "performance-marketer.md").write_text(
+        "---\n"
+        "name: Performance Marketer\n"
+        "tools:\n"
+        "  - web-search\n"
+        "---\n"
+        "Run campaigns.\n",
+        encoding="utf-8",
+    )
+    (claude_manifest_root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "@markifact/mcp",
+                "version": "1.0.0",
+                "mcpServers": "mcp.json",
+                "commands": ["commands/setup.md"],
+                "userConfig": {
+                    "preferred_currency": {
+                        "type": "string",
+                        "default": "USD",
+                        "pattern": "^[A-Z]{3}$",
+                    }
+                },
+                "displayName": "Markifact Performance Marketing",
+                "icon": "./icon.png",
+            }
+        ),
+        encoding="utf-8",
+    )
+    adapt_openclaw_plugin_tree(
+        plugin_root=claude_manifest_root,
+        adapter="openclaw",
+        manifest_config_dir_name="app",
+    )
+    claude_manifest = json.loads(
+        (claude_manifest_root / ".claude-plugin" / "plugin.json").read_text("utf-8")
+    )
+    assert claude_manifest == {
+        "name": "markifact-mcp",
+        "version": "1.0.0",
+        "mcpServers": "./mcp.json",
+        "commands": ["./commands"],
+        "userConfig": {
+            "preferred_currency": {
+                "type": "string",
+                "default": "USD",
             }
         },
     }
+    agent_role = (
+        claude_manifest_root / "agents" / "performance-marketer.md"
+    ).read_text("utf-8")
+    assert "role_id: Performance Marketer" in agent_role
+    assert "mode: subagent" in agent_role
+    assert "- web-search" in agent_role
+    skill_manifest = (
+        claude_manifest_root / "skills" / "conflict-patterns" / "SKILL.md"
+    ).read_text("utf-8")
+    assert (
+        "description: 'Identify conflicts. Usage: /skill-git:check <skill-name>'"
+        in skill_manifest
+    )
+    command_manifest = (claude_manifest_root / "commands" / "setup.md").read_text(
+        "utf-8"
+    )
+    assert "description: 'Setup command. Usage: /setup <target>'" in command_manifest
+    assert "- /bootstrap" in command_manifest
+    assert "- setup-env" in command_manifest
+    nested_command_manifest = (
+        claude_manifest_root / "commands" / "deploy" / "release.md"
+    ).read_text("utf-8")
+    assert (
+        "description: 'Release command. Usage: /deploy:release <target>'"
+        in nested_command_manifest
+    )
 
     unmappable_root = tmp_path / "unmappable"
     unmappable_root.mkdir()
@@ -3486,6 +4058,125 @@ def test_extract_tar_archive_preserves_executable_mode(tmp_path: Path) -> None:
 
     extracted = tmp_path / "target" / "quality" / "bin" / "run.sh"
     assert stat.S_IMODE(extracted.stat().st_mode) == 0o755
+
+
+def test_extract_archives_create_explicit_directory_entries(tmp_path: Path) -> None:
+    zip_path = tmp_path / "quality.zip"
+    zip_dir = zipfile.ZipInfo("quality/bin/")
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        archive.writestr(zip_dir, "")
+        archive.writestr("quality/bin/run.txt", "run\n")
+
+    plugin_installers._extract_archive(
+        archive_path=zip_path,
+        target_dir=tmp_path / "zip-target",
+    )
+
+    tar_path = tmp_path / "quality.tar"
+    tar_dir = tarfile.TarInfo("quality/bin")
+    tar_dir.type = tarfile.DIRTYPE
+    payload = b"run\n"
+    tar_file = tarfile.TarInfo("quality/bin/run.txt")
+    tar_file.size = len(payload)
+    with tarfile.open(tar_path, "w") as archive:
+        archive.addfile(tar_dir)
+        archive.addfile(tar_file, io.BytesIO(payload))
+
+    plugin_installers._extract_archive(
+        archive_path=tar_path,
+        target_dir=tmp_path / "tar-target",
+    )
+
+    assert (tmp_path / "zip-target" / "quality" / "bin").is_dir()
+    assert (tmp_path / "zip-target" / "quality" / "bin" / "run.txt").read_text(
+        "utf-8"
+    ) == "run\n"
+    assert (tmp_path / "tar-target" / "quality" / "bin").is_dir()
+    assert (tmp_path / "tar-target" / "quality" / "bin" / "run.txt").read_text(
+        "utf-8"
+    ) == "run\n"
+
+
+def test_zip_member_filesystem_name_preserves_windows_sanitization() -> None:
+    illegal_name = plugin_installers._zip_member_filesystem_name(
+        "quality/bad:name.md",
+        platform_name="nt",
+    )
+    trailing_dot_name = plugin_installers._zip_member_filesystem_name(
+        "quality/trailing. /file.txt",
+        platform_name="nt",
+    )
+
+    assert illegal_name == "quality/bad_name.md"
+    assert trailing_dot_name == "quality/trailing/file.txt"
+
+
+def test_installer_filesystem_path_adds_windows_long_path_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(plugin_installers.os, "name", "nt")
+        filesystem_path = plugin_installers._filesystem_path(tmp_path / "quality")
+
+        assert filesystem_path.startswith("\\\\?\\")
+        assert (
+            plugin_installers._filesystem_path(
+                cast(Path, _FakeResolvedPath("\\\\?\\C:\\plugins\\quality"))
+            )
+            == "\\\\?\\C:\\plugins\\quality"
+        )
+        assert (
+            plugin_installers._filesystem_path(
+                cast(Path, _FakeResolvedPath("\\\\server\\share\\quality"))
+            )
+            == "\\\\?\\UNC\\server\\share\\quality"
+        )
+
+
+def test_config_manager_filesystem_path_and_retry_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(plugin_config_manager.os, "name", "nt")
+        assert (
+            plugin_config_manager._filesystem_path(
+                cast(Path, _FakeResolvedPath("C:\\plugins\\quality"))
+            )
+            == "\\\\?\\C:\\plugins\\quality"
+        )
+        assert (
+            plugin_config_manager._filesystem_path(
+                cast(Path, _FakeResolvedPath("\\\\?\\C:\\plugins\\quality"))
+            )
+            == "\\\\?\\C:\\plugins\\quality"
+        )
+        assert (
+            plugin_config_manager._filesystem_path(
+                cast(Path, _FakeResolvedPath("\\\\server\\share\\quality"))
+            )
+            == "\\\\?\\UNC\\server\\share\\quality"
+        )
+
+    retry_target = tmp_path / "readonly.txt"
+    retry_target.write_text("locked", encoding="utf-8")
+    retry_target.chmod(stat.S_IREAD)
+    calls: list[str] = []
+
+    def remove_after_chmod(path: str) -> object:
+        calls.append(path)
+        Path(path).unlink()
+        return None
+
+    plugin_config_manager._make_writable_and_retry(
+        remove_after_chmod,
+        str(retry_target),
+        RuntimeError("denied"),
+    )
+
+    assert calls == [str(retry_target)]
+    assert not retry_target.exists()
 
 
 def test_archive_digest_helpers_handle_supported_and_invalid_values(
@@ -4166,7 +4857,10 @@ def test_claude_plugin_adapter_normalizes_agent_front_matter(tmp_path: Path) -> 
     assert "role_id: atomic-explorer" in content
     assert "version: 1.0.0" in content
     assert "mode: subagent" in content
-    assert "tools: []" in content
+    assert "tools:" in content
+    assert "- Glob" in content
+    assert "- Grep" in content
+    assert "- Read" in content
     assert "category" not in manifest_content
     assert '"name": "atomic-agents"' in manifest_content
     assert hook_content["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 5.0

@@ -43,11 +43,26 @@ def adapt_plugin_tree(*, plugin_root: Path, adapter: str) -> None:
         return
     manifest = _adapt_manifest(plugin_root)
     _adapt_hook_configs(plugin_root, manifest=manifest)
+    adapt_agent_role_files(plugin_root=plugin_root)
+    adapt_markdown_front_matter_files(plugin_root=plugin_root)
+
+
+def adapt_agent_role_files(*, plugin_root: Path) -> None:
     agents_dir = plugin_root / "agents"
     if not agents_dir.exists() or not agents_dir.is_dir():
         return
     for agent_path in sorted(agents_dir.glob("*.md")):
         _adapt_agent_role_file(agent_path)
+
+
+def adapt_markdown_front_matter_files(*, plugin_root: Path) -> None:
+    for skill_path in sorted(plugin_root.rglob("SKILL.md")):
+        _adapt_markdown_front_matter_file(skill_path)
+    commands_dir = plugin_root / "commands"
+    if not commands_dir.is_dir():
+        return
+    for command_path in sorted(commands_dir.rglob("*.md")):
+        _adapt_markdown_front_matter_file(command_path)
 
 
 def _adapt_manifest(plugin_root: Path) -> dict[str, object]:
@@ -155,11 +170,38 @@ def _adapt_agent_role_file(path: Path) -> None:
     parsed["description"] = _string_field(parsed, "description") or parsed["name"]
     parsed["version"] = _string_field(parsed, "version") or "1.0.0"
     parsed["mode"] = _string_field(parsed, "mode") or "subagent"
-    parsed["tools"] = []
+    if "tools" in parsed:
+        parsed["tools"] = _string_list_field(parsed, "tools")
+    else:
+        parsed["tools"] = []
     if "mcp_servers" in parsed:
         parsed["mcp_servers"] = _string_list_field(parsed, "mcp_servers")
     if "skills" in parsed:
         parsed["skills"] = _string_list_field(parsed, "skills")
+    rendered_front_matter = yaml.safe_dump(
+        parsed,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    path.write_text(
+        f"{_FRONT_MATTER_DELIMITER}\n{rendered_front_matter}{_FRONT_MATTER_DELIMITER}\n{body}",
+        encoding="utf-8",
+    )
+
+
+def _adapt_markdown_front_matter_file(path: Path) -> None:
+    raw = path.read_text(encoding="utf-8")
+    front_matter, body = _split_front_matter(raw)
+    if not front_matter:
+        return
+    try:
+        yaml.safe_load(front_matter)
+        return
+    except yaml.YAMLError:
+        pass
+    parsed = _simple_front_matter_mapping(front_matter)
+    if not parsed:
+        return
     rendered_front_matter = yaml.safe_dump(
         parsed,
         allow_unicode=True,
@@ -179,6 +221,40 @@ def _split_front_matter(content: str) -> tuple[str, str]:
         if lines[idx].strip() == _FRONT_MATTER_DELIMITER:
             return "".join(lines[1:idx]), "".join(lines[idx + 1 :])
     return "", content
+
+
+def _simple_front_matter_mapping(front_matter: str) -> dict[str, object]:
+    parsed: dict[str, object] = {}
+    current_list_key = ""
+    for line in front_matter.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("-"):
+            if not current_list_key:
+                return {}
+            item = stripped[1:].strip()
+            if not item:
+                return {}
+            current_value = parsed.get(current_list_key)
+            if not isinstance(current_value, list):
+                return {}
+            current_value.append(item)
+            continue
+        key, separator, value = stripped.partition(":")
+        if not separator:
+            return {}
+        normalized_key = key.strip()
+        if not normalized_key:
+            return {}
+        normalized_value = value.strip()
+        if normalized_value:
+            parsed[normalized_key] = normalized_value
+            current_list_key = ""
+            continue
+        parsed[normalized_key] = []
+        current_list_key = normalized_key
+    return parsed
 
 
 def _string_key_mapping(value: object) -> dict[str, object]:
