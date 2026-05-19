@@ -32,6 +32,15 @@ class AssistantRunError(RuntimeError):
         super().__init__(payload.error_message or payload.assistant_message)
 
 
+class RunErrorPresentation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    error_code: str = ""
+    user_message: str
+    recovery_prompt: str | None = None
+    diagnostic_message: str = ""
+
+
 INVALID_TOOL_ARGS_RECOVERY_MESSAGE = (
     "The previous tool call arguments were not valid JSON. "
     "Do not repeat already successful tool calls. "
@@ -63,51 +72,90 @@ def _append_error_detail(message: str, detail: str) -> str:
     return f"{message} Details: {normalized_detail}"
 
 
-def _append_error_detail_block(message: str, detail: str) -> str:
-    normalized_detail = detail.strip()
-    if not normalized_detail:
-        return message
-    return f"{message}\n\nDetails:\n```text\n{normalized_detail}\n```"
-
-
-def _build_recovery_guidance_message(
+def _build_user_error_message(
     error_code: str,
     *,
     detail: str = "",
-) -> str | None:
+) -> str:
     if error_code == "model_tool_args_invalid_json":
-        return INVALID_TOOL_ARGS_RECOVERY_MESSAGE
+        return (
+            "The model returned invalid tool call arguments. "
+            "The run can continue after the arguments are corrected."
+        )
     if error_code == "network_stream_interrupted":
-        return _append_error_detail(
+        return (
             "The model response stream was interrupted by a temporary network or transport failure. "
-            "Retry to continue from the latest saved conversation state.",
-            detail,
+            "Retry the run to continue."
         )
     if error_code == "network_timeout":
-        return _append_error_detail(
-            "The request reached the model endpoint path but timed out while waiting for the provider to respond. "
-            "Check whether the provider is responding slowly, then review connect_timeout_seconds, proxy settings, and the configured base_url. "
-            "If this keeps happening, retry with a longer timeout or inspect upstream latency.",
-            detail,
+        return (
+            "The model request timed out while waiting for the provider to respond. "
+            "Check provider latency, proxy settings, base_url, or increase the configured timeout."
         )
     if error_code == "network_error":
-        return _append_error_detail(
-            "The request failed before a usable response was received from the model endpoint. "
-            "Check DNS resolution, outbound network connectivity, proxy or NO_PROXY settings, and whether the configured base_url is reachable at all.",
-            detail,
+        return (
+            "The model request failed before a usable response was received. "
+            "Check DNS, outbound network connectivity, proxy or NO_PROXY settings, and base_url."
         )
     if error_code == "proxy_blocked":
-        return _append_error_detail_block(
+        return (
             "The model request reached an enterprise proxy block page instead of the model endpoint. "
-            "Check the configured base_url, HTTP_PROXY/HTTPS_PROXY routing, proxy credentials, and NO_PROXY entries for the model host.",
-            detail,
+            "Check base_url, proxy routing, proxy credentials, and NO_PROXY entries for the model host."
         )
     if error_code == "auth_invalid":
         return (
-            "The previous request could not continue because the API key is invalid. "
-            "The conversation state already persisted is still valid."
+            "The model provider rejected the request because the API key is invalid. "
+            "Check the current model profile credentials and try again."
         )
-    return None
+    if error_code == "verification_failed":
+        return _append_error_detail(
+            "The task verification did not pass. "
+            "Review the task spec and evidence expectations, then continue with corrected output.",
+            detail,
+        )
+    if error_code == "incomplete_todos":
+        return (
+            "The request could not be marked complete because run-scoped todos "
+            "are still incomplete. Reconcile the todo list with actual progress "
+            "before finalizing."
+        )
+    lowered = detail.lower()
+    if "prompt is too long" in lowered:
+        return (
+            "The model request prompt is too long. Reduce the input or context size, "
+            "then try again."
+        )
+    if "credit balance is too low" in lowered:
+        return (
+            "The model provider rejected the request because the API credit balance is too low. "
+            "Add credit or switch to another configured model profile."
+        )
+    if "x-api-key" in lowered or "api key" in lowered:
+        return (
+            "The model provider rejected the request because the API key is invalid. "
+            "Check the current model profile credentials and try again."
+        )
+    if detail:
+        return (
+            "The request could not be completed because of an API or execution error. "
+            f"Details: {detail}"
+        )
+    return "The request could not be completed because of an API or execution error."
+
+
+def build_error_presentation(
+    *,
+    error_code: str | None,
+    error_message: str | None,
+) -> RunErrorPresentation:
+    code = str(error_code or "").strip().lower()
+    detail = str(error_message or "").strip()
+    return RunErrorPresentation(
+        error_code=code,
+        user_message=_build_user_error_message(code, detail=detail),
+        recovery_prompt=build_auto_recovery_prompt(code),
+        diagnostic_message=detail,
+    )
 
 
 def build_assistant_error_message(
@@ -115,55 +163,10 @@ def build_assistant_error_message(
     error_code: str | None,
     error_message: str | None,
 ) -> str:
-    code = str(error_code or "").strip().lower()
-    detail = str(error_message or "").strip()
-
-    recovery_guidance = _build_recovery_guidance_message(code, detail=detail)
-    if recovery_guidance is not None:
-        return recovery_guidance
-    if code == "verification_failed":
-        return _append_error_detail(
-            "The task verification did not pass. "
-            "Review the task spec and evidence expectations, then continue with corrected output.",
-            detail,
-        )
-    if code == "incomplete_todos":
-        return _append_error_detail(
-            "The previous request could not be marked complete because "
-            "run-scoped todos are still incomplete. Continue from the latest "
-            "successful conversation state already persisted. Do not repeat "
-            "already successful tool calls. Reconcile the persisted todo list "
-            "with actual progress before finalizing.",
-            detail,
-        )
-    lowered = detail.lower()
-    if "prompt is too long" in lowered:
-        return (
-            "The previous request could not continue because the prompt is too long. "
-            "Continue from the latest persisted conversation state and keep the next response focused."
-        )
-    if "credit balance is too low" in lowered:
-        return (
-            "The previous request could not continue because the API credit balance is too low. "
-            "The conversation state already persisted is still valid."
-        )
-    if "x-api-key" in lowered or "api key" in lowered:
-        return (
-            "The previous request could not continue because the API key is invalid. "
-            "The conversation state already persisted is still valid."
-        )
-    if detail:
-        return (
-            "The previous request could not be completed because of an API or execution error. "
-            "Continue from the latest successful conversation state already persisted. "
-            "Do not repeat already successful tool calls. "
-            f"Details: {detail}"
-        )
-    return (
-        "The previous request could not be completed because of an API or execution error. "
-        "Continue from the latest successful conversation state already persisted. "
-        "Do not repeat already successful tool calls."
-    )
+    return build_error_presentation(
+        error_code=error_code,
+        error_message=error_message,
+    ).user_message
 
 
 def build_tool_error_result(
