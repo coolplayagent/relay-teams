@@ -4681,7 +4681,11 @@ async def test_generate_does_not_retry_after_streamed_text_side_effect_for_non_t
     final_message = history[-1]
     assert isinstance(final_message, ModelResponse)
     assert isinstance(final_message.parts[0], TextPart)
-    assert "Continue from the latest successful conversation state" in (
+    assert "API or execution error" in final_message.parts[0].content
+    assert "Continue from the latest successful conversation state" not in (
+        final_message.parts[0].content
+    )
+    assert "Do not repeat already successful tool calls" not in (
         final_message.parts[0].content
     )
 
@@ -5164,7 +5168,10 @@ async def test_generate_pauses_on_invalid_tool_args_json_after_committed_tool_ev
     final_message = history[-1]
     assert isinstance(final_message, ModelResponse)
     assert isinstance(final_message.parts[0], TextPart)
-    assert "not valid JSON" in final_message.parts[0].content
+    assert "invalid tool call arguments" in final_message.parts[0].content
+    assert "Do not repeat already successful tool calls" not in (
+        final_message.parts[0].content
+    )
 
 
 @pytest.mark.asyncio
@@ -5654,6 +5661,10 @@ async def test_generate_publishes_retry_exhausted_event_on_final_failure(
     final_message = history[-1]
     assert isinstance(final_message, ModelResponse)
     assert isinstance(final_message.parts[0], TextPart)
-    assert "Continue from the latest successful conversation state" in (
+    assert "API or execution error" in final_message.parts[0].content
+    assert "Continue from the latest successful conversation state" not in (
+        final_message.parts[0].content
+    )
+    assert "Do not repeat already successful tool calls" not in (
         final_message.parts[0].content
     )
