@@ -398,8 +398,6 @@ async def test_start_download_replaces_outdated_relay_knowledge(
 ) -> None:
     monkeypatch.setattr(binary_tool_service, "get_platform_key", lambda: "x64-linux")
     monkeypatch.setenv("PATH", "")
-    target = tmp_path / "relay-knowledge"
-    _write_executable(target, b"old")
     archive = _build_tarball("relay-knowledge")
     checksum = hashlib.sha256(archive).hexdigest()
     monkeypatch.setattr(
@@ -432,6 +430,8 @@ async def test_start_download_replaces_outdated_relay_knowledge(
             }
         ),
     )
+    target = service.managed_target_path(BinaryToolId.RELAY_KNOWLEDGE)
+    _write_executable(target, b"old")
 
     started = await service.start_download(BinaryToolId.RELAY_KNOWLEDGE)
     for _ in range(20):
@@ -452,8 +452,6 @@ async def test_relay_knowledge_download_job_reuses_current_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PATH", "")
-    target = tmp_path / "relay-knowledge"
-    _write_executable(target, b"current")
     monkeypatch.setattr(
         binary_tool_service.subprocess,
         "run",
@@ -465,6 +463,8 @@ async def test_relay_knowledge_download_job_reuses_current_install(
         ),
     )
     service = BinaryToolService(bin_dir=tmp_path)
+    target = service.managed_target_path(BinaryToolId.RELAY_KNOWLEDGE)
+    _write_executable(target, b"current")
     job = BinaryToolDownloadJob(
         job_id="job-current",
         tool_id=BinaryToolId.RELAY_KNOWLEDGE,

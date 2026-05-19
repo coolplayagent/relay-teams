@@ -14,7 +14,6 @@ def test_subagent_rail_dom_refs_are_cached() -> None:
     ).read_text(encoding="utf-8")
 
     for expected_ref in (
-        'toggleSubagentsBtn: qs("#toggle-subagents")',
         'rightRail: qs("#right-rail")',
         'rightRailResizer: qs("#right-rail-resizer")',
         'subagentRoleSelect: qs("#subagent-role-select")',
@@ -164,15 +163,60 @@ document.dispatchEvent(new CustomEvent("agent-teams-language-changed"));
 
 console.log(JSON.stringify({
     summaryText: globalThis.__elements.subagentStatusSummary.textContent,
-    toggleHtml: globalThis.__elements.toggleSubagentsBtn.innerHTML,
     clearPanelCalls: globalThis.__clearAllPanelsCalls,
 }));
 """.strip(),
     )
 
     assert payload["summaryText"] == "1 个运行中 / 1 个角色"
-    assert "子代理" in cast(str, payload["toggleHtml"])
     assert payload["clearPanelCalls"] == 1
+
+
+def test_subagent_rail_ignores_stale_persisted_collapsed_state(tmp_path: Path) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initializeSubagentRail, setSubagentRailExpanded } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+localStorage.setItem("agent_teams_right_rail_collapsed", "1");
+initializeSubagentRail();
+const afterInitialize = {
+    expanded: state.rightRailExpanded,
+    railCollapsed: globalThis.__elements.rightRail.classList.contains("collapsed"),
+    resizerHidden: globalThis.__elements.rightRailResizer.classList.contains("hidden"),
+    stored: localStorage.getItem("agent_teams_right_rail_collapsed"),
+};
+
+setSubagentRailExpanded(false);
+const afterTemporaryCollapse = {
+    expanded: state.rightRailExpanded,
+    railCollapsed: globalThis.__elements.rightRail.classList.contains("collapsed"),
+    resizerHidden: globalThis.__elements.rightRailResizer.classList.contains("hidden"),
+    stored: localStorage.getItem("agent_teams_right_rail_collapsed"),
+};
+
+console.log(JSON.stringify({
+    afterInitialize,
+    afterTemporaryCollapse,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "afterInitialize": {
+            "expanded": True,
+            "railCollapsed": False,
+            "resizerHidden": False,
+            "stored": None,
+        },
+        "afterTemporaryCollapse": {
+            "expanded": False,
+            "railCollapsed": True,
+            "resizerHidden": True,
+            "stored": None,
+        },
+    }
 
 
 def test_subagent_rail_force_refreshes_agents_and_tasks(tmp_path: Path) -> None:
@@ -756,9 +800,19 @@ class FixedDate extends RealDate {{
 }}
 
 function createClassList() {{
+    const classes = new Set();
     return {{
-        toggle() {{
-            return undefined;
+        contains(name) {{
+            return classes.has(name);
+        }},
+        toggle(name, force) {{
+            const shouldAdd = force === undefined ? !classes.has(name) : !!force;
+            if (shouldAdd) {{
+                classes.add(name);
+            }} else {{
+                classes.delete(name);
+            }}
+            return shouldAdd;
         }},
     }};
 }}
@@ -776,7 +830,6 @@ function createElement() {{
 
 globalThis.Date = FixedDate;
 globalThis.__elements = {{
-    toggleSubagentsBtn: createElement(),
     subagentRoleSelect: createElement(),
     subagentStatusSummary: createElement(),
     subagentRoleMeta: createElement(),
@@ -817,6 +870,9 @@ globalThis.localStorage = {{
     }},
     setItem(key, value) {{
         this._values.set(key, String(value));
+    }},
+    removeItem(key) {{
+        this._values.delete(key);
     }},
 }};
 {runner_source}

@@ -18,19 +18,18 @@ const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
 let languageRefreshBound = false;
 let subagentRailLoadingSessionId = '';
 
+function clearStoredRightRailCollapsedState() {
+    localStorage.removeItem(RIGHT_RAIL_COLLAPSED_KEY);
+}
+
 function isPrimaryOrReservedRoleId(roleId) {
     return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
 }
 
 export function initializeSubagentRail() {
-    const collapsed = localStorage.getItem(RIGHT_RAIL_COLLAPSED_KEY) === '1';
-    setSubagentRailExpanded(!collapsed);
+    clearStoredRightRailCollapsedState();
+    setSubagentRailExpanded(true);
 
-    if (els.toggleSubagentsBtn) {
-        els.toggleSubagentsBtn.onclick = () => {
-            setSubagentRailExpanded(!state.rightRailExpanded);
-        };
-    }
     if (els.subagentRoleSelect) {
         els.subagentRoleSelect.onchange = (event) => {
             const nextRoleId = String(event?.target?.value || '').trim();
@@ -282,10 +281,7 @@ export function setSubagentRailExpanded(expanded) {
     if (els.rightRailResizer) {
         els.rightRailResizer.classList.toggle('hidden', !nextExpanded);
     }
-    if (els.toggleSubagentsBtn) {
-        els.toggleSubagentsBtn.classList.toggle('active', nextExpanded);
-    }
-    localStorage.setItem(RIGHT_RAIL_COLLAPSED_KEY, nextExpanded ? '0' : '1');
+    clearStoredRightRailCollapsedState();
     updateSubagentSummary();
 }
 
@@ -313,12 +309,6 @@ function updateSubagentSummary() {
             .replace('{roles}', String(roles.length));
     if (els.subagentStatusSummary) {
         els.subagentStatusSummary.textContent = summary;
-    }
-    if (els.toggleSubagentsBtn) {
-        els.toggleSubagentsBtn.innerHTML = `
-            <span class="subagent-toggle-label">${t('topbar.subagents')}</span>
-            <span class="subagent-toggle-summary">${summary}</span>
-        `;
     }
 }
 

@@ -293,6 +293,162 @@ console.log(JSON.stringify({
     assert payload["discoveryCalls"] == 1
 
 
+def test_visible_normal_subagent_tool_call_uses_live_renderer_overlay(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    tool_events_source = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "core"
+        / "eventRouter"
+        / "toolEvents.js"
+    ).read_text(encoding="utf-8")
+    replacements = {
+        "../../app/retryStatus.js": "./mockRetryStatus.mjs",
+        "../stream.js": "./mockStream.mjs",
+        "../../app/recovery.js": "./mockRecovery.mjs",
+        "../../utils/logger.js": "./mockLogger.mjs",
+        "../../components/messageRenderer.js": "./mockMessageRenderer.mjs",
+        "../../components/agentPanel.js": "./mockAgentPanel.mjs",
+        "../../components/subagentSessions.js": "./mockSubagentSessions.mjs",
+        "../state.js": "./state.mjs",
+        "./utils.js": "./mockUtils.mjs",
+    }
+    for original, replacement in replacements.items():
+        tool_events_source = tool_events_source.replace(original, replacement)
+    (tmp_path / "toolEvents.mjs").write_text(tool_events_source, encoding="utf-8")
+    (tmp_path / "state.mjs").write_text(
+        (repo_root / "frontend" / "dist" / "js" / "core" / "state.js").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRetryStatus.mjs").write_text(
+        "export function markLlmRetrySucceeded() {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockStream.mjs").write_text(
+        "export function scheduleCurrentSessionSubagentDiscovery() { globalThis.__discoveryCalls += 1; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRecovery.mjs").write_text(
+        """
+export function markToolApprovalRequested() {}
+export function markToolApprovalResolved() {}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        "export function sysLog() {}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRenderer.mjs").write_text(
+        """
+export function applyStreamOverlayEvent(evType, payload, options) {
+  globalThis.__overlayCalls.push({ evType, payload, options });
+}
+export function appendToolCallBlock(container, streamKey, toolName, args, toolCallId, options) {
+  globalThis.__appendCalls.push({ containerId: container.id, streamKey, toolName, args, toolCallId, options });
+}
+export function attachToolApprovalControls() { return true; }
+export function markToolApprovalResolved() {}
+export function markToolInputValidationFailed() { return true; }
+export function updateToolResult() {}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanel.mjs").write_text(
+        """
+export function getActiveInstanceId() { return null; }
+export function getPanelScrollContainer() { return { id: 'panel' }; }
+export function openAgentPanel() { globalThis.__openPanelCalls += 1; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        "export function getActiveSubagentSessionStreamContainer() { return { id: 'subagent-body' }; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "mockUtils.mjs").write_text(
+        "export function coordinatorContainerFor() { return { id: 'coordinator' }; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "runner.mjs").write_text(
+        """
+globalThis.document = {
+  getElementById() { return null; },
+  querySelector() { return null; },
+};
+globalThis.__appendCalls = [];
+globalThis.__overlayCalls = [];
+globalThis.__openPanelCalls = 0;
+globalThis.__discoveryCalls = 0;
+
+const { state } = await import('./state.mjs');
+const { handleToolCall } = await import('./toolEvents.mjs');
+
+state.currentSessionMode = 'normal';
+state.currentSessionId = 'session-1';
+state.mainAgentRoleId = 'MainAgent';
+state.currentNormalRootRoleId = 'MainAgent';
+state.runPrimaryRoleMap = {};
+
+handleToolCall(
+  {
+    tool_name: 'shell',
+    tool_call_id: 'call-visible-subagent',
+    args: { command: 'date' },
+    role_id: 'Writer',
+    instance_id: 'inst-subagent',
+  },
+  { run_id: 'subagent_run_live', event_id: 77 },
+  'inst-subagent',
+  'Writer',
+);
+
+console.log(JSON.stringify({
+  appendCalls: globalThis.__appendCalls,
+  overlayCalls: globalThis.__overlayCalls,
+  openPanelCalls: globalThis.__openPanelCalls,
+  discoveryCalls: globalThis.__discoveryCalls,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["node", "runner.mjs"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["overlayCalls"] == []
+    assert payload["appendCalls"] == [
+        {
+            "containerId": "subagent-body",
+            "streamKey": "inst-subagent",
+            "toolName": "shell",
+            "args": {"command": "date"},
+            "toolCallId": "call-visible-subagent",
+            "options": {
+                "runId": "subagent_run_live",
+                "roleId": "Writer",
+                "label": "Writer",
+            },
+        }
+    ]
+    assert payload["openPanelCalls"] == 0
+    assert payload["discoveryCalls"] == 0
+
+
 def test_pending_tool_block_name_fallback_does_not_merge_parallel_calls(
     tmp_path: Path,
 ) -> None:
